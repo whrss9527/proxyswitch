@@ -83,8 +83,18 @@ func TestDefaultConfigParses(t *testing.T) {
 	if len(cfg.Profiles) != 3 {
 		t.Fatalf("期望 3 套配置，得到 %d", len(cfg.Profiles))
 	}
-	if cfg.Hotkey != "Ctrl+Alt+P" || !cfg.Notify {
+	if cfg.Hotkey != "Ctrl+Alt+P" || !cfg.Notify || cfg.NotifySeconds != 3 {
 		t.Fatalf("默认值不对: %+v", cfg)
+	}
+	// 没写 notify_seconds 时默认 3；写 0 表示跟随系统；超范围报错
+	if c, err := parseConfig(`{"profiles":[{"name":"a","server":"a:1"}]}`); err != nil || c.NotifySeconds != 3 {
+		t.Fatalf("notify_seconds 默认值应为 3: %v %+v", err, c)
+	}
+	if c, err := parseConfig(`{"notify_seconds":0,"profiles":[{"name":"a","server":"a:1"}]}`); err != nil || c.NotifySeconds != 0 {
+		t.Fatalf("notify_seconds=0 应被接受: %v", err)
+	}
+	if _, err := parseConfig(`{"notify_seconds":61,"profiles":[{"name":"a","server":"a:1"}]}`); err == nil {
+		t.Fatalf("notify_seconds=61 应报错")
 	}
 	if cfg.FindProfile("公司 pac（示例）") == nil {
 		t.Fatalf("FindProfile 应该不区分大小写")

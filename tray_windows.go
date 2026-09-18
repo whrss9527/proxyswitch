@@ -16,10 +16,11 @@ import (
 // 托盘图标 + 隐藏窗口 + 消息循环。所有 UI 相关操作都在主线程（已 LockOSThread）执行。
 
 const (
-	trayIconID  = 1
-	hotkeyID    = 1
-	statusTimer = 1
-	className   = "ProxySwitchTrayWindow"
+	trayIconID   = 1
+	hotkeyID     = 1
+	statusTimer  = 1
+	balloonTimer = 2 // 到点自动收起气泡通知
+	className    = "ProxySwitchTrayWindow"
 )
 
 // MenuItem 是右键菜单的一项。
@@ -150,12 +151,28 @@ func (t *Tray) SetState(on bool, tip string) {
 }
 
 // Notify 弹出气泡/Toast 通知。kind 为 niifInfo / niifWarning / niifError。
-func (t *Tray) Notify(title, text string, kind uint32) {
+// timeoutMs > 0 时到点自动收起：Vista 以后系统会忽略 uTimeout，所以自己起一个定时器，
+// 到点后用空的 szInfo 再 NIM_MODIFY 一次，这是微软文档给出的收起气泡的方法。
+func (t *Tray) Notify(title, text string, kind uint32, timeoutMs uint32) {
+	procKillTimer.Call(t.hwnd, balloonTimer)
 	nid := t.nid
 	nid.uFlags = nifInfo
 	nid.dwInfoFlags = kind | niifRespectQuietTime
+	nid.uVersion = timeoutMs // 旧系统把这个字段当 uTimeout 用
 	copyUTF16(nid.szInfoTitle[:], title)
 	copyUTF16(nid.szInfo[:], text)
+	procShellNotifyIconW.Call(nimModify, uintptr(unsafe.Pointer(&nid)))
+	if timeoutMs > 0 {
+		procSetTimer.Call(t.hwnd, balloonTimer, uintptr(timeoutMs), 0)
+	}
+}
+
+// hideBalloon 收起当前显示的气泡通知（没有显示时无副作用）。
+func (t *Tray) hideBalloon() {
+	nid := t.nid
+	nid.uFlags = nifInfo
+	copyUTF16(nid.szInfoTitle[:], "")
+	copyUTF16(nid.szInfo[:], "")
 	procShellNotifyIconW.Call(nimModify, uintptr(unsafe.Pointer(&nid)))
 }
 
@@ -316,8 +333,14 @@ func (t *Tray) wndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 		}
 		return 0
 	case wmTimer:
-		if wParam == statusTimer && t.OnTimer != nil {
-			t.OnTimer()
+		switch wParam {
+		case statusTimer:
+			if t.OnTimer != nil {
+				t.OnTimer()
+			}
+		case balloonTimer:
+			procKillTimer.Call(hwnd, balloonTimer)
+			t.hideBalloon()
 		}
 		return 0
 	case wmClose:
@@ -325,6 +348,7 @@ func (t *Tray) wndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 		return 0
 	case wmDestroy:
 		procKillTimer.Call(hwnd, statusTimer)
+		procKillTimer.Call(hwnd, balloonTimer)
 		t.UnregisterHotkey()
 		t.removeIcon()
 		if t.OnQuit != nil {

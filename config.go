@@ -74,15 +74,22 @@ func (p *Profile) TargetsText() string {
 type Config struct {
 	Hotkey        string    `json:"hotkey"`
 	Notify        bool      `json:"notify"`
+	NotifySeconds int       `json:"notify_seconds"` // 通知几秒后自动关闭；0 = 跟随系统
 	DisableOnExit bool      `json:"disable_on_exit"`
 	Editor        string    `json:"editor"`
 	Profiles      []Profile `json:"profiles"`
 }
 
+const (
+	defaultNotifySeconds = 3
+	maxNotifySeconds     = 60
+)
+
 func defaultConfig() *Config {
 	return &Config{
-		Hotkey: "Ctrl+Alt+P",
-		Notify: true,
+		Hotkey:        "Ctrl+Alt+P",
+		Notify:        true,
+		NotifySeconds: defaultNotifySeconds,
 	}
 }
 
@@ -96,6 +103,9 @@ const defaultConfigText = `// ProxySwitch 配置文件（JSON，允许 // 注释
 
   // 切换后是否弹出系统通知
   "notify": true,
+
+  // 通知几秒后自动关闭（0 表示跟随系统默认，不主动关闭）
+  "notify_seconds": 3,
 
   // 退出程序时是否顺便关闭代理
   "disable_on_exit": false,
@@ -217,6 +227,9 @@ func parseConfig(text string) (*Config, error) {
 		return nil, fmt.Errorf("配置文件格式错误：%v", err)
 	}
 	cfg.Hotkey = strings.TrimSpace(cfg.Hotkey)
+	if cfg.NotifySeconds < 0 || cfg.NotifySeconds > maxNotifySeconds {
+		return nil, fmt.Errorf("notify_seconds 需要在 0~%d 之间", maxNotifySeconds)
+	}
 	if len(cfg.Profiles) == 0 {
 		return nil, fmt.Errorf("配置里没有任何 profiles")
 	}

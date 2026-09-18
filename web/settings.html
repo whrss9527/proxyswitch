@@ -277,6 +277,10 @@
       <label class="switch"><input type="checkbox" id="notify"><span></span></label>
     </div>
     <div class="row">
+      <div><label class="lbl" for="notifySeconds">通知显示时长（秒）</label><p class="hint">右下角的通知到时间自动关闭；填 0 表示由系统决定（一般 5 秒左右）。</p></div>
+      <input class="text" type="number" id="notifySeconds" min="0" max="60" step="1" style="width:120px;text-align:center">
+    </div>
+    <div class="row">
       <div><label class="lbl" for="disableOnExit">退出程序时顺便关闭代理</label></div>
       <label class="switch"><input type="checkbox" id="disableOnExit"><span></span></label>
     </div>
@@ -406,7 +410,7 @@
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
   function emptyConfig() {
-    return { hotkey: (S && S.defaults.hotkey) || 'Ctrl+Alt+P', notify: true, disable_on_exit: false, editor: '', profiles: [] };
+    return { hotkey: (S && S.defaults.hotkey) || 'Ctrl+Alt+P', notify: true, notify_seconds: 3, disable_on_exit: false, editor: '', profiles: [] };
   }
 
   function setDirty(v) {
@@ -484,6 +488,7 @@
   function renderGeneral() {
     $('hotkey').value = cfg.hotkey || '';
     $('notify').checked = !!cfg.notify;
+    $('notifySeconds').value = (cfg.notify_seconds == null ? 3 : cfg.notify_seconds);
     $('disableOnExit').checked = !!cfg.disable_on_exit;
     $('editor').value = cfg.editor || '';
     $('autostart').checked = !!S.autostart;
@@ -577,6 +582,12 @@
 
   // ---------- 通用设置 ----------
   $('notify').addEventListener('change', (e) => { cfg.notify = e.target.checked; setDirty(true); });
+  $('notifySeconds').addEventListener('input', (e) => {
+    let v = parseInt(e.target.value, 10);
+    if (isNaN(v)) v = 3;
+    v = Math.max(0, Math.min(60, v));
+    cfg.notify_seconds = v; setDirty(true);
+  });
   $('disableOnExit').addEventListener('change', (e) => { cfg.disable_on_exit = e.target.checked; setDirty(true); });
   $('editor').addEventListener('input', (e) => { cfg.editor = e.target.value; setDirty(true); });
   $('autostart').addEventListener('change', async (e) => {

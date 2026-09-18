@@ -281,7 +281,14 @@ func (a *App) notify(title, text string, kind uint32) {
 	if kind == niifInfo && a.cfg != nil && !a.cfg.Notify {
 		return
 	}
-	a.tray.Notify(title, text, kind)
+	secs := defaultNotifySeconds
+	if a.cfg != nil {
+		secs = a.cfg.NotifySeconds
+	}
+	if kind == niifError && secs > 0 && secs < 6 {
+		secs = 6 // 出错的通知多留几秒，免得没看清就没了
+	}
+	a.tray.Notify(title, text, kind, uint32(secs)*1000)
 }
 
 func (a *App) refreshTray() {

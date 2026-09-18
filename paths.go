@@ -7,7 +7,7 @@ import (
 
 const (
 	appName        = "ProxySwitch"
-	appVersion     = "1.1.0"
+	appVersion     = "1.1.1"
 	configFileName = "config.jsonc"
 	stateFileName  = "state.json"
 	logFileName    = "proxyswitch.log"
