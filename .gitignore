@@ -1,0 +1,4 @@
+ProxySwitch.exe
+*.exe
+*.log
+assets/preview_*.png
