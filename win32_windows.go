@@ -51,6 +51,7 @@ var (
 	procCreateIconFromResourceEx    = user32.NewProc("CreateIconFromResourceEx")
 
 	procGetModuleHandleW    = kernel32.NewProc("GetModuleHandleW")
+	procGetCurrentThreadId  = kernel32.NewProc("GetCurrentThreadId")
 	procCreateMutexW        = kernel32.NewProc("CreateMutexW")
 	procGetSystemDirectoryW = kernel32.NewProc("GetSystemDirectoryW")
 
@@ -84,6 +85,7 @@ const (
 	wmApp           = 0x8000
 
 	wmTrayCallback = wmApp + 1 // 托盘图标回调消息
+	wmRunOnUI      = wmApp + 2 // 让 UI 线程执行排队的函数
 
 	ninSelect    = wmUser + 0
 	ninKeySelect = wmUser + 1

@@ -1,7 +1,7 @@
 {
   "FixedFileInfo": {
-    "FileVersion": {"Major": 1, "Minor": 0, "Patch": 0, "Build": 0},
-    "ProductVersion": {"Major": 1, "Minor": 0, "Patch": 0, "Build": 0},
+    "FileVersion": {"Major": 1, "Minor": 1, "Patch": 0, "Build": 0},
+    "ProductVersion": {"Major": 1, "Minor": 1, "Patch": 0, "Build": 0},
     "FileFlagsMask": "3f",
     "FileFlags": "00",
     "FileOS": "040004",
@@ -9,15 +9,15 @@
     "FileSubType": "00"
   },
   "StringFileInfo": {
-    "Comments": "https://github.com/wuyanzu/proxyswitch",
+    "Comments": "https://github.com/whrss9527/proxyswitch",
     "CompanyName": "",
     "FileDescription": "ProxySwitch - 快捷切换 Windows 代理",
-    "FileVersion": "1.0.0.0",
+    "FileVersion": "1.1.0.0",
     "InternalName": "ProxySwitch",
     "LegalCopyright": "MIT License",
     "OriginalFilename": "ProxySwitch.exe",
     "ProductName": "ProxySwitch",
-    "ProductVersion": "1.0.0"
+    "ProductVersion": "1.1.0"
   },
   "VarFileInfo": {
     "Translation": {"LangID": "0804", "CharsetID": "04B0"}

@@ -47,6 +47,8 @@ type Tray struct {
 	wndProcCB      uintptr
 	classNamePtr   *uint16
 	tempDir        string
+	uiThread       uint32
+	uiQueue        chan func()
 
 	OnLeftClick  func()
 	OnRightClick func()
@@ -56,7 +58,9 @@ type Tray struct {
 }
 
 func newTray(iconOnData, iconOffData []byte, tempDir string) (*Tray, error) {
-	t := &Tray{hInst: moduleHandle(), tempDir: tempDir}
+	t := &Tray{hInst: moduleHandle(), tempDir: tempDir, uiQueue: make(chan func(), 64)}
+	tid, _, _ := procGetCurrentThreadId.Call()
+	t.uiThread = uint32(tid)
 	t.wndProcCB = syscall.NewCallback(t.wndProc)
 	t.classNamePtr = utf16Ptr(className)
 
@@ -227,6 +231,40 @@ func (t *Tray) ShowMenu(items []MenuItem) uint32 {
 	return uint32(cmd)
 }
 
+// RunOnUI 让 fn 在创建窗口的线程（消息循环所在线程）上执行，并等待其完成。
+// 设置页面的 HTTP 处理函数跑在别的 goroutine 上，涉及托盘/快捷键/状态的操作都要经由这里。
+func (t *Tray) RunOnUI(fn func()) error {
+	tid, _, _ := procGetCurrentThreadId.Call()
+	if uint32(tid) == t.uiThread {
+		fn()
+		return nil
+	}
+	done := make(chan struct{})
+	select {
+	case t.uiQueue <- func() { defer close(done); fn() }:
+	case <-time.After(5 * time.Second):
+		return fmt.Errorf("程序正忙，请稍后再试")
+	}
+	procPostMessageW.Call(t.hwnd, wmRunOnUI, 0, 0)
+	select {
+	case <-done:
+		return nil
+	case <-time.After(15 * time.Second):
+		return fmt.Errorf("程序没有响应，请稍后再试")
+	}
+}
+
+func (t *Tray) drainUIQueue() {
+	for {
+		select {
+		case fn := <-t.uiQueue:
+			fn()
+		default:
+			return
+		}
+	}
+}
+
 // Run 进入消息循环，直到窗口被销毁。
 func (t *Tray) Run() {
 	var m msgW
@@ -268,6 +306,9 @@ func (t *Tray) wndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 				t.OnRightClick()
 			}
 		}
+		return 0
+	case wmRunOnUI:
+		t.drainUIQueue()
 		return 0
 	case wmHotkey:
 		if wParam == hotkeyID && t.OnHotkey != nil {

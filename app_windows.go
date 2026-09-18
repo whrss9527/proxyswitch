@@ -5,6 +5,8 @@ package main
 import (
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -16,6 +18,7 @@ const (
 	idOpenDir     = 4
 	idAutostart   = 5
 	idAbout       = 6
+	idSettings    = 7
 	idExit        = 9
 	idProfileBase = 100
 )
@@ -28,20 +31,23 @@ type Status struct {
 }
 
 type App struct {
-	paths   Paths
-	cfg     *Config
-	cfgErr  string // 配置文件有错时的错误信息（此时 cfg 可能为 nil）
-	state   *State
-	tray    *Tray
-	logger  *log.Logger
-	hotkey  *Hotkey
-	lastOn  bool
-	started bool
+	paths     Paths
+	cfg       *Config
+	cfgErr    string // 配置文件有错时的错误信息（此时 cfg 可能为 nil）
+	state     *State
+	tray      *Tray
+	logger    *log.Logger
+	hotkey    *Hotkey
+	hotkeyErr string // 快捷键注册失败的原因
+	lastOn    bool
+	started   bool
+	settings  *SettingsServer
 }
 
 func newApp(paths Paths, logger *log.Logger) *App {
 	a := &App{paths: paths, logger: logger}
 	a.state = loadState(paths.State)
+	a.settings = newSettingsServer(a, logger.Printf)
 	return a
 }
 
@@ -341,7 +347,8 @@ func (a *App) buildMenu() []MenuItem {
 	}
 
 	items = append(items,
-		MenuItem{ID: idEdit, Text: "编辑配置文件..."},
+		MenuItem{ID: idSettings, Text: "设置..."},
+		MenuItem{ID: idEdit, Text: "编辑配置文件（高级）..."},
 		MenuItem{ID: idReload, Text: "重新加载配置"},
 		MenuItem{ID: idOpenDir, Text: "打开配置目录"},
 		MenuItem{Separator: true},
@@ -368,6 +375,8 @@ func (a *App) handleCommand(id uint32) {
 		a.toggle()
 	case id >= idProfileBase && int(id-idProfileBase) < len(a.profiles()):
 		a.selectProfile(&a.cfg.Profiles[id-idProfileBase])
+	case id == idSettings:
+		a.openSettings()
 	case id == idEdit:
 		editor := ""
 		if a.cfg != nil {
@@ -423,17 +432,20 @@ func (a *App) setupHotkey() {
 	}
 	a.tray.UnregisterHotkey()
 	a.hotkey = nil
+	a.hotkeyErr = ""
 	if a.cfg == nil || a.cfg.Hotkey == "" {
 		return
 	}
 	hk, err := parseHotkey(a.cfg.Hotkey)
 	if err != nil {
+		a.hotkeyErr = err.Error()
 		a.notify("快捷键无效", err.Error(), niifWarning)
 		return
 	}
 	if err := a.tray.RegisterHotkey(hk); err != nil {
 		a.logger.Printf("注册快捷键失败: %v", err)
-		a.notify("快捷键注册失败", hk.Text+" 可能已被其他程序占用，请在配置里换一个", niifWarning)
+		a.hotkeyErr = hk.Text + " 注册失败，可能已被其他程序占用，请换一个组合"
+		a.notify("快捷键注册失败", a.hotkeyErr, niifWarning)
 		return
 	}
 	a.hotkey = &hk
@@ -450,7 +462,7 @@ func (a *App) showAbout() {
 		mode = "便携模式（exe 同目录）"
 	}
 	text := fmt.Sprintf("%s v%s\n快捷切换 Windows 系统代理 / 环境变量 / git / npm 代理\n\n"+
-		"左键托盘图标：开 / 关当前代理\n右键托盘图标：切换配置、编辑配置\n全局快捷键：%s\n\n"+
+		"左键托盘图标：开 / 关当前代理\n右键托盘图标：切换配置、打开设置页面\n全局快捷键：%s\n\n"+
 		"%s\n配置文件：%s\n日志文件：%s\n\n"+
 		"命令行用法：\n  ProxySwitch.exe on | off | toggle | status\n  ProxySwitch.exe use <配置名>",
 		appName, appVersion, hk, mode, a.paths.Config, a.paths.Log)
@@ -458,6 +470,8 @@ func (a *App) showAbout() {
 }
 
 func (a *App) exit() {
+	a.settings.Stop()
+	_ = os.Remove(filepath.Join(a.paths.Dir, settingsURLFile))
 	if a.cfg != nil && a.cfg.DisableOnExit {
 		if st := a.status(); st.On {
 			a.logger.Printf("退出时关闭代理")
@@ -499,12 +513,153 @@ func (a *App) run(iconOn, iconOff []byte) error {
 
 	switch {
 	case cfgErr != nil:
-		a.notify("配置文件有错误", cfgErr.Error()+"\n右键托盘图标 → 编辑配置文件", niifError)
+		a.notify("配置文件有错误", cfgErr.Error()+"\n已打开设置页面，可以在页面里重新添加配置并保存", niifError)
+		a.openSettings()
 	case created:
-		a.notify("欢迎使用 "+appName, "已生成默认配置，右键托盘图标 → 编辑配置文件 填入你的代理地址。\n左键图标即可一键开关代理。", niifInfo)
+		a.notify("欢迎使用 "+appName, "已在浏览器打开设置页面，填入你的代理地址后点「保存」即可。\n之后左键托盘图标就能一键开关代理。", niifInfo)
+		a.openSettings()
 	}
 	a.logger.Printf("%s v%s 启动，配置：%s", appName, appVersion, a.paths.Config)
 
 	tray.Run()
 	return nil
+}
+
+// ---------- 图形化设置页面 ----------
+
+const settingsURLFile = "settings.url"
+
+// openSettings 启动（或复用）本地设置服务并用默认浏览器打开。
+func (a *App) openSettings() {
+	url, err := a.settings.Start()
+	if err != nil {
+		a.notify("无法打开设置页面", err.Error(), niifError)
+		return
+	}
+	// 记下地址，命令行 `ProxySwitch.exe settings` 可以直接打开
+	_ = os.WriteFile(filepath.Join(a.paths.Dir, settingsURLFile), []byte(url), 0o600)
+	if err := shellOpen(url); err != nil {
+		a.logger.Printf("打开浏览器失败: %v", err)
+		a.notify("无法自动打开浏览器", "请手动在浏览器里打开：\n"+url, niifWarning)
+		return
+	}
+	a.logger.Printf("已打开设置页面")
+}
+
+// ui 把 fn 调度到托盘线程执行；没有托盘（命令行模式）时直接执行。
+func (a *App) ui(fn func()) error {
+	if a.tray == nil {
+		fn()
+		return nil
+	}
+	return a.tray.RunOnUI(fn)
+}
+
+// SettingsState 实现 SettingsBackend。
+func (a *App) SettingsState() SettingsState {
+	var st SettingsState
+	_ = a.ui(func() { st = a.buildSettingsState() })
+	return st
+}
+
+func (a *App) buildSettingsState() SettingsState {
+	st := SettingsState{
+		Version:     appVersion,
+		Paths:       PathsInfo{Dir: a.paths.Dir, Config: a.paths.Config, Log: a.paths.Log, Portable: a.paths.Portable},
+		Config:      a.cfg,
+		ConfigError: a.cfgErr,
+		Autostart:   isAutostartEnabled(),
+		HotkeyError: a.hotkeyErr,
+		Defaults:    DefaultsInfo{Bypass: defaultBypass, NoProxy: defaultNoProxy, Hotkey: "Ctrl+Alt+P"},
+		Targets:     targetInfos,
+		Platform:    "windows",
+	}
+	if a.hotkey != nil {
+		st.HotkeyText = a.hotkey.Text
+	}
+	s := a.status()
+	st.Status.On = s.On
+	if s.Profile != nil {
+		st.Status.Profile = s.Profile.Name
+	}
+	st.Status.External = s.External
+	return st
+}
+
+// SaveConfig 实现 SettingsBackend：写文件 → 重新加载 → 重新注册快捷键。
+func (a *App) SaveConfig(cfg *Config) error {
+	var err error
+	uiErr := a.ui(func() {
+		if err = writeConfigFile(a.paths.Config, cfg); err != nil {
+			err = fmt.Errorf("写入配置文件失败：%v", err)
+			return
+		}
+		a.logger.Printf("设置页面保存了配置（%d 套）", len(cfg.Profiles))
+		oldHotkey := ""
+		if a.cfg != nil {
+			oldHotkey = a.cfg.Hotkey
+		}
+		if _, e := a.loadConfigFile(); e != nil {
+			err = e
+			a.refreshTray()
+			return
+		}
+		if a.cfg.Hotkey != oldHotkey || (a.hotkey == nil && a.cfg.Hotkey != "") {
+			a.setupHotkey()
+		}
+		a.refreshTray()
+	})
+	if uiErr != nil {
+		return uiErr
+	}
+	return err
+}
+
+// DoAction 实现 SettingsBackend。
+func (a *App) DoAction(action, name string) error {
+	var err error
+	uiErr := a.ui(func() {
+		if a.cfg == nil {
+			err = fmt.Errorf("配置文件有错误，请先保存一份正确的配置")
+			return
+		}
+		switch action {
+		case "toggle":
+			a.toggle()
+		case "on":
+			if st := a.status(); !st.On {
+				a.turnOn(st.Profile)
+			}
+		case "off":
+			if st := a.status(); st.On {
+				a.turnOff(st)
+			}
+		case "use":
+			p := a.cfg.FindProfile(name)
+			if p == nil {
+				err = fmt.Errorf("没有名为 %q 的配置", name)
+				return
+			}
+			a.selectProfile(p)
+		}
+	})
+	if uiErr != nil {
+		return uiErr
+	}
+	return err
+}
+
+// SetAutostart 实现 SettingsBackend。
+func (a *App) SetAutostart(enabled bool) error {
+	var err error
+	uiErr := a.ui(func() {
+		err = setAutostart(enabled)
+		if err == nil {
+			a.logger.Printf("设置页面把开机自启改为 %v", enabled)
+		}
+	})
+	if uiErr != nil {
+		return uiErr
+	}
+	return err
 }

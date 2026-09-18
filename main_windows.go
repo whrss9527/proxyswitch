@@ -87,6 +87,16 @@ func runCLI(paths Paths, logger *log.Logger, args []string) int {
 			return 2
 		}
 		app.selectProfile(p)
+	case "settings", "ui":
+		data, err := os.ReadFile(filepath.Join(paths.Dir, settingsURLFile))
+		if err != nil || len(data) == 0 {
+			messageBox(0, "托盘程序没有在运行，请先启动 ProxySwitch.exe，再从托盘菜单打开设置。", appName, mbOK|mbIconWarning|mbSetForeground|mbTopmost)
+			return 2
+		}
+		if err := shellOpen(strings.TrimSpace(string(data))); err != nil {
+			messageBox(0, "无法打开浏览器："+err.Error(), appName, mbOK|mbIconError|mbSetForeground|mbTopmost)
+			return 1
+		}
 	case "status":
 		st := app.status()
 		var text string
@@ -111,7 +121,8 @@ func runCLI(paths Paths, logger *log.Logger, args []string) int {
 			"  ProxySwitch.exe off        关闭代理\n"+
 			"  ProxySwitch.exe toggle     开/关切换\n"+
 			"  ProxySwitch.exe use <配置名>  切换到某套配置并开启\n"+
-			"  ProxySwitch.exe status     查看状态（退出码 0=开启 1=关闭）",
+			"  ProxySwitch.exe status     查看状态（退出码 0=开启 1=关闭）\n"+
+			"  ProxySwitch.exe settings   打开设置页面（托盘程序需在运行）",
 			appName, mbOK|mbIconInformation|mbSetForeground|mbTopmost)
 		if cmd != "help" && cmd != "h" && cmd != "?" {
 			return 2

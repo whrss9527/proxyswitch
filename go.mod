@@ -1,3 +1,3 @@
-module github.com/wuyanzu/proxyswitch
+module github.com/whrss9527/proxyswitch
 
 go 1.21
