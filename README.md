@@ -12,7 +12,7 @@
 
 ## 安装与使用
 
-1. 把 `ProxySwitch.exe` 放到任意目录，双击运行，任务栏右下角会出现托盘图标。
+1. 从 [Releases](https://github.com/whrss9527/proxyswitch/releases) 下载 `ProxySwitch.exe`，放到任意目录双击运行，任务栏右下角会出现托盘图标。
    - 首次运行会生成默认配置，并自动在浏览器里打开**设置页面**。
    - 如果 Windows SmartScreen 拦截（未签名的下载程序常见），点「更多信息 → 仍要运行」即可。
 2. 在设置页面里点「编辑」把示例改成你的代理地址（本机代理软件一般是 `127.0.0.1` + 它的端口，可以点「测试连接」确认），然后点右下角**保存并生效**。
@@ -154,6 +154,7 @@ build.cmd
 托盘图标由 `tools/make_icons.py` 生成。
 
 运行测试：`go test ./...`（纯逻辑部分在任何平台都能跑；`win_test.go` 里的注册表往返测试需要在 Windows 上设置 `PROXYSWITCH_TEST_REGISTRY=1` 后运行）。
+发布：推送 `v*` 标签后，GitHub Actions（`.github/workflows/release.yml`）会在 Windows 上跑完测试、交叉编译 exe，并把 exe、源码包和 `SHA256SUMS.txt` 传到对应的 Release。
 设置页面可以在任何平台预览和调试：`go run . --dev-settings` 会打印一个本地地址（用内存里的假后端，不碰系统代理）；`tools/ui_test.py` 是基于 Playwright 的页面自动化测试。
 
 ## 代码结构

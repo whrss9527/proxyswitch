@@ -1,0 +1,59 @@
+name: release
+
+# 推送 v* 标签时自动：在 Windows 上跑测试 → 交叉编译 exe → 把 exe / 源码包 / 校验值传到对应的 GitHub Release。
+# 也可以在 Actions 页面手动运行（workflow_dispatch），填一个已存在的 tag 即可重新上传附件。
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要发布到的 tag（例如 v1.1.1）"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  test-windows:
+    name: 测试（Windows）
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - name: go vet
+        run: go vet ./...
+      - name: go test（含注册表往返测试）
+        env:
+          PROXYSWITCH_TEST_REGISTRY: "1"
+        run: go test ./...
+
+  build-and-upload:
+    name: 编译并上传附件
+    needs: test-windows
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - name: 交叉编译 Windows 版
+        run: |
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
+            go build -trimpath -ldflags="-H windowsgui -s -w" -o ProxySwitch.exe .
+          git archive --format=zip --prefix=proxyswitch/ -o proxyswitch-src.zip HEAD
+          sha256sum ProxySwitch.exe proxyswitch-src.zip > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      - name: 上传到 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "ProxySwitch $TAG" --generate-notes
+          fi
+          gh release upload "$TAG" ProxySwitch.exe proxyswitch-src.zip SHA256SUMS.txt --clobber
+          echo "已上传到 https://github.com/${GITHUB_REPOSITORY}/releases/tag/$TAG"
