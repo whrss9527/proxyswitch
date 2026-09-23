@@ -3,77 +3,52 @@
 package main
 
 import (
-	"fmt"
+	"errors"
 	"strings"
 )
 
-// 用户级环境变量 HTTP_PROXY / HTTPS_PROXY / NO_PROXY（写 HKCU\Environment）。
-// 写完广播 WM_SETTINGCHANGE，之后新开的终端/程序即可看到；已经打开的终端需要重开。
+// 用户级环境变量 HTTP_PROXY / HTTPS_PROXY / NO_PROXY（HKCU\Environment）。
+// 写完广播 WM_SETTINGCHANGE，之后新开的终端即可看到；已经打开的终端需要重开。
 
-const envRegKey = `Environment`
+const environmentKey = `Environment`
 
-var envProxyNames = []string{"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"}
+var environmentProxyNames = []string{"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"}
 
-func setUserEnvProxy(proxyURL, noProxy string) error {
-	k, err := regCreate(hkeyCurrentUser, envRegKey)
+func setEnvironmentProxy(proxyUrl, noProxy string) error {
+	key, err := createRegistryKey(hkeyCurrentUser, environmentKey)
 	if err != nil {
 		return err
 	}
-	defer k.close()
-	var errs []string
-	if err := k.setString("HTTP_PROXY", proxyURL); err != nil {
-		errs = append(errs, err.Error())
-	}
-	if err := k.setString("HTTPS_PROXY", proxyURL); err != nil {
-		errs = append(errs, err.Error())
-	}
+	defer key.Close()
+	errs := []error{key.SetString("HTTP_PROXY", proxyUrl), key.SetString("HTTPS_PROXY", proxyUrl)}
 	if strings.TrimSpace(noProxy) != "" {
-		if err := k.setString("NO_PROXY", noProxy); err != nil {
-			errs = append(errs, err.Error())
-		}
+		errs = append(errs, key.SetString("NO_PROXY", noProxy))
 	} else {
-		if err := k.deleteValue("NO_PROXY"); err != nil {
-			errs = append(errs, err.Error())
-		}
+		errs = append(errs, key.DeleteValue("NO_PROXY"))
 	}
 	broadcastSettingChange("Environment")
-	if len(errs) > 0 {
-		return fmt.Errorf("%s", strings.Join(errs, "; "))
-	}
-	return nil
+	return errors.Join(errs...)
 }
 
-func clearUserEnvProxy() error {
-	k, err := regCreate(hkeyCurrentUser, envRegKey)
+func clearEnvironmentProxy() error {
+	key, err := createRegistryKey(hkeyCurrentUser, environmentKey)
 	if err != nil {
 		return err
 	}
-	defer k.close()
-	var errs []string
-	for _, n := range envProxyNames {
-		if err := k.deleteValue(n); err != nil {
-			errs = append(errs, err.Error())
-		}
+	defer key.Close()
+	var errs []error
+	for _, name := range environmentProxyNames {
+		errs = append(errs, key.DeleteValue(name))
 	}
 	broadcastSettingChange("Environment")
-	if len(errs) > 0 {
-		return fmt.Errorf("%s", strings.Join(errs, "; "))
-	}
-	return nil
+	return errors.Join(errs...)
 }
 
-// readUserEnvProxy 返回当前用户级 HTTPS_PROXY/HTTP_PROXY 的值（没有则为空）。
-func readUserEnvProxy() string {
-	k, err := regOpen(hkeyCurrentUser, envRegKey, keyRead)
-	if err != nil {
-		return ""
+// readEnvironmentProxy 返回用户级 HTTP_PROXY / HTTPS_PROXY / NO_PROXY 的当前值。
+func readEnvironmentProxy() map[string]string {
+	values := map[string]string{}
+	for _, name := range environmentProxyNames {
+		values[name] = readRegistryString(hkeyCurrentUser, environmentKey, name)
 	}
-	defer k.close()
-	if v, err := k.getString("HTTPS_PROXY"); err == nil && v != "" {
-		return v
-	}
-	if v, err := k.getString("HTTP_PROXY"); err == nil {
-		return v
-	}
-	return ""
+	return values
 }

@@ -4,669 +4,779 @@ package main
 
 import (
 	"fmt"
-	"log"
-	"os"
-	"path/filepath"
+	"log/slog"
+	"strconv"
 	"strings"
+	"sync/atomic"
+	"time"
 )
 
-// 菜单项 ID
+// App 把核心逻辑（Engine）接到 Windows 托盘上：图标、菜单、通知、快捷键、定时检查，并为设置页提供接口。
+// Engine 只在 UI 线程上调用；后台 goroutine 和设置页的请求都经 Tray.RunOnUi 排队执行。
+
 const (
-	idToggle      = 1
-	idEdit        = 2
-	idReload      = 3
-	idOpenDir     = 4
-	idAutostart   = 5
-	idAbout       = 6
-	idSettings    = 7
-	idExit        = 9
-	idProfileBase = 100
+	menuHeader = iota + 1
+	menuToggle
+	menuSettings
+	menuAutostart
+	menuAutoSwitch
+	menuTest
+	menuEditConfig
+	menuExit
+	menuProfileBase = 100
 )
 
-// Status 是“当前代理是否开启、对应哪套配置”的判断结果。
-type Status struct {
-	On       bool
-	Profile  *Profile // On 时：匹配到的配置；Off 时：当前选中的（下次开启用的）配置
-	External string   // On 且 Profile==nil：系统代理由别的程序设置，这里是它的描述
-}
+const (
+	toggleHotkeyId    = 1
+	profileHotkeyBase = 101
+
+	statusTimerId   = 10
+	statusInterval  = 2 * time.Second
+	networkInterval = 3 * time.Second
+	healthInterval  = 5 * time.Second
+	healthTimeout   = 2 * time.Second
+)
 
 type App struct {
-	paths     Paths
-	cfg       *Config
-	cfgErr    string // 配置文件有错时的错误信息（此时 cfg 可能为 nil）
-	state     *State
-	tray      *Tray
-	logger    *log.Logger
-	hotkey    *Hotkey
-	hotkeyErr string // 快捷键注册失败的原因
-	lastOn    bool
-	started   bool
-	settings  *SettingsServer
+	paths    Paths
+	engine   *Engine
+	tray     *Tray
+	settings *SettingsServer
+
+	icons        map[string]uintptr
+	menuBitmaps  map[string]uintptr
+	hotkeys      HotkeyStatus
+	hotkeyConfig string
+	gitAvailable atomic.Bool
+	exitHandled  bool
+	// 已显示的警告和错误通知数，用来判断一个错误是否已经提示过。
+	problemNotices int
+	// 设置页发起的操作由页面自己显示结果，这期间不弹托盘通知。
+	quiet bool
 }
 
-func newApp(paths Paths, logger *log.Logger) *App {
-	a := &App{paths: paths, logger: logger}
-	a.state = loadState(paths.State)
-	a.settings = newSettingsServer(a, logger.Printf)
-	return a
+func newApp(paths Paths) *App {
+	app := &App{paths: paths, icons: map[string]uintptr{}, menuBitmaps: map[string]uintptr{}}
+	app.engine = newEngine(windowsSystem{}, paths, app.notify)
+	app.settings = newSettingsServer(app)
+	_, err := gitPath()
+	app.gitAvailable.Store(err == nil)
+	return app
 }
 
-// loadConfigFile 读取配置文件；出错时保留旧配置并记录错误。
-func (a *App) loadConfigFile() (created bool, err error) {
-	cfg, created, err := loadConfig(a.paths.Config)
-	if err != nil {
-		a.cfgErr = err.Error()
-		a.logger.Printf("配置加载失败: %v", err)
-		return created, err
-	}
-	a.cfg = cfg
-	a.cfgErr = ""
-	return created, nil
-}
-
-func (a *App) profiles() []Profile {
-	if a.cfg == nil {
-		return nil
-	}
-	return a.cfg.Profiles
-}
-
-// selectedProfile 返回最近选择的配置；没有则返回第一套。
-func (a *App) selectedProfile() *Profile {
-	if a.cfg == nil || len(a.cfg.Profiles) == 0 {
-		return nil
-	}
-	if p := a.cfg.FindProfile(a.state.Profile); p != nil {
-		return p
-	}
-	return &a.cfg.Profiles[0]
-}
-
-// matchProfile 根据系统代理的实际值找出对应的配置。
-func (a *App) matchProfile(sys SystemProxyState) *Profile {
-	if a.cfg == nil {
-		return nil
-	}
-	matches := func(p *Profile) bool {
-		if !p.Has(targetSystem) {
-			return false
-		}
-		if sys.PAC != "" {
-			return p.PAC != "" && strings.EqualFold(p.PAC, sys.PAC)
-		}
-		return p.Server != "" && sameServer(p.Server, sys.Server)
-	}
-	if p := a.cfg.FindProfile(a.state.Profile); p != nil && matches(p) {
-		return p
-	}
-	for i := range a.cfg.Profiles {
-		if matches(&a.cfg.Profiles[i]) {
-			return &a.cfg.Profiles[i]
-		}
-	}
-	return nil
-}
-
-// status 读取系统当前状态并给出判断。
-func (a *App) status() Status {
-	sys, err := readSystemProxy()
-	if err != nil {
-		a.logger.Printf("读取系统代理失败: %v", err)
-	}
-	if sys.Active() {
-		if p := a.matchProfile(sys); p != nil {
-			return Status{On: true, Profile: p}
-		}
-		return Status{On: true, External: sys.Describe()}
-	}
-	p := a.selectedProfile()
-	if p != nil && !p.Has(targetSystem) && a.state.Enabled {
-		return Status{On: true, Profile: p}
-	}
-	return Status{On: false, Profile: p}
-}
-
-// ---------- 开 / 关 / 切换 ----------
-
-func (a *App) applyProfile(p *Profile) []error {
-	var errs []error
-	url := serverToURL(p.Server)
-	for _, t := range p.ApplyTo {
-		var err error
-		switch t {
-		case targetSystem:
-			err = setSystemProxy(serverToWinINET(p.Server), p.Bypass, p.PAC)
-		case targetEnv:
-			err = setUserEnvProxy(url, p.NoProxy)
-		case targetGit:
-			err = setGitProxy(url)
-		case targetNpm:
-			err = setNpmProxy(url, p.NoProxy)
-		}
-		if err != nil {
-			a.logger.Printf("开启 [%s] 目标 %s 失败: %v", p.Name, t, err)
-			errs = append(errs, fmt.Errorf("%s: %v", t, err))
-		} else {
-			a.logger.Printf("开启 [%s] 目标 %s 成功", p.Name, t)
-		}
-	}
-	return errs
-}
-
-func (a *App) revertProfile(p *Profile) []error {
-	var errs []error
-	for _, t := range p.ApplyTo {
-		var err error
-		switch t {
-		case targetSystem:
-			err = disableSystemProxy()
-		case targetEnv:
-			err = clearUserEnvProxy()
-		case targetGit:
-			err = clearGitProxy()
-		case targetNpm:
-			err = setNpmProxy("", "")
-		}
-		if err != nil {
-			a.logger.Printf("关闭 [%s] 目标 %s 失败: %v", p.Name, t, err)
-			errs = append(errs, fmt.Errorf("%s: %v", t, err))
-		} else {
-			a.logger.Printf("关闭 [%s] 目标 %s 成功", p.Name, t)
-		}
-	}
-	return errs
-}
-
-func joinErrors(errs []error) string {
-	var parts []string
-	for _, e := range errs {
-		parts = append(parts, e.Error())
-	}
-	return strings.Join(parts, "\n")
-}
-
-// turnOn 开启指定配置。
-func (a *App) turnOn(p *Profile) {
-	if p == nil {
-		a.notify("没有可用的配置", "请先在配置文件里添加 profiles", niifWarning)
-		return
-	}
-	errs := a.applyProfile(p)
-	a.state.Profile = p.Name
-	a.state.Enabled = len(errs) < len(p.ApplyTo) // 至少一个目标成功才算开启
-	a.saveState()
-	switch {
-	case len(errs) >= len(p.ApplyTo):
-		a.notify("开启代理失败", p.Name+"\n"+joinErrors(errs), niifError)
-	case len(errs) > 0:
-		a.notify("代理已开启，但部分目标失败", p.Name+" — "+p.Summary()+"\n"+joinErrors(errs), niifWarning)
-	default:
-		text := p.Name + " — " + p.Summary()
-		if len(p.ApplyTo) > 1 || !p.Has(targetSystem) {
-			text += "\n生效范围：" + p.TargetsText()
-		}
-		a.notify("代理已开启", text, niifInfo)
-	}
-	a.refreshTray()
-}
-
-// turnOff 关闭当前代理。
-func (a *App) turnOff(st Status) {
-	var errs []error
-	name := ""
-	if st.Profile != nil {
-		errs = a.revertProfile(st.Profile)
-		name = st.Profile.Name
-	} else {
-		if err := disableSystemProxy(); err != nil {
-			errs = append(errs, err)
-		}
-		name = "外部设置的系统代理"
-		a.logger.Printf("关闭外部设置的系统代理 (%s)", st.External)
-	}
-	a.state.Enabled = false
-	a.saveState()
-	if len(errs) > 0 {
-		a.notify("代理已关闭，但部分目标失败", name+"\n"+joinErrors(errs), niifWarning)
-	} else {
-		a.notify("代理已关闭", name, niifInfo)
-	}
-	a.refreshTray()
-}
-
-func (a *App) toggle() {
-	st := a.status()
-	if st.On {
-		a.turnOff(st)
-	} else {
-		a.turnOn(st.Profile)
-	}
-}
-
-// selectProfile 切换到指定配置并开启；如果之前开着别的配置，先把它清理掉。
-func (a *App) selectProfile(p *Profile) {
-	if p == nil {
-		return
-	}
-	st := a.status()
-	if st.On && st.Profile != nil && st.Profile != p {
-		if errs := a.revertProfile(st.Profile); len(errs) > 0 {
-			a.logger.Printf("切换前清理 [%s] 出错: %s", st.Profile.Name, joinErrors(errs))
-		}
-	}
-	a.turnOn(p)
-}
-
-func (a *App) saveState() {
-	if err := saveState(a.paths.State, a.state); err != nil {
-		a.logger.Printf("保存状态失败: %v", err)
-	}
-}
-
-// ---------- 托盘 UI ----------
-
-func (a *App) notify(title, text string, kind uint32) {
-	a.logger.Printf("通知: %s | %s", title, strings.ReplaceAll(text, "\n", " "))
-	if a.tray == nil {
-		// 命令行模式没有托盘：出错/警告时弹个框，正常提示只记日志
-		if kind == niifError || kind == niifWarning {
-			icon := uint32(mbIconWarning)
-			if kind == niifError {
-				icon = mbIconError
-			}
-			messageBox(0, title+"\n\n"+text, appName, mbOK|icon|mbSetForeground|mbTopmost)
-		}
-		return
-	}
-	if kind == niifInfo && a.cfg != nil && !a.cfg.Notify {
-		return
-	}
-	secs := defaultNotifySeconds
-	if a.cfg != nil {
-		secs = a.cfg.NotifySeconds
-	}
-	if kind == niifError && secs > 0 && secs < 6 {
-		secs = 6 // 出错的通知多留几秒，免得没看清就没了
-	}
-	a.tray.Notify(title, text, kind, uint32(secs)*1000)
-}
-
-func (a *App) refreshTray() {
-	if a.tray == nil {
-		return
-	}
-	st := a.status()
-	var tip string
-	switch {
-	case a.cfgErr != "":
-		tip = appName + " — 配置文件有错误，请右键 → 编辑配置"
-	case st.On && st.Profile != nil:
-		tip = fmt.Sprintf("%s — 已开启：%s (%s)", appName, st.Profile.Name, st.Profile.Summary())
-	case st.On:
-		tip = fmt.Sprintf("%s — 已开启（外部设置：%s）", appName, st.External)
-	case st.Profile != nil:
-		tip = fmt.Sprintf("%s — 已关闭（当前配置：%s）", appName, st.Profile.Name)
-	default:
-		tip = appName + " — 已关闭"
-	}
-	a.lastOn = st.On
-	a.tray.SetState(st.On, tip)
-}
-
-func (a *App) buildMenu() []MenuItem {
-	st := a.status()
-	var items []MenuItem
-	hk := ""
-	if a.hotkey != nil {
-		hk = "\t" + a.hotkey.Text
-	}
-
-	if a.cfgErr != "" {
-		items = append(items,
-			MenuItem{ID: idToggle, Text: "配置文件有错误：" + firstLine(a.cfgErr), Disabled: true},
-		)
-	} else {
-		switch {
-		case st.On && st.Profile != nil:
-			items = append(items, MenuItem{ID: idToggle, Text: "关闭代理（" + st.Profile.Name + "）" + hk, Default: true})
-		case st.On:
-			items = append(items, MenuItem{ID: idToggle, Text: "关闭代理（外部设置：" + st.External + "）" + hk, Default: true})
-		case st.Profile != nil:
-			items = append(items, MenuItem{ID: idToggle, Text: "开启代理（" + st.Profile.Name + "）" + hk, Default: true})
-		default:
-			items = append(items, MenuItem{ID: idToggle, Text: "开启代理", Disabled: true})
-		}
-	}
-	items = append(items, MenuItem{Separator: true})
-
-	for i := range a.profiles() {
-		p := &a.cfg.Profiles[i]
-		text := p.Name + " — " + p.Summary()
-		items = append(items, MenuItem{
-			ID:      uint32(idProfileBase + i),
-			Text:    text,
-			Radio:   true,
-			Checked: st.Profile == p,
-		})
-	}
-	if len(a.profiles()) > 0 {
-		items = append(items, MenuItem{Separator: true})
-	}
-
-	items = append(items,
-		MenuItem{ID: idSettings, Text: "设置..."},
-		MenuItem{ID: idEdit, Text: "编辑配置文件（高级）..."},
-		MenuItem{ID: idReload, Text: "重新加载配置"},
-		MenuItem{ID: idOpenDir, Text: "打开配置目录"},
-		MenuItem{Separator: true},
-		MenuItem{ID: idAutostart, Text: "开机自启", Checked: isAutostartEnabled()},
-		MenuItem{ID: idAbout, Text: "关于 " + appName + "..."},
-		MenuItem{Separator: true},
-		MenuItem{ID: idExit, Text: "退出"},
-	)
-	return items
-}
-
-func firstLine(s string) string {
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		return s[:i]
-	}
-	return s
-}
-
-func (a *App) handleCommand(id uint32) {
-	switch {
-	case id == 0:
-		return
-	case id == idToggle:
-		a.toggle()
-	case id >= idProfileBase && int(id-idProfileBase) < len(a.profiles()):
-		a.selectProfile(&a.cfg.Profiles[id-idProfileBase])
-	case id == idSettings:
-		a.openSettings()
-	case id == idEdit:
-		editor := ""
-		if a.cfg != nil {
-			editor = a.cfg.Editor
-		}
-		if err := openWithEditor(editor, a.paths.Config); err != nil {
-			a.notify("无法打开配置文件", err.Error(), niifError)
-		}
-	case id == idReload:
-		a.reload(true)
-	case id == idOpenDir:
-		if err := shellOpen(a.paths.Dir); err != nil {
-			a.notify("无法打开目录", err.Error(), niifError)
-		}
-	case id == idAutostart:
-		enable := !isAutostartEnabled()
-		if err := setAutostart(enable); err != nil {
-			a.notify("设置开机自启失败", err.Error(), niifError)
-		} else if enable {
-			a.notify("已开启开机自启", "登录 Windows 后会自动在托盘运行", niifInfo)
-		} else {
-			a.notify("已关闭开机自启", "", niifInfo)
-		}
-	case id == idAbout:
-		a.showAbout()
-	case id == idExit:
-		a.exit()
-	}
-}
-
-func (a *App) reload(notifyResult bool) {
-	oldHotkey := ""
-	if a.cfg != nil {
-		oldHotkey = a.cfg.Hotkey
-	}
-	if _, err := a.loadConfigFile(); err != nil {
-		a.notify("配置文件有错误", err.Error(), niifError)
-		a.refreshTray()
-		return
-	}
-	if a.cfg.Hotkey != oldHotkey || a.hotkey == nil {
-		a.setupHotkey()
-	}
-	if notifyResult {
-		a.notify("配置已重新加载", fmt.Sprintf("共 %d 套配置", len(a.cfg.Profiles)), niifInfo)
-	}
-	a.refreshTray()
-}
-
-func (a *App) setupHotkey() {
-	if a.tray == nil {
-		return
-	}
-	a.tray.UnregisterHotkey()
-	a.hotkey = nil
-	a.hotkeyErr = ""
-	if a.cfg == nil || a.cfg.Hotkey == "" {
-		return
-	}
-	hk, err := parseHotkey(a.cfg.Hotkey)
-	if err != nil {
-		a.hotkeyErr = err.Error()
-		a.notify("快捷键无效", err.Error(), niifWarning)
-		return
-	}
-	if err := a.tray.RegisterHotkey(hk); err != nil {
-		a.logger.Printf("注册快捷键失败: %v", err)
-		a.hotkeyErr = hk.Text + " 注册失败，可能已被其他程序占用，请换一个组合"
-		a.notify("快捷键注册失败", a.hotkeyErr, niifWarning)
-		return
-	}
-	a.hotkey = &hk
-	a.logger.Printf("快捷键已注册: %s", hk.Text)
-}
-
-func (a *App) showAbout() {
-	hk := "未设置"
-	if a.hotkey != nil {
-		hk = a.hotkey.Text
-	}
-	mode := "标准模式（%APPDATA%）"
-	if a.paths.Portable {
-		mode = "便携模式（exe 同目录）"
-	}
-	text := fmt.Sprintf("%s v%s\n快捷切换 Windows 系统代理 / 环境变量 / git / npm 代理\n\n"+
-		"左键托盘图标：开 / 关当前代理\n右键托盘图标：切换配置、打开设置页面\n全局快捷键：%s\n\n"+
-		"%s\n配置文件：%s\n日志文件：%s\n\n"+
-		"命令行用法：\n  ProxySwitch.exe on | off | toggle | status\n  ProxySwitch.exe use <配置名>",
-		appName, appVersion, hk, mode, a.paths.Config, a.paths.Log)
-	messageBox(0, text, "关于 "+appName, mbOK|mbIconInformation|mbSetForeground|mbTopmost)
-}
-
-func (a *App) exit() {
-	a.settings.Stop()
-	_ = os.Remove(filepath.Join(a.paths.Dir, settingsURLFile))
-	if a.cfg != nil && a.cfg.DisableOnExit {
-		if st := a.status(); st.On {
-			a.logger.Printf("退出时关闭代理")
-			a.turnOff(st)
-		}
-	}
-	a.tray.Quit()
-}
-
-// onTimer 定时对比系统实际状态，别的程序改了系统代理时也能让图标跟上。
-func (a *App) onTimer() {
-	st := a.status()
-	if st.On != a.lastOn {
-		a.logger.Printf("检测到系统代理状态变化: on=%v", st.On)
-		a.refreshTray()
-	}
-}
-
-// run 启动托盘并进入消息循环。
-func (a *App) run(iconOn, iconOff []byte) error {
-	created, cfgErr := a.loadConfigFile()
-
-	tray, err := newTray(iconOn, iconOff, a.paths.Dir)
+// run 创建托盘并进入消息循环，直到退出。
+func (app *App) run(autostarted, openSettings bool) error {
+	coInitialize()
+	enableDarkMenus()
+	created, loadErr := app.engine.LoadConfig()
+	tray, err := newTray(app)
 	if err != nil {
 		return err
 	}
-	a.tray = tray
-	tray.OnLeftClick = a.toggle
-	tray.OnRightClick = func() { a.handleCommand(tray.ShowMenu(a.buildMenu())) }
-	tray.OnHotkey = a.toggle
-	tray.OnTimer = a.onTimer
-	tray.OnQuit = func() { a.logger.Printf("退出") }
-
-	refreshAutostartPath()
-	a.setupHotkey()
-	a.refreshTray()
-	tray.StartTimer(3000)
-	a.started = true
-
-	switch {
-	case cfgErr != nil:
-		a.notify("配置文件有错误", cfgErr.Error()+"\n已打开设置页面，可以在页面里重新添加配置并保存", niifError)
-		a.openSettings()
-	case created:
-		a.notify("欢迎使用 "+appName, "已在浏览器打开设置页面，填入你的代理地址后点「保存」即可。\n之后左键托盘图标就能一键开关代理。", niifInfo)
-		a.openSettings()
+	app.tray = tray
+	app.applyUiConfig()
+	status := app.engine.Status()
+	if err := tray.Show(app.iconFor(status), app.tooltipFor(status)); err != nil {
+		return err
 	}
-	a.logger.Printf("%s v%s 启动，配置：%s", appName, appVersion, a.paths.Config)
+	refreshAutostartPath()
+	slog.Info("ProxySwitch 已启动", "version", appVersion, "portable", app.paths.Portable, "autostart", autostarted)
 
+	if loadErr != nil && !created {
+		app.notify(Notice{Level: noticeError, Title: "配置文件有错误", Text: loadErr.Error()})
+	}
+	app.engine.RunStartupAction()
+	app.refresh()
+	tray.StartTimer(statusTimerId, statusInterval)
+	go app.watchNetwork()
+	go app.watchHealth()
+
+	if created {
+		app.notify(Notice{Level: noticeInfo, Title: "ProxySwitch 已在托盘运行", Text: "单击托盘图标开关代理，右键打开菜单", Icon: iconStateOff})
+	}
+	// 首次运行、或还没有任何代理配置时直接打开设置页引导添加；开机自启时不打扰。
+	config := app.engine.Config()
+	if openSettings || created || (config != nil && len(config.Profiles) == 0 && !autostarted) {
+		app.openSettings()
+	}
 	tray.Run()
 	return nil
 }
 
-// ---------- 图形化设置页面 ----------
+// applyUiConfig 在配置加载或变更后同步托盘行为和快捷键。
+func (app *App) applyUiConfig() {
+	config := app.engine.Config()
+	if config == nil {
+		return
+	}
+	app.tray.DoubleClickEnabled = config.TrayDoubleClick != "none"
+	app.registerHotkeys(config)
+}
 
-const settingsURLFile = "settings.url"
+func (app *App) registerHotkeys(config *Config) {
+	signature := config.Hotkey + "|" + config.ProfileHotkeys + "|" + strconv.Itoa(len(config.Profiles))
+	if signature == app.hotkeyConfig {
+		return
+	}
+	app.hotkeyConfig = signature
+	app.tray.UnregisterHotkeys()
+	app.hotkeys = HotkeyStatus{}
+	var problems []string
+	if config.Hotkey != "" {
+		if hotkey, err := parseHotkey(config.Hotkey); err == nil {
+			app.hotkeys.Toggle = hotkey.Text
+			if err := app.tray.RegisterHotkey(toggleHotkeyId, hotkey); err != nil {
+				app.hotkeys.ToggleError = "「" + hotkey.Text + "」已被其他程序占用，请换一个"
+				problems = append(problems, hotkey.Text)
+			}
+		}
+	}
+	if config.ProfileHotkeys != "" {
+		if modifiers, err := parseModifiers(config.ProfileHotkeys); err == nil {
+			var failed []string
+			for index := 0; index < len(config.Profiles) && index < maxProfileHotkeys; index++ {
+				hotkey := Hotkey{Modifiers: modifiers.Modifiers, KeyCode: uint32('1' + index), Text: modifiers.Text + "+" + strconv.Itoa(index+1)}
+				if err := app.tray.RegisterHotkey(profileHotkeyBase+index, hotkey); err != nil {
+					failed = append(failed, hotkey.Text)
+				}
+			}
+			if len(failed) > 0 {
+				app.hotkeys.ProfilesError = strings.Join(failed, "、") + " 已被其他程序占用"
+				problems = append(problems, failed...)
+			}
+		}
+	}
+	if len(problems) > 0 {
+		app.notify(Notice{Level: noticeWarning, Title: "快捷键被占用", Text: strings.Join(problems, "、") + " 已被其他程序占用，可以在设置里换一个"})
+	}
+}
 
-// openSettings 启动（或复用）本地设置服务并用默认浏览器打开。
-func (a *App) openSettings() {
-	url, err := a.settings.Start()
+// ---------- 状态显示 ----------
+
+func (app *App) refresh() {
+	if app.tray == nil {
+		return
+	}
+	status := app.engine.Status()
+	app.tray.Update(app.iconFor(status), app.tooltipFor(status))
+}
+
+func (app *App) iconStyleFor(status Status) (string, string) {
+	if app.engine.Config() == nil {
+		return iconStateError, ""
+	}
+	switch status.State {
+	case statusOn:
+		if health, _ := app.engine.HealthInfo(); health == healthDown {
+			return iconStateWarn, status.Profile.Color
+		}
+		return iconStateOn, status.Profile.Color
+	case statusExternal:
+		return iconStateExternal, ""
+	}
+	return iconStateOff, ""
+}
+
+func (app *App) iconFor(status Status) uintptr {
+	state, color := app.iconStyleFor(status)
+	size := systemMetric(smCxSmIcon)
+	if size <= 0 {
+		size = 16 * systemDpi() / 96
+	}
+	key := fmt.Sprintf("%s|%s|%d", state, color, size)
+	if icon, found := app.icons[key]; found {
+		return icon
+	}
+	icon, err := createIcon(renderToggleIcon(size, trayIconStyle(state, color)))
 	if err != nil {
-		a.notify("无法打开设置页面", err.Error(), niifError)
+		slog.Warn("创建托盘图标失败", "err", err)
+		return 0
+	}
+	app.icons[key] = icon
+	return icon
+}
+
+func (app *App) tooltipFor(status Status) string {
+	lines := []string{appName}
+	config := app.engine.Config()
+	switch {
+	case config == nil:
+		lines = append(lines, "配置文件有错误")
+	case status.State == statusOn:
+		lines = append(lines, "已开启："+status.Profile.Name, status.Profile.Summary())
+		if health, _ := app.engine.HealthInfo(); health == healthDown {
+			lines = append(lines, "代理服务器连不上")
+		}
+	case status.State == statusExternal:
+		lines = append(lines, "系统代理由其他程序设置", status.External)
+	case app.engine.AutoOffPending():
+		lines = append(lines, "已自动关闭：代理服务器连不上")
+	case status.Profile == nil:
+		lines = append(lines, "还没有代理配置，单击添加")
+	default:
+		lines = append(lines, "已关闭，单击开启："+status.Profile.Name)
+	}
+	return truncateRunes(strings.Join(lines, "\n"), 127)
+}
+
+func truncateRunes(text string, limit int) string {
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return text
+	}
+	return string(runes[:limit-1]) + "…"
+}
+
+// notify 按通知级别显示托盘通知；命令行模式没有托盘，出错时弹对话框。
+func (app *App) notify(notice Notice) {
+	slog.Info("通知", "title", notice.Title, "text", strings.ReplaceAll(notice.Text, "\n", " | "))
+	if notice.Level != noticeInfo {
+		app.problemNotices++
+	}
+	if app.quiet {
 		return
 	}
-	// 记下地址，命令行 `ProxySwitch.exe settings` 可以直接打开
-	_ = os.WriteFile(filepath.Join(a.paths.Dir, settingsURLFile), []byte(url), 0o600)
-	if err := shellOpen(url); err != nil {
-		a.logger.Printf("打开浏览器失败: %v", err)
-		a.notify("无法自动打开浏览器", "请手动在浏览器里打开：\n"+url, niifWarning)
+	if app.tray == nil {
+		if notice.Level != noticeInfo {
+			icon := uint32(mbIconWarning)
+			if notice.Level == noticeError {
+				icon = mbIconError
+			}
+			messageBox(0, notice.Title+"\n\n"+notice.Text, appName, mbOk|icon|mbSetForeground|mbTopmost)
+		}
 		return
 	}
-	a.logger.Printf("已打开设置页面")
+	level, seconds := "all", defaultNotifySeconds
+	if config := app.engine.Config(); config != nil {
+		level, seconds = config.NotifyLevel, config.NotifySeconds
+	}
+	if level == "none" || (level == "errors" && notice.Level == noticeInfo) {
+		return
+	}
+	timeout := time.Duration(seconds) * time.Second
+	if notice.Level != noticeInfo && timeout > 0 && timeout < 6*time.Second {
+		// 出错和警告多留几秒，免得没看清就消失了。
+		timeout = 6 * time.Second
+	}
+	var flags uint32
+	var largeIcon uintptr
+	switch notice.Level {
+	case noticeWarning:
+		flags = niifWarning
+	case noticeError:
+		flags = niifError
+	default:
+		flags = niifInfo
+		if notice.Icon != "" {
+			size := systemMetric(smCxIcon)
+			if size <= 0 {
+				size = 32
+			}
+			if icon, err := createIcon(renderToggleIcon(size, trayIconStyle(notice.Icon, notice.Color))); err == nil {
+				largeIcon = icon
+			}
+		}
+	}
+	app.tray.Notify(notice.Title, notice.Text, flags, largeIcon, timeout)
 }
 
-// ui 把 fn 调度到托盘线程执行；没有托盘（命令行模式）时直接执行。
-func (a *App) ui(fn func()) error {
-	if a.tray == nil {
-		fn()
-		return nil
+// ---------- 托盘事件 ----------
+
+func (app *App) onTrayClick() {
+	if config := app.engine.Config(); config != nil {
+		app.runTrayAction(config.TrayClick)
+		return
 	}
-	return a.tray.RunOnUI(fn)
+	app.openSettings()
 }
 
-// SettingsState 实现 SettingsBackend。
-func (a *App) SettingsState() SettingsState {
-	var st SettingsState
-	_ = a.ui(func() { st = a.buildSettingsState() })
-	return st
+func (app *App) onTrayDoubleClick() {
+	if config := app.engine.Config(); config != nil {
+		app.runTrayAction(config.TrayDoubleClick)
+	}
 }
 
-func (a *App) buildSettingsState() SettingsState {
-	st := SettingsState{
-		Version:     appVersion,
-		Paths:       PathsInfo{Dir: a.paths.Dir, Config: a.paths.Config, Log: a.paths.Log, Portable: a.paths.Portable},
-		Config:      a.cfg,
-		ConfigError: a.cfgErr,
-		Autostart:   isAutostartEnabled(),
-		HotkeyError: a.hotkeyErr,
-		Defaults:    DefaultsInfo{Bypass: defaultBypass, NoProxy: defaultNoProxy, Hotkey: "Ctrl+Alt+P"},
-		Targets:     targetInfos,
-		Platform:    "windows",
+func (app *App) runTrayAction(action string) {
+	switch action {
+	case "toggle":
+		app.toggleOrSetup()
+	case "settings":
+		app.openSettings()
+	case "menu":
+		app.onTrayMenu(cursorPosition())
 	}
-	if a.hotkey != nil {
-		st.HotkeyText = a.hotkey.Text
-	}
-	s := a.status()
-	st.Status.On = s.On
-	if s.Profile != nil {
-		st.Status.Profile = s.Profile.Name
-	}
-	st.Status.External = s.External
-	return st
 }
 
-// SaveConfig 实现 SettingsBackend：写文件 → 重新加载 → 重新注册快捷键。
-func (a *App) SaveConfig(cfg *Config) error {
-	var err error
-	uiErr := a.ui(func() {
-		if err = writeConfigFile(a.paths.Config, cfg); err != nil {
-			err = fmt.Errorf("写入配置文件失败：%v", err)
+// toggleOrSetup 开关代理；还没有配置时打开设置页添加。
+func (app *App) toggleOrSetup() {
+	config := app.engine.Config()
+	if config == nil || len(config.Profiles) == 0 {
+		app.openSettings()
+		return
+	}
+	_ = app.engine.Toggle()
+	app.refresh()
+}
+
+func (app *App) onTrayMenu(anchor point) {
+	items := app.menuItems()
+	command := app.tray.ShowMenu(items, anchor)
+	if command != 0 {
+		app.handleMenu(command)
+	}
+}
+
+func escapeMenuText(text string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(text, "&", "&&"), "\t", " ")
+}
+
+func (app *App) menuItems() []MenuItem {
+	separator := MenuItem{Separator: true}
+	config := app.engine.Config()
+	if config == nil {
+		return []MenuItem{
+			{Id: menuHeader, Text: "配置文件有错误", Disabled: true},
+			separator,
+			{Id: menuEditConfig, Text: "编辑配置文件..."},
+			{Id: menuSettings, Text: "设置...", Default: true},
+			separator,
+			{Id: menuExit, Text: "退出"},
+		}
+	}
+	status := app.engine.Status()
+	toggleKey := ""
+	if app.hotkeys.Toggle != "" && app.hotkeys.ToggleError == "" {
+		toggleKey = "\t" + app.hotkeys.Toggle
+	}
+	clickToggles := config.TrayClick == "toggle"
+	var items []MenuItem
+	switch status.State {
+	case statusOn:
+		header := "代理已开启：" + escapeMenuText(status.Profile.Name)
+		if health, _ := app.engine.HealthInfo(); health == healthDown {
+			header += "（连不上代理服务器）"
+		}
+		items = append(items, MenuItem{Id: menuHeader, Text: header, Disabled: true}, MenuItem{Id: menuToggle, Text: "关闭代理" + toggleKey, Default: clickToggles})
+	case statusExternal:
+		items = append(items,
+			MenuItem{Id: menuHeader, Text: "系统代理由其他程序设置：" + escapeMenuText(truncateRunes(status.External, 40)), Disabled: true},
+			MenuItem{Id: menuToggle, Text: "关闭系统代理" + toggleKey, Default: clickToggles})
+	default:
+		header := "代理已关闭"
+		if app.engine.AutoOffPending() {
+			header = "代理已自动关闭（代理服务器连不上）"
+		}
+		items = append(items, MenuItem{Id: menuHeader, Text: header, Disabled: true})
+		if status.Profile != nil {
+			items = append(items, MenuItem{Id: menuToggle, Text: "开启代理" + toggleKey, Default: clickToggles})
+		} else {
+			items = append(items, MenuItem{Id: menuSettings, Text: "添加代理配置...", Default: true})
+		}
+	}
+	if len(config.Profiles) > 0 {
+		items = append(items, separator)
+		modifiers, modifiersErr := parseModifiers(config.ProfileHotkeys)
+		for index := range config.Profiles {
+			profile := &config.Profiles[index]
+			text := escapeMenuText(profile.Name)
+			if config.ProfileHotkeys != "" && modifiersErr == nil && index < maxProfileHotkeys {
+				text += "\t" + modifiers.Text + "+" + strconv.Itoa(index+1)
+			}
+			active := status.State == statusOn && status.Profile.Id == profile.Id
+			items = append(items, MenuItem{Id: uint32(menuProfileBase + index), Text: text, Checked: active, Radio: true, Bitmap: app.menuDot(profile.Color)})
+		}
+	}
+	items = append(items, separator)
+	if status.State == statusOn && status.Profile.Server != "" {
+		items = append(items, MenuItem{Id: menuTest, Text: "测试代理连接"})
+	}
+	if len(config.AutoSwitch.Rules) > 0 {
+		items = append(items, MenuItem{Id: menuAutoSwitch, Text: "按网络自动切换", Checked: config.AutoSwitch.Enabled})
+	}
+	items = append(items,
+		MenuItem{Id: menuSettings, Text: "设置...", Default: config.TrayClick == "settings"},
+		MenuItem{Id: menuAutostart, Text: "开机自动启动", Checked: isAutostartEnabled()},
+		separator,
+		MenuItem{Id: menuExit, Text: "退出"},
+	)
+	return items
+}
+
+// menuDot 返回配置颜色的圆点位图，按颜色缓存。
+func (app *App) menuDot(profileColor string) uintptr {
+	if bitmap, found := app.menuBitmaps[profileColor]; found {
+		return bitmap
+	}
+	fill, ok := parseHexColor(profileColor)
+	if !ok {
+		return 0
+	}
+	size := systemMetric(smCxMenuCheck)
+	if size <= 0 {
+		size = 16
+	}
+	bitmap, err := createMenuBitmap(renderDot(size, fill))
+	if err != nil {
+		return 0
+	}
+	app.menuBitmaps[profileColor] = bitmap
+	return bitmap
+}
+
+func (app *App) handleMenu(command uint32) {
+	config := app.engine.Config()
+	switch {
+	case command == menuToggle:
+		app.toggleOrSetup()
+	case command == menuSettings:
+		app.openSettings()
+	case command == menuAutostart:
+		if err := setAutostart(!isAutostartEnabled()); err != nil {
+			app.notify(Notice{Level: noticeError, Title: "设置开机自启失败", Text: err.Error()})
+		}
+	case command == menuAutoSwitch && config != nil:
+		updated := *config
+		updated.AutoSwitch.Enabled = !config.AutoSwitch.Enabled
+		if err := app.engine.SaveConfig(&updated); err != nil {
+			app.notify(Notice{Level: noticeError, Title: "保存配置失败", Text: err.Error()})
+		}
+	case command == menuTest:
+		app.testActiveProxy()
+	case command == menuEditConfig:
+		if err := openWithEditor("", app.paths.Config); err != nil {
+			app.notify(Notice{Level: noticeError, Title: "无法打开配置文件", Text: err.Error()})
+		}
+	case command == menuExit:
+		app.tray.Quit()
+		return
+	case command >= menuProfileBase && config != nil:
+		index := int(command - menuProfileBase)
+		if index < len(config.Profiles) {
+			_ = app.engine.UseProfile(config.Profiles[index].Name)
+		}
+	}
+	app.refresh()
+}
+
+// testActiveProxy 在后台测试当前代理，结果用通知显示。
+func (app *App) testActiveProxy() {
+	status := app.engine.Status()
+	config := app.engine.Config()
+	if status.State != statusOn || status.Profile.Server == "" || config == nil {
+		return
+	}
+	profile := *status.Profile
+	testUrl := config.TestUrl
+	go func() {
+		result := testProxyServer(profile.Server, testUrl, proxyTestTimeout)
+		notice := Notice{Level: noticeInfo, Title: fmt.Sprintf("%s：连接正常，%d ms", profile.Name, result.Millis), Text: result.Message, Icon: iconStateOn, Color: profile.Color}
+		if !result.Ok {
+			notice = Notice{Level: noticeWarning, Title: profile.Name + "：连接失败", Text: result.Message}
+		}
+		_ = app.tray.RunOnUi(func() { app.notify(notice) })
+	}()
+}
+
+func (app *App) onHotkey(id int) {
+	switch {
+	case id == toggleHotkeyId:
+		app.toggleOrSetup()
+	case id >= profileHotkeyBase && id < profileHotkeyBase+maxProfileHotkeys:
+		config := app.engine.Config()
+		index := id - profileHotkeyBase
+		if config == nil || index >= len(config.Profiles) {
 			return
 		}
-		a.logger.Printf("设置页面保存了配置（%d 套）", len(cfg.Profiles))
-		oldHotkey := ""
-		if a.cfg != nil {
-			oldHotkey = a.cfg.Hotkey
+		// 再按一次正在使用的配置的快捷键就关闭代理。
+		status := app.engine.Status()
+		if status.State == statusOn && status.Profile.Id == config.Profiles[index].Id {
+			_ = app.engine.TurnOff()
+		} else {
+			_ = app.engine.UseProfile(config.Profiles[index].Name)
 		}
-		if _, e := a.loadConfigFile(); e != nil {
-			err = e
-			a.refreshTray()
-			return
-		}
-		if a.cfg.Hotkey != oldHotkey || (a.hotkey == nil && a.cfg.Hotkey != "") {
-			a.setupHotkey()
-		}
-		a.refreshTray()
-	})
-	if uiErr != nil {
-		return uiErr
+		app.refresh()
 	}
-	return err
 }
 
-// DoAction 实现 SettingsBackend。
-func (a *App) DoAction(action, name string) error {
-	var err error
-	uiErr := a.ui(func() {
-		if a.cfg == nil {
-			err = fmt.Errorf("配置文件有错误，请先保存一份正确的配置")
-			return
-		}
-		switch action {
-		case "toggle":
-			a.toggle()
-		case "on":
-			if st := a.status(); !st.On {
-				a.turnOn(st.Profile)
-			}
-		case "off":
-			if st := a.status(); st.On {
-				a.turnOff(st)
-			}
-		case "use":
-			p := a.cfg.FindProfile(name)
-			if p == nil {
-				err = fmt.Errorf("没有名为 %q 的配置", name)
-				return
-			}
-			a.selectProfile(p)
-		}
-	})
-	if uiErr != nil {
-		return uiErr
+func (app *App) onTimer(id uintptr) {
+	if id != statusTimerId {
+		return
 	}
-	return err
+	if app.engine.ReloadIfChanged() {
+		app.applyUiConfig()
+	}
+	app.refresh()
 }
 
-// SetAutostart 实现 SettingsBackend。
-func (a *App) SetAutostart(enabled bool) error {
+// onCopyData 执行另一个 ProxySwitch 进程转发来的命令行，返回退出码。
+func (app *App) onCopyData(data []byte) uintptr {
+	command, argument, _ := strings.Cut(string(data), "\x00")
+	shown := app.problemNotices
 	var err error
-	uiErr := a.ui(func() {
-		err = setAutostart(enabled)
-		if err == nil {
-			a.logger.Printf("设置页面把开机自启改为 %v", enabled)
+	switch command {
+	case "on":
+		err = app.engine.TurnOn()
+	case "off":
+		err = app.engine.TurnOff()
+	case "toggle":
+		err = app.engine.Toggle()
+	case "use":
+		err = app.engine.UseProfile(argument)
+	case "settings":
+		app.openSettings()
+	default:
+		return exitUsage
+	}
+	app.refresh()
+	if err != nil {
+		if app.problemNotices == shown {
+			app.notify(Notice{Level: noticeError, Title: "命令执行失败", Text: err.Error()})
+		}
+		return exitFailure
+	}
+	return exitSuccess
+}
+
+func (app *App) onActivateRequest() {
+	app.openSettings()
+}
+
+func (app *App) onSettingChange(section string) {
+	switch section {
+	case "ImmersiveColorSet":
+		refreshMenuTheme()
+	case "":
+		// 分辨率或缩放变了，图标尺寸可能变化。
+		app.clearIcons()
+		app.refresh()
+	}
+}
+
+func (app *App) onEndSession() {
+	app.handleExit()
+}
+
+func (app *App) onDestroy() {
+	app.handleExit()
+	app.settings.Stop()
+	app.clearIcons()
+	for key, bitmap := range app.menuBitmaps {
+		procDeleteObject.Call(bitmap)
+		delete(app.menuBitmaps, key)
+	}
+	slog.Info("ProxySwitch 已退出")
+}
+
+// handleExit 在退出或注销时按 disable_on_exit 关闭代理，只执行一次。
+func (app *App) handleExit() {
+	if app.exitHandled {
+		return
+	}
+	app.exitHandled = true
+	if config := app.engine.Config(); config != nil && config.DisableOnExit && app.engine.Status().State == statusOn {
+		_ = app.engine.TurnOff()
+	}
+}
+
+func (app *App) clearIcons() {
+	for key, icon := range app.icons {
+		if icon != app.tray.icon {
+			procDestroyIcon.Call(icon)
+		}
+		delete(app.icons, key)
+	}
+}
+
+// openSettings 打开设置页（已打开时切到前台）。
+func (app *App) openSettings() {
+	address, err := app.settings.Start()
+	if err != nil {
+		app.notify(Notice{Level: noticeError, Title: "无法打开设置", Text: err.Error()})
+		return
+	}
+	mode := "app"
+	if config := app.engine.Config(); config != nil {
+		mode = config.SettingsWindow
+	}
+	if err := openSettingsWindow(address, mode); err != nil {
+		app.notify(Notice{Level: noticeError, Title: "无法打开设置", Text: err.Error()})
+	}
+}
+
+// ---------- 后台检查 ----------
+
+func (app *App) watchNetwork() {
+	for {
+		info := readNetworkInfo()
+		_ = app.tray.RunOnUi(func() {
+			app.engine.UpdateNetwork(info)
+			app.refresh()
+		})
+		time.Sleep(networkInterval)
+	}
+}
+
+func (app *App) watchHealth() {
+	for {
+		time.Sleep(healthInterval)
+		var target string
+		if err := app.tray.RunOnUi(func() { target = app.engine.HealthTarget() }); err != nil || target == "" {
+			continue
+		}
+		err := checkProxyReachable(target, healthTimeout)
+		_ = app.tray.RunOnUi(func() {
+			app.engine.HealthResult(target, err)
+			app.refresh()
+		})
+	}
+}
+
+// ---------- 设置页接口（SettingsBackend） ----------
+
+func (app *App) onUi(action func() error) error {
+	var result error
+	if err := app.tray.RunOnUi(func() {
+		app.quiet = true
+		result = action()
+		app.quiet = false
+		app.refresh()
+	}); err != nil {
+		return err
+	}
+	return result
+}
+
+func (app *App) State() SettingsState {
+	var state SettingsState
+	if err := app.tray.RunOnUi(func() { state = app.settingsState() }); err != nil {
+		return SettingsState{Version: appVersion, Platform: "windows", ConfigError: err.Error(), Palette: profilePalette}
+	}
+	return state
+}
+
+func (app *App) settingsState() SettingsState {
+	state := app.engine.settingsState()
+	state.Platform = "windows"
+	state.Autostart = isAutostartEnabled()
+	state.Hotkeys = app.hotkeys
+	state.Accent = systemAccentColor()
+	state.Targets = targetInfos(app.gitAvailable.Load())
+	return state
+}
+
+func (app *App) SaveConfig(config *Config) error {
+	return app.onUi(func() error {
+		err := app.engine.SaveConfig(config)
+		app.applyUiConfig()
+		return err
+	})
+}
+
+func (app *App) TurnOn() error {
+	return app.onUi(app.engine.TurnOn)
+}
+
+func (app *App) TurnOff() error {
+	return app.onUi(app.engine.TurnOff)
+}
+
+func (app *App) UseProfile(name string) error {
+	return app.onUi(func() error { return app.engine.UseProfile(name) })
+}
+
+func (app *App) ApplyAutoSwitch() error {
+	return app.onUi(app.engine.ApplyAutoSwitch)
+}
+
+func (app *App) ClearAllProxies() error {
+	return app.onUi(app.engine.ClearAll)
+}
+
+func (app *App) SetAutostart(enabled bool) error {
+	return setAutostart(enabled)
+}
+
+// Listeners 返回本机监听的端口；再补上常见代理端口，系统列表不完整时也能找到。
+func (app *App) Listeners() []Listener {
+	listeners := listTcpListeners()
+	known := map[int]bool{}
+	for _, listener := range listeners {
+		known[listener.Port] = true
+	}
+	for _, listener := range commonPortListeners() {
+		if !known[listener.Port] {
+			listeners = append(listeners, listener)
+		}
+	}
+	return listeners
+}
+
+func (app *App) Diagnostics() Diagnostics {
+	system, source, err := readSystemProxy()
+	diagnostics := Diagnostics{
+		System:        system,
+		SystemSource:  source,
+		Connections:   append([]string{"局域网"}, rasEntryNames()...),
+		MachinePolicy: machineWideProxy(),
+		Env:           readEnvironmentProxy(),
+		Git:           readGitStatus(),
+		Npm:           readNpmProxy(),
+	}
+	if err != nil {
+		diagnostics.SystemError = err.Error()
+	}
+	diagnostics.NpmrcPath, _ = npmrcPath()
+	app.gitAvailable.Store(diagnostics.Git.Available)
+	return diagnostics
+}
+
+func (app *App) LogTail(maxLines int) string {
+	return readLogTail(app.paths.Log, maxLines)
+}
+
+func (app *App) OpenConfigDir() error {
+	return app.onUi(func() error { return shellOpen(app.paths.Dir) })
+}
+
+func (app *App) OpenConfigFile() error {
+	return app.onUi(func() error {
+		editor := ""
+		if config := app.engine.Config(); config != nil {
+			editor = config.Editor
+		}
+		return openWithEditor(editor, app.paths.Config)
+	})
+}
+
+func (app *App) OpenLogFile() error {
+	return app.onUi(func() error { return openWithEditor("", app.paths.Log) })
+}
+
+func (app *App) OpenUrl(address string) error {
+	return app.onUi(func() error { return shellOpen(address) })
+}
+
+// ActiveProxyUrl 返回正在使用的代理地址，检查更新时经它访问 GitHub。
+func (app *App) ActiveProxyUrl() string {
+	proxyUrl := ""
+	_ = app.tray.RunOnUi(func() {
+		if status := app.engine.Status(); status.State == statusOn && status.Profile.Server != "" {
+			proxyUrl = serverToUrl(status.Profile.Server)
 		}
 	})
-	if uiErr != nil {
-		return uiErr
+	return proxyUrl
+}
+
+// systemAccentColor 返回 Windows 的强调色（#rrggbb），读不到时用默认蓝色。
+func systemAccentColor() string {
+	value, found := readRegistryDword(hkeyCurrentUser, `Software\Microsoft\Windows\DWM`, "AccentColor")
+	if !found {
+		return "#0067c0"
 	}
-	return err
+	// 注册表里是 0xAABBGGRR。
+	return fmt.Sprintf("#%02x%02x%02x", value&0xFF, (value>>8)&0xFF, (value>>16)&0xFF)
+}
+
+func coInitialize() {
+	procCoInitializeEx.Call(0, coinitApartmentThreaded|coinitDisableOle1Dde)
 }

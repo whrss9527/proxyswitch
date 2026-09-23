@@ -7,66 +7,47 @@ import (
 	"strings"
 )
 
-// 开机自启：写 HKCU\Software\Microsoft\Windows\CurrentVersion\Run，不需要管理员权限。
+// 开机自启：写 HKCU\...\Run，不需要管理员权限。
 
 const (
-	runRegKey   = `Software\Microsoft\Windows\CurrentVersion\Run`
-	runRegValue = "ProxySwitch"
+	runKey       = `Software\Microsoft\Windows\CurrentVersion\Run`
+	runValueName = "ProxySwitch"
 )
 
 func autostartCommand() (string, error) {
-	exe, err := os.Executable()
+	executable, err := os.Executable()
 	if err != nil {
 		return "", err
 	}
-	return `"` + exe + `"`, nil
+	return `"` + executable + `" --autostart`, nil
 }
 
 func isAutostartEnabled() bool {
-	k, err := regOpen(hkeyCurrentUser, runRegKey, keyRead)
-	if err != nil {
-		return false
-	}
-	defer k.close()
-	v, err := k.getString(runRegValue)
-	if err != nil {
-		return false
-	}
-	// 只要有值就算已开启；路径与当前 exe 不一致（比如 exe 被挪走）时，
-	// 启动时会由 refreshAutostartPath 自动改成新路径。
-	return strings.TrimSpace(v) != ""
+	return strings.TrimSpace(readRegistryString(hkeyCurrentUser, runKey, runValueName)) != ""
 }
 
-// refreshAutostartPath 在自启已开启但记录的路径不是当前 exe 时，更新为当前路径。
+// refreshAutostartPath 在已开启自启、但记录的不是当前 exe 路径时（exe 被挪动或更新到别处）改成当前路径。
 func refreshAutostartPath() {
-	k, err := regOpen(hkeyCurrentUser, runRegKey, keyRead|keySetValue)
-	if err != nil {
+	current := strings.TrimSpace(readRegistryString(hkeyCurrentUser, runKey, runValueName))
+	command, err := autostartCommand()
+	if current == "" || err != nil || strings.EqualFold(current, command) {
 		return
 	}
-	defer k.close()
-	v, err := k.getString(runRegValue)
-	if err != nil || strings.TrimSpace(v) == "" {
-		return
-	}
-	cmd, err := autostartCommand()
-	if err != nil || strings.EqualFold(strings.TrimSpace(v), cmd) {
-		return
-	}
-	_ = k.setString(runRegValue, cmd)
+	_ = setAutostart(true)
 }
 
-func setAutostart(enable bool) error {
-	k, err := regCreate(hkeyCurrentUser, runRegKey)
+func setAutostart(enabled bool) error {
+	key, err := createRegistryKey(hkeyCurrentUser, runKey)
 	if err != nil {
 		return err
 	}
-	defer k.close()
-	if !enable {
-		return k.deleteValue(runRegValue)
+	defer key.Close()
+	if !enabled {
+		return key.DeleteValue(runValueName)
 	}
-	cmd, err := autostartCommand()
+	command, err := autostartCommand()
 	if err != nil {
 		return err
 	}
-	return k.setString(runRegValue, cmd)
+	return key.SetString(runValueName, command)
 }

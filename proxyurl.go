@@ -1,110 +1,213 @@
 package main
 
 import (
+	"errors"
+	"fmt"
+	"net"
+	"net/url"
+	"sort"
+	"strconv"
 	"strings"
 )
 
 // 不同目标对代理地址的写法不一样：
 //   - Windows 系统代理（WinINET）：host:port，或 http=host:port;https=host:port;socks=host:port
-//   - 环境变量 / git / npm：http://host:port 或 socks5://host:port
-// 这里做两边的互相转换，用户在配置里两种写法都可以。
+//   - 环境变量 / git / npm / 测速：http://host:port 或 socks5://host:port
+// 配置里两种写法都接受，这里负责互相转换。
 
-// serverToWinINET 把用户填写的 server 规范成 WinINET 的 ProxyServer 格式。
-func serverToWinINET(server string) string {
-	s := strings.TrimSpace(server)
-	if s == "" {
+// serverToWinInet 把配置里的 server 转成 WinINET 的 ProxyServer 格式。
+func serverToWinInet(server string) string {
+	server = strings.TrimSpace(server)
+	if server == "" {
 		return ""
 	}
-	if strings.Contains(s, "=") {
-		// 已经是 http=..;https=.. 形式，去掉多余空白
-		var parts []string
-		for _, p := range strings.Split(s, ";") {
-			p = strings.TrimSpace(p)
-			if p != "" {
-				parts = append(parts, p)
+	if strings.Contains(server, "=") {
+		var entries []string
+		for _, entry := range strings.Split(server, ";") {
+			if entry = strings.TrimSpace(entry); entry != "" {
+				entries = append(entries, entry)
 			}
 		}
-		return strings.Join(parts, ";")
+		return strings.Join(entries, ";")
 	}
-	lower := strings.ToLower(s)
-	switch {
-	case strings.HasPrefix(lower, "http://"):
-		return strings.TrimSuffix(s[len("http://"):], "/")
-	case strings.HasPrefix(lower, "https://"):
-		return strings.TrimSuffix(s[len("https://"):], "/")
-	case strings.HasPrefix(lower, "socks5h://"):
-		return "socks=" + strings.TrimSuffix(s[len("socks5h://"):], "/")
-	case strings.HasPrefix(lower, "socks5://"):
-		return "socks=" + strings.TrimSuffix(s[len("socks5://"):], "/")
-	case strings.HasPrefix(lower, "socks://"):
-		return "socks=" + strings.TrimSuffix(s[len("socks://"):], "/")
+	scheme, rest := splitScheme(server)
+	switch scheme {
+	case "socks", "socks5", "socks5h":
+		return "socks=" + rest
 	}
-	return s
+	return rest
 }
 
-// serverToURL 把 server 转成环境变量 / git / npm 能用的 URL。
-// 优先取 https= 项，其次 http=，再次 socks=（转为 socks5://）。
-func serverToURL(server string) string {
-	s := strings.TrimSpace(server)
-	if s == "" {
+// serverToUrl 把 server 转成环境变量 / git / npm 能用的 URL。
+// 按协议分别指定时优先取 https 项，其次 http，再次 socks（转为 socks5://）。
+func serverToUrl(server string) string {
+	server = strings.TrimSpace(server)
+	if server == "" {
 		return ""
 	}
-	if strings.Contains(s, "=") {
-		entries := map[string]string{}
-		for _, p := range strings.Split(s, ";") {
-			p = strings.TrimSpace(p)
-			i := strings.Index(p, "=")
-			if i <= 0 {
+	if strings.Contains(server, "=") {
+		entries := parseProtocolEntries(server)
+		switch {
+		case entries["https"] != "":
+			return "http://" + stripScheme(entries["https"])
+		case entries["http"] != "":
+			return "http://" + stripScheme(entries["http"])
+		case entries["socks"] != "":
+			return "socks5://" + stripScheme(entries["socks"])
+		}
+		return ""
+	}
+	scheme, rest := splitScheme(server)
+	switch scheme {
+	case "":
+		return "http://" + rest
+	case "socks":
+		return "socks5://" + rest
+	}
+	return scheme + "://" + rest
+}
+
+// serverUrlScheme 返回 serverToUrl 结果的协议：http / https / socks5 / socks5h，无法识别时为空。
+func serverUrlScheme(server string) string {
+	scheme, _ := splitScheme(serverToUrl(server))
+	return scheme
+}
+
+func isSocksServer(server string) bool {
+	scheme := serverUrlScheme(server)
+	return scheme == "socks5" || scheme == "socks5h"
+}
+
+// proxyUrlForTarget 返回访问 targetScheme（http / https）地址时应使用的代理，用于测速和连通检查。
+func proxyUrlForTarget(server, targetScheme string) (*url.URL, error) {
+	server = strings.TrimSpace(server)
+	if server == "" {
+		return nil, errors.New("没有填写代理服务器地址")
+	}
+	var chosen string
+	if strings.Contains(server, "=") {
+		entries := parseProtocolEntries(server)
+		switch {
+		case targetScheme == "https" && entries["https"] != "":
+			chosen = "http://" + stripScheme(entries["https"])
+		case entries["http"] != "":
+			chosen = "http://" + stripScheme(entries["http"])
+		case entries["https"] != "":
+			chosen = "http://" + stripScheme(entries["https"])
+		case entries["socks"] != "":
+			chosen = "socks5://" + stripScheme(entries["socks"])
+		default:
+			return nil, errors.New("没有可用的 http / https / socks 项")
+		}
+	} else {
+		chosen = serverToUrl(server)
+		// Go 的 socks 拨号器本来就把域名交给代理解析，与 socks5h 语义一致。
+		if strings.HasPrefix(chosen, "socks5h://") {
+			chosen = "socks5://" + strings.TrimPrefix(chosen, "socks5h://")
+		}
+	}
+	parsed, err := url.Parse(chosen)
+	if err != nil || parsed.Host == "" {
+		return nil, fmt.Errorf("代理地址 %q 格式不对", server)
+	}
+	return parsed, nil
+}
+
+// serverEndpoint 返回代理服务器的 host:port，用于检查代理是否还能连上。
+func serverEndpoint(server string) string {
+	proxyUrl, err := proxyUrlForTarget(server, "https")
+	if err != nil {
+		return ""
+	}
+	return proxyUrl.Host
+}
+
+func splitScheme(value string) (scheme, rest string) {
+	value = strings.TrimSuffix(strings.TrimSpace(value), "/")
+	if index := strings.Index(value, "://"); index >= 0 {
+		return strings.ToLower(value[:index]), value[index+3:]
+	}
+	return "", value
+}
+
+func stripScheme(value string) string {
+	_, rest := splitScheme(value)
+	return rest
+}
+
+func parseProtocolEntries(server string) map[string]string {
+	entries := map[string]string{}
+	for _, entry := range strings.Split(server, ";") {
+		key, value, found := strings.Cut(strings.TrimSpace(entry), "=")
+		if !found {
+			continue
+		}
+		entries[strings.ToLower(strings.TrimSpace(key))] = strings.TrimSpace(value)
+	}
+	return entries
+}
+
+func validateServer(server string) error {
+	if strings.ContainsAny(server, " \t") {
+		return errors.New("不能包含空格")
+	}
+	if strings.Contains(server, "=") {
+		for _, entry := range strings.Split(server, ";") {
+			entry = strings.TrimSpace(entry)
+			if entry == "" {
 				continue
 			}
-			entries[strings.ToLower(strings.TrimSpace(p[:i]))] = strings.TrimSpace(p[i+1:])
+			key, value, found := strings.Cut(entry, "=")
+			if !found {
+				return fmt.Errorf("「%s」应写成 协议=主机:端口", entry)
+			}
+			key = strings.ToLower(strings.TrimSpace(key))
+			if !containsString([]string{"http", "https", "ftp", "socks"}, key) {
+				return fmt.Errorf("「%s」里的协议 %s 不认识，可用：http / https / ftp / socks", entry, key)
+			}
+			if err := validateHostPort(stripScheme(value)); err != nil {
+				return fmt.Errorf("「%s」%v", entry, err)
+			}
 		}
-		if v := entries["https"]; v != "" {
-			return "http://" + stripScheme(v)
-		}
-		if v := entries["http"]; v != "" {
-			return "http://" + stripScheme(v)
-		}
-		if v := entries["socks"]; v != "" {
-			return "socks5://" + stripScheme(v)
-		}
-		return ""
+		return nil
 	}
-	if strings.Contains(s, "://") {
-		return strings.TrimSuffix(s, "/")
+	scheme, rest := splitScheme(server)
+	if scheme != "" && !containsString([]string{"http", "https", "socks", "socks5", "socks5h"}, scheme) {
+		return fmt.Errorf("不支持 %s:// 开头的地址，可用：http:// 或 socks5://", scheme)
 	}
-	return "http://" + s
+	return validateHostPort(rest)
 }
 
-func stripScheme(s string) string {
-	if i := strings.Index(s, "://"); i >= 0 {
-		s = s[i+3:]
+func validateHostPort(value string) error {
+	host, port, err := net.SplitHostPort(value)
+	if err != nil {
+		return errors.New("应写成 主机:端口，例如 127.0.0.1:7890")
 	}
-	return strings.TrimSuffix(s, "/")
+	if host == "" {
+		return errors.New("缺少主机地址")
+	}
+	if strings.ContainsAny(host, "/?#@") {
+		return errors.New("主机地址里不能有 / ? # @")
+	}
+	number, err := strconv.Atoi(port)
+	if err != nil || number < 1 || number > 65535 {
+		return errors.New("端口需要是 1~65535 之间的数字")
+	}
+	return nil
 }
 
-// sameServer 比较两个 WinINET 格式的服务器串是否等价（忽略大小写、空白与顺序无关的分号项）。
-func sameServer(a, b string) bool {
-	na := normalizeServer(a)
-	nb := normalizeServer(b)
-	return na != "" && na == nb
+// sameServer 判断两个地址是否指向同一代理（忽略 scheme、大小写和分号项顺序）。
+func sameServer(first, second string) bool {
+	normalized := normalizeServer(first)
+	return normalized != "" && normalized == normalizeServer(second)
 }
 
-func normalizeServer(s string) string {
-	s = strings.ToLower(serverToWinINET(s))
-	if !strings.Contains(s, "=") {
-		return s
+func normalizeServer(server string) string {
+	normalized := strings.ToLower(serverToWinInet(server))
+	if !strings.Contains(normalized, "=") {
+		return normalized
 	}
-	parts := strings.Split(s, ";")
-	// 简单的插入排序，避免引入 sort 包的额外依赖也可以，这里直接用 sort
-	sortStrings(parts)
-	return strings.Join(parts, ";")
-}
-
-func sortStrings(a []string) {
-	for i := 1; i < len(a); i++ {
-		for j := i; j > 0 && a[j] < a[j-1]; j-- {
-			a[j], a[j-1] = a[j-1], a[j]
-		}
-	}
+	entries := strings.Split(normalized, ";")
+	sort.Strings(entries)
+	return strings.Join(entries, ";")
 }

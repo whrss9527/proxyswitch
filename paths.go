@@ -5,17 +5,19 @@ import (
 	"path/filepath"
 )
 
+// appVersion 在发布构建时由 -ldflags "-X main.appVersion=x.y.z" 注入。
+var appVersion = "2.0.0"
+
 const (
 	appName        = "ProxySwitch"
-	appVersion     = "1.1.1"
 	configFileName = "config.jsonc"
 	stateFileName  = "state.json"
 	logFileName    = "proxyswitch.log"
+	repositoryUrl  = "https://github.com/whrss9527/proxyswitch"
 )
 
 // Paths 是配置、状态、日志文件的位置。
-// 便携模式：exe 同目录下存在 config.jsonc 时，一切文件都放在 exe 目录；
-// 否则放在 %APPDATA%\ProxySwitch。
+// exe 同目录下存在 config.jsonc 时为便携模式，所有文件放在 exe 目录；否则放在 %APPDATA%\ProxySwitch。
 type Paths struct {
 	Dir      string
 	Config   string
@@ -25,36 +27,40 @@ type Paths struct {
 }
 
 func resolvePaths() Paths {
-	var dir string
+	directory := ""
 	portable := false
-	if exe, err := os.Executable(); err == nil {
-		exeDir := filepath.Dir(exe)
-		if fileExists(filepath.Join(exeDir, configFileName)) {
-			dir = exeDir
+	if executable, err := os.Executable(); err == nil {
+		executableDir := filepath.Dir(executable)
+		if fileExists(filepath.Join(executableDir, configFileName)) {
+			directory = executableDir
 			portable = true
 		}
 	}
-	if dir == "" {
+	if directory == "" {
 		base := os.Getenv("APPDATA")
 		if base == "" {
-			if d, err := os.UserConfigDir(); err == nil {
-				base = d
+			if configDir, err := os.UserConfigDir(); err == nil {
+				base = configDir
 			} else {
 				base = "."
 			}
 		}
-		dir = filepath.Join(base, appName)
+		directory = filepath.Join(base, appName)
 	}
+	return pathsIn(directory, portable)
+}
+
+func pathsIn(directory string, portable bool) Paths {
 	return Paths{
-		Dir:      dir,
-		Config:   filepath.Join(dir, configFileName),
-		State:    filepath.Join(dir, stateFileName),
-		Log:      filepath.Join(dir, logFileName),
+		Dir:      directory,
+		Config:   filepath.Join(directory, configFileName),
+		State:    filepath.Join(directory, stateFileName),
+		Log:      filepath.Join(directory, logFileName),
 		Portable: portable,
 	}
 }
 
 func fileExists(path string) bool {
-	st, err := os.Stat(path)
-	return err == nil && !st.IsDir()
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }

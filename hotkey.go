@@ -1,22 +1,24 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 )
 
 // Hotkey 是解析后的全局快捷键。
 type Hotkey struct {
-	Mods uint32 // MOD_ALT / MOD_CONTROL / MOD_SHIFT / MOD_WIN 的组合
-	VK   uint32 // 虚拟键码
-	Text string // 规范化后的显示文本，如 "Ctrl+Alt+P"
+	Modifiers uint32
+	KeyCode   uint32
+	Text      string
 }
 
+// RegisterHotKey 的修饰键位
 const (
-	hkModAlt     = 0x0001
-	hkModControl = 0x0002
-	hkModShift   = 0x0004
-	hkModWin     = 0x0008
+	modifierAlt     = 0x0001
+	modifierControl = 0x0002
+	modifierShift   = 0x0004
+	modifierWin     = 0x0008
 )
 
 var namedKeys = map[string]uint32{
@@ -68,111 +70,133 @@ var keyDisplay = map[uint32]string{
 	0xBC: ",", 0xBE: ".", 0xBF: "/",
 }
 
-// parseHotkey 解析形如 "Ctrl+Alt+P"、"Win+Shift+F9" 的快捷键描述。
-func parseHotkey(s string) (Hotkey, error) {
-	var hk Hotkey
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return hk, fmt.Errorf("快捷键为空")
+// parseHotkey 解析形如 "Ctrl+Alt+P"、"Win+Shift+F9" 的快捷键描述，要求至少一个修饰键和一个主键。
+func parseHotkey(text string) (Hotkey, error) {
+	var hotkey Hotkey
+	tokens := hotkeyTokens(text)
+	if len(tokens) == 0 {
+		return hotkey, errors.New("快捷键为空")
 	}
-	// 允许 "Ctrl + Alt + P" 这种带空格的写法；单独的 "+" 作为主键时用 "plus"
-	parts := strings.Split(s, "+")
+	var names []string
+	keySet := false
+	for _, token := range tokens {
+		lowered := strings.ToLower(token)
+		if modifier, name, ok := modifierOf(lowered); ok {
+			hotkey.Modifiers |= modifier
+			names = append(names, name)
+			continue
+		}
+		if keySet {
+			return hotkey, fmt.Errorf("只能有一个主键，多余的：%q", token)
+		}
+		keyCode, display, err := parseKey(lowered)
+		if err != nil {
+			return hotkey, err
+		}
+		hotkey.KeyCode = keyCode
+		keySet = true
+		names = append(names, display)
+	}
+	if !keySet {
+		return hotkey, errors.New("缺少主键（例如 Ctrl+Alt+P 里的 P）")
+	}
+	if hotkey.Modifiers == 0 {
+		return hotkey, errors.New("至少需要一个修饰键（Ctrl / Alt / Shift / Win），否则会拦截正常输入")
+	}
+	hotkey.Text = strings.Join(names, "+")
+	return hotkey, nil
+}
+
+// parseModifiers 解析只含修饰键的组合，例如 "Ctrl+Alt"，用于按数字切换配置。
+func parseModifiers(text string) (Hotkey, error) {
+	var hotkey Hotkey
+	tokens := hotkeyTokens(text)
+	if len(tokens) == 0 {
+		return hotkey, errors.New("修饰键为空")
+	}
+	var names []string
+	for _, token := range tokens {
+		modifier, name, ok := modifierOf(strings.ToLower(token))
+		if !ok {
+			return hotkey, fmt.Errorf("%q 不是修饰键，只能用 Ctrl / Alt / Shift / Win", token)
+		}
+		if hotkey.Modifiers&modifier != 0 {
+			continue
+		}
+		hotkey.Modifiers |= modifier
+		names = append(names, name)
+	}
+	hotkey.Text = strings.Join(names, "+")
+	return hotkey, nil
+}
+
+// hotkeyTokens 按 + 拆分，允许空格；末尾的 "++" 表示主键就是 + 本身。
+func hotkeyTokens(text string) []string {
+	parts := strings.Split(strings.TrimSpace(text), "+")
 	var tokens []string
-	for i, p := range parts {
-		p = strings.TrimSpace(p)
-		if p == "" {
-			// 连续的 "++"：表示主键是 "+" 本身（例如 "Ctrl++"）
-			if i == len(parts)-1 && len(tokens) > 0 {
+	for index, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			if index == len(parts)-1 && len(tokens) > 0 {
 				tokens = append(tokens, "plus")
 			}
 			continue
 		}
-		tokens = append(tokens, p)
+		tokens = append(tokens, part)
 	}
-	if len(tokens) == 0 {
-		return hk, fmt.Errorf("快捷键为空")
-	}
-	var modNames []string
-	keySet := false
-	for _, t := range tokens {
-		lt := strings.ToLower(t)
-		switch lt {
-		case "ctrl", "control", "ctl":
-			hk.Mods |= hkModControl
-			modNames = append(modNames, "Ctrl")
-			continue
-		case "alt", "option":
-			hk.Mods |= hkModAlt
-			modNames = append(modNames, "Alt")
-			continue
-		case "shift":
-			hk.Mods |= hkModShift
-			modNames = append(modNames, "Shift")
-			continue
-		case "win", "windows", "super", "meta", "cmd":
-			hk.Mods |= hkModWin
-			modNames = append(modNames, "Win")
-			continue
-		}
-		if keySet {
-			return hk, fmt.Errorf("只能有一个主键，多余的：%q", t)
-		}
-		vk, display, err := parseKey(lt)
-		if err != nil {
-			return hk, err
-		}
-		hk.VK = vk
-		keySet = true
-		modNames = append(modNames, display)
-	}
-	if !keySet {
-		return hk, fmt.Errorf("缺少主键（例如 Ctrl+Alt+P 里的 P）")
-	}
-	if hk.Mods == 0 {
-		return hk, fmt.Errorf("至少需要一个修饰键（Ctrl / Alt / Shift / Win），否则会拦截正常输入")
-	}
-	hk.Text = strings.Join(modNames, "+")
-	return hk, nil
+	return tokens
 }
 
-func parseKey(lt string) (uint32, string, error) {
-	if lt == "plus" {
+func modifierOf(lowered string) (uint32, string, bool) {
+	switch lowered {
+	case "ctrl", "control", "ctl":
+		return modifierControl, "Ctrl", true
+	case "alt", "option":
+		return modifierAlt, "Alt", true
+	case "shift":
+		return modifierShift, "Shift", true
+	case "win", "windows", "super", "meta", "cmd":
+		return modifierWin, "Win", true
+	}
+	return 0, "", false
+}
+
+func parseKey(lowered string) (uint32, string, error) {
+	if lowered == "plus" {
 		return 0xBB, "+", nil
 	}
-	if len(lt) == 1 {
-		c := lt[0]
+	if len(lowered) == 1 {
+		char := lowered[0]
 		switch {
-		case c >= 'a' && c <= 'z':
-			return uint32(c - 'a' + 'A'), strings.ToUpper(lt), nil
-		case c >= '0' && c <= '9':
-			return uint32(c), lt, nil
+		case char >= 'a' && char <= 'z':
+			return uint32(char - 'a' + 'A'), strings.ToUpper(lowered), nil
+		case char >= '0' && char <= '9':
+			return uint32(char), lowered, nil
 		}
-		if vk, ok := namedKeys[lt]; ok {
-			return vk, keyDisplay[vk], nil
+		if keyCode, ok := namedKeys[lowered]; ok {
+			return keyCode, keyDisplay[keyCode], nil
 		}
-		return 0, "", fmt.Errorf("不支持的按键 %q", lt)
+		return 0, "", fmt.Errorf("不支持的按键 %q", lowered)
 	}
-	// F1 ~ F24
-	if strings.HasPrefix(lt, "f") {
-		n := 0
-		ok := len(lt) > 1
-		for _, r := range lt[1:] {
-			if r < '0' || r > '9' {
-				ok = false
+	if strings.HasPrefix(lowered, "f") {
+		number := 0
+		valid := len(lowered) > 1
+		for _, digit := range lowered[1:] {
+			if digit < '0' || digit > '9' {
+				valid = false
 				break
 			}
-			n = n*10 + int(r-'0')
+			number = number*10 + int(digit-'0')
 		}
-		if ok && n >= 1 && n <= 24 {
-			return uint32(0x70 + n - 1), fmt.Sprintf("F%d", n), nil
+		if valid && number >= 1 && number <= 24 {
+			return uint32(0x70 + number - 1), fmt.Sprintf("F%d", number), nil
 		}
 	}
-	// 小键盘 numpad0 ~ numpad9
-	if strings.HasPrefix(lt, "numpad") && len(lt) == 7 && lt[6] >= '0' && lt[6] <= '9' {
-		return uint32(0x60 + lt[6] - '0'), "Numpad" + lt[6:], nil
+	if strings.HasPrefix(lowered, "numpad") && len(lowered) == 7 && lowered[6] >= '0' && lowered[6] <= '9' {
+		return uint32(0x60 + lowered[6] - '0'), "Numpad" + lowered[6:], nil
 	}
-	if vk, ok := namedKeys[lt]; ok {
-		return vk, keyDisplay[vk], nil
+	if keyCode, ok := namedKeys[lowered]; ok {
+		return keyCode, keyDisplay[keyCode], nil
 	}
-	return 0, "", fmt.Errorf("不支持的按键 %q", lt)
+	return 0, "", fmt.Errorf("不支持的按键 %q", lowered)
 }

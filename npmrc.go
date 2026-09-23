@@ -6,80 +6,69 @@ import (
 	"strings"
 )
 
-// npm / pnpm 代理：直接编辑用户目录下的 .npmrc（ini 格式），只动 proxy / https-proxy / noproxy 三行，
-// 其余内容原样保留。
+// npm / pnpm 代理：编辑用户目录下的 .npmrc（ini 格式），只动 proxy / https-proxy / noproxy 三行，其余内容原样保留。
 
 var npmrcKeys = []string{"proxy", "https-proxy", "noproxy"}
 
-// updateNpmrc 返回修改后的 .npmrc 内容。proxyURL 为空表示移除代理配置。
-func updateNpmrc(content, proxyURL, noProxy string) string {
-	want := map[string]string{}
-	if proxyURL != "" {
-		want["proxy"] = proxyURL
-		want["https-proxy"] = proxyURL
+// updateNpmrc 返回修改后的 .npmrc 内容；proxyUrl 为空表示移除代理配置。
+func updateNpmrc(content, proxyUrl, noProxy string) string {
+	wanted := map[string]string{}
+	if proxyUrl != "" {
+		wanted["proxy"] = proxyUrl
+		wanted["https-proxy"] = proxyUrl
 		if strings.TrimSpace(noProxy) != "" {
-			want["noproxy"] = noProxy
+			wanted["noproxy"] = noProxy
 		}
 	}
 
-	nl := "\n"
+	newline := "\n"
 	if strings.Contains(content, "\r\n") {
-		nl = "\r\n"
+		newline = "\r\n"
 	}
 	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
-	// 去掉末尾因结尾换行产生的空串
 	if len(lines) > 0 && lines[len(lines)-1] == "" {
 		lines = lines[:len(lines)-1]
 	}
 
-	seen := map[string]bool{}
-	var out []string
+	written := map[string]bool{}
+	var output []string
 	for _, line := range lines {
 		key := npmrcLineKey(line)
 		if key == "" {
-			out = append(out, line)
+			output = append(output, line)
 			continue
 		}
-		v, ok := want[key]
-		if !ok {
-			continue // 需要删除的行
+		value, keep := wanted[key]
+		if !keep || written[key] {
+			continue
 		}
-		if seen[key] {
-			continue // 重复的行只保留一条
-		}
-		seen[key] = true
-		out = append(out, key+"="+v)
+		written[key] = true
+		output = append(output, key+"="+value)
 	}
 	for _, key := range npmrcKeys {
-		if v, ok := want[key]; ok && !seen[key] {
-			out = append(out, key+"="+v)
+		if value, keep := wanted[key]; keep && !written[key] {
+			output = append(output, key+"="+value)
 		}
 	}
-	if len(out) == 0 {
+	if len(output) == 0 {
 		return ""
 	}
-	return strings.Join(out, nl) + nl
+	return strings.Join(output, newline) + newline
 }
 
-// npmrcLineKey 判断一行是否是我们管理的键，是则返回规范化的键名。
+// npmrcLineKey 判断一行是否是我们管理的键，是则返回规范化的键名，否则返回空串。
 func npmrcLineKey(line string) string {
-	t := strings.TrimSpace(line)
-	if t == "" || strings.HasPrefix(t, "#") || strings.HasPrefix(t, ";") {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, ";") {
 		return ""
 	}
-	i := strings.IndexAny(t, "=:")
-	if i < 0 {
+	separator := strings.IndexAny(trimmed, "=:")
+	if separator < 0 {
 		return ""
 	}
-	key := strings.ToLower(strings.TrimSpace(t[:i]))
-	key = strings.ReplaceAll(key, "_", "-")
-	if key == "https_proxy" {
-		key = "https-proxy"
-	}
-	for _, k := range npmrcKeys {
-		if key == k {
-			return k
-		}
+	key := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(trimmed[:separator])), "_", "-")
+	if containsString(npmrcKeys, key) {
+		return key
 	}
 	return ""
 }
@@ -92,50 +81,41 @@ func npmrcPath() (string, error) {
 	return filepath.Join(home, ".npmrc"), nil
 }
 
-// setNpmProxy 写入（proxyURL 非空）或移除（proxyURL 为空）npm 代理。
-func setNpmProxy(proxyURL, noProxy string) error {
+// setNpmProxy 写入（proxyUrl 非空）或移除（proxyUrl 为空）npm 代理。
+func setNpmProxy(proxyUrl, noProxy string) error {
 	path, err := npmrcPath()
 	if err != nil {
 		return err
 	}
-	old, err := os.ReadFile(path)
+	original, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	updated := updateNpmrc(string(old), proxyURL, noProxy)
-	if updated == string(old) {
-		return nil
-	}
-	if updated == "" && os.IsNotExist(err) {
+	updated := updateNpmrc(string(original), proxyUrl, noProxy)
+	if updated == string(original) || (updated == "" && os.IsNotExist(err)) {
 		return nil
 	}
 	return os.WriteFile(path, []byte(updated), 0o644)
 }
 
-// readNpmProxy 返回 .npmrc 中当前的 https-proxy / proxy 值。
-func readNpmProxy() string {
+// readNpmProxy 返回 .npmrc 中 proxy / https-proxy / noproxy 的当前值。
+func readNpmProxy() map[string]string {
+	values := map[string]string{}
 	path, err := npmrcPath()
 	if err != nil {
-		return ""
+		return values
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return ""
+		return values
 	}
-	var httpProxy string
 	for _, line := range strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n") {
 		key := npmrcLineKey(line)
 		if key == "" {
 			continue
 		}
-		i := strings.IndexAny(line, "=:")
-		v := strings.TrimSpace(line[i+1:])
-		if key == "https-proxy" && v != "" {
-			return v
-		}
-		if key == "proxy" {
-			httpProxy = v
-		}
+		separator := strings.IndexAny(line, "=:")
+		values[key] = strings.TrimSpace(line[separator+1:])
 	}
-	return httpProxy
+	return values
 }

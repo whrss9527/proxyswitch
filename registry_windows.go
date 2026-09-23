@@ -3,122 +3,155 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"syscall"
 	"unsafe"
 )
 
-// 极简注册表封装（只用到 HKCU 下的几个值）。
+// 极简注册表封装，只用到读写字符串和 DWORD。
 
-type regKey uintptr
+type registryKey uintptr
 
-func regOpen(root uintptr, path string, access uint32) (regKey, error) {
-	var h uintptr
-	r, _, _ := procRegOpenKeyExW.Call(root,
-		uintptr(unsafe.Pointer(utf16Ptr(path))), 0, uintptr(access),
-		uintptr(unsafe.Pointer(&h)))
-	if r != errorSuccess {
-		return 0, fmt.Errorf("RegOpenKeyEx(%s): %v", path, syscall.Errno(r))
+var errValueNotFound = errors.New("注册表值不存在")
+
+func openRegistryKey(root uintptr, path string, access uint32) (registryKey, error) {
+	var handle uintptr
+	result, _, _ := procRegOpenKeyExW.Call(root, uintptr(unsafe.Pointer(utf16Pointer(path))), 0, uintptr(access), uintptr(unsafe.Pointer(&handle)))
+	if result != errorSuccess {
+		return 0, fmt.Errorf("打开注册表 %s 失败：%v", path, syscall.Errno(result))
 	}
-	return regKey(h), nil
+	return registryKey(handle), nil
 }
 
-// regCreate 打开（不存在则创建）一个键，带读写权限。
-func regCreate(root uintptr, path string) (regKey, error) {
-	var h uintptr
-	var disp uint32
-	r, _, _ := procRegCreateKeyExW.Call(root,
-		uintptr(unsafe.Pointer(utf16Ptr(path))), 0, 0, 0,
-		uintptr(keyRead|keyWrite), 0,
-		uintptr(unsafe.Pointer(&h)), uintptr(unsafe.Pointer(&disp)))
-	if r != errorSuccess {
-		return 0, fmt.Errorf("RegCreateKeyEx(%s): %v", path, syscall.Errno(r))
+// createRegistryKey 打开（不存在则创建）一个可读写的键。
+func createRegistryKey(root uintptr, path string) (registryKey, error) {
+	var handle uintptr
+	var disposition uint32
+	result, _, _ := procRegCreateKeyExW.Call(root, uintptr(unsafe.Pointer(utf16Pointer(path))), 0, 0, 0,
+		uintptr(keyRead|keyWrite), 0, uintptr(unsafe.Pointer(&handle)), uintptr(unsafe.Pointer(&disposition)))
+	if result != errorSuccess {
+		return 0, fmt.Errorf("打开注册表 %s 失败：%v", path, syscall.Errno(result))
 	}
-	return regKey(h), nil
+	return registryKey(handle), nil
 }
 
-func (k regKey) close() {
-	procRegCloseKey.Call(uintptr(k))
+func (key registryKey) Close() {
+	procRegCloseKey.Call(uintptr(key))
 }
 
-// query 读取原始数据；值不存在时返回 errNotFound。
-func (k regKey) query(name string) (typ uint32, data []byte, err error) {
-	namep := utf16Ptr(name)
-	buf := make([]byte, 1024)
+func (key registryKey) query(name string) (valueType uint32, data []byte, err error) {
+	namePointer := utf16Pointer(name)
+	buffer := make([]byte, 1024)
 	for {
-		size := uint32(len(buf))
-		r, _, _ := procRegQueryValueExW.Call(uintptr(k),
-			uintptr(unsafe.Pointer(namep)), 0,
-			uintptr(unsafe.Pointer(&typ)),
-			uintptr(unsafe.Pointer(&buf[0])),
-			uintptr(unsafe.Pointer(&size)))
-		switch r {
+		size := uint32(len(buffer))
+		result, _, _ := procRegQueryValueExW.Call(uintptr(key), uintptr(unsafe.Pointer(namePointer)), 0,
+			uintptr(unsafe.Pointer(&valueType)), uintptr(unsafe.Pointer(&buffer[0])), uintptr(unsafe.Pointer(&size)))
+		switch result {
 		case errorSuccess:
-			return typ, buf[:size], nil
+			return valueType, buffer[:size], nil
 		case errorMoreData:
-			buf = make([]byte, size+2)
-			continue
+			buffer = make([]byte, size+2)
 		case errorFileNotFound:
-			return 0, nil, errNotFound
+			return 0, nil, errValueNotFound
 		default:
-			return 0, nil, fmt.Errorf("RegQueryValueEx(%s): %v", name, syscall.Errno(r))
+			return 0, nil, fmt.Errorf("读取注册表值 %s 失败：%v", name, syscall.Errno(result))
 		}
 	}
 }
 
-func (k regKey) getString(name string) (string, error) {
-	typ, data, err := k.query(name)
+func (key registryKey) String(name string) (string, error) {
+	valueType, data, err := key.query(name)
 	if err != nil {
 		return "", err
 	}
-	if typ != regSz && typ != regExpandSz {
-		return "", fmt.Errorf("值 %s 不是字符串类型(%d)", name, typ)
+	if valueType != regSz && valueType != regExpandSz {
+		return "", fmt.Errorf("注册表值 %s 不是字符串", name)
 	}
-	n := len(data) / 2
-	u := make([]uint16, n)
-	for i := 0; i < n; i++ {
-		u[i] = uint16(data[2*i]) | uint16(data[2*i+1])<<8
+	encoded := make([]uint16, len(data)/2)
+	for index := range encoded {
+		encoded[index] = uint16(data[2*index]) | uint16(data[2*index+1])<<8
 	}
-	return syscall.UTF16ToString(u), nil
+	return syscall.UTF16ToString(encoded), nil
 }
 
-func (k regKey) getDWORD(name string) (uint32, error) {
-	typ, data, err := k.query(name)
+func (key registryKey) Dword(name string) (uint32, error) {
+	valueType, data, err := key.query(name)
 	if err != nil {
 		return 0, err
 	}
-	if typ != regDword || len(data) < 4 {
-		return 0, fmt.Errorf("值 %s 不是 DWORD 类型(%d)", name, typ)
+	if valueType != regDword || len(data) < 4 {
+		return 0, fmt.Errorf("注册表值 %s 不是 DWORD", name)
 	}
 	return uint32(data[0]) | uint32(data[1])<<8 | uint32(data[2])<<16 | uint32(data[3])<<24, nil
 }
 
-func (k regKey) setString(name, value string) error {
-	u := syscall.StringToUTF16(replaceNUL(value)) // 含结尾 NUL
-	r, _, _ := procRegSetValueExW.Call(uintptr(k),
-		uintptr(unsafe.Pointer(utf16Ptr(name))), 0, regSz,
-		uintptr(unsafe.Pointer(&u[0])), uintptr(len(u)*2))
-	if r != errorSuccess {
-		return fmt.Errorf("RegSetValueEx(%s): %v", name, syscall.Errno(r))
+func (key registryKey) SetString(name, value string) error {
+	encoded := syscall.StringToUTF16(replaceNul(value))
+	result, _, _ := procRegSetValueExW.Call(uintptr(key), uintptr(unsafe.Pointer(utf16Pointer(name))), 0, regSz,
+		uintptr(unsafe.Pointer(&encoded[0])), uintptr(len(encoded)*2))
+	if result != errorSuccess {
+		return fmt.Errorf("写入注册表值 %s 失败：%v", name, syscall.Errno(result))
 	}
 	return nil
 }
 
-func (k regKey) setDWORD(name string, value uint32) error {
-	r, _, _ := procRegSetValueExW.Call(uintptr(k),
-		uintptr(unsafe.Pointer(utf16Ptr(name))), 0, regDword,
+func (key registryKey) SetDword(name string, value uint32) error {
+	result, _, _ := procRegSetValueExW.Call(uintptr(key), uintptr(unsafe.Pointer(utf16Pointer(name))), 0, regDword,
 		uintptr(unsafe.Pointer(&value)), 4)
-	if r != errorSuccess {
-		return fmt.Errorf("RegSetValueEx(%s): %v", name, syscall.Errno(r))
+	if result != errorSuccess {
+		return fmt.Errorf("写入注册表值 %s 失败：%v", name, syscall.Errno(result))
 	}
 	return nil
 }
 
-// deleteValue 删除一个值；值本来就不存在不算错误。
-func (k regKey) deleteValue(name string) error {
-	r, _, _ := procRegDeleteValueW.Call(uintptr(k), uintptr(unsafe.Pointer(utf16Ptr(name))))
-	if r != errorSuccess && r != errorFileNotFound {
-		return fmt.Errorf("RegDeleteValue(%s): %v", name, syscall.Errno(r))
+// DeleteValue 删除一个值，值本来就不存在不算错误。
+func (key registryKey) DeleteValue(name string) error {
+	result, _, _ := procRegDeleteValueW.Call(uintptr(key), uintptr(unsafe.Pointer(utf16Pointer(name))))
+	if result != errorSuccess && result != errorFileNotFound {
+		return fmt.Errorf("删除注册表值 %s 失败：%v", name, syscall.Errno(result))
 	}
 	return nil
+}
+
+// SubkeyNames 列出直接子键的名字。
+func (key registryKey) SubkeyNames() []string {
+	var names []string
+	for index := uint32(0); ; index++ {
+		buffer := make([]uint16, 256)
+		length := uint32(len(buffer))
+		result, _, _ := procRegEnumKeyExW.Call(uintptr(key), uintptr(index), uintptr(unsafe.Pointer(&buffer[0])), uintptr(unsafe.Pointer(&length)), 0, 0, 0, 0)
+		if result != errorSuccess {
+			return names
+		}
+		names = append(names, syscall.UTF16ToString(buffer[:length]))
+	}
+}
+
+// Binary 读取二进制值。
+func (key registryKey) Binary(name string) ([]byte, error) {
+	_, data, err := key.query(name)
+	return data, err
+}
+
+// readRegistryString 读取单个字符串值，出错时返回空串。
+func readRegistryString(root uintptr, path, name string) string {
+	key, err := openRegistryKey(root, path, keyRead)
+	if err != nil {
+		return ""
+	}
+	defer key.Close()
+	value, _ := key.String(name)
+	return value
+}
+
+// readRegistryDword 读取单个 DWORD 值。
+func readRegistryDword(root uintptr, path, name string) (uint32, bool) {
+	key, err := openRegistryKey(root, path, keyRead)
+	if err != nil {
+		return 0, false
+	}
+	defer key.Close()
+	value, err := key.Dword(name)
+	return value, err == nil
 }

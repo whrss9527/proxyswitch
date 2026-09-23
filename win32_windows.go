@@ -3,62 +3,102 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"syscall"
 	"unsafe"
 )
 
-// 本文件集中声明用到的 Win32 API、常量和结构体。
-// 全部通过 syscall 直接调用，不依赖任何第三方库。
+// 本文件集中声明用到的 Win32 API、常量和结构体，全部通过 syscall 直接调用，不依赖第三方库。
+// 结构体布局按 64 位（amd64 / arm64）编写。
 
 var (
-	user32   = syscall.NewLazyDLL("user32.dll")
 	kernel32 = syscall.NewLazyDLL("kernel32.dll")
+	user32   = syscall.NewLazyDLL("user32.dll")
+	gdi32    = syscall.NewLazyDLL("gdi32.dll")
 	shell32  = syscall.NewLazyDLL("shell32.dll")
 	advapi32 = syscall.NewLazyDLL("advapi32.dll")
-	// wininet 不在 Go 内置的“系统 DLL 白名单”里，这里用绝对路径加载，避免同目录 DLL 劫持。
-	wininet = syscall.NewLazyDLL(systemDir() + `\wininet.dll`)
+	ole32    = syscall.NewLazyDLL("ole32.dll")
+	ntdll    = syscall.NewLazyDLL("ntdll.dll")
+	// 以下 DLL 不在 Go 内置的系统 DLL 名单里，用 System32 的绝对路径加载，避免同目录 DLL 劫持。
+	wininet  = syscall.NewLazyDLL(systemDir() + `\wininet.dll`)
+	rasapi32 = syscall.NewLazyDLL(systemDir() + `\rasapi32.dll`)
+	iphlpapi = syscall.NewLazyDLL(systemDir() + `\iphlpapi.dll`)
+	wlanapi  = syscall.NewLazyDLL(systemDir() + `\wlanapi.dll`)
 
-	procRegisterClassExW            = user32.NewProc("RegisterClassExW")
-	procCreateWindowExW             = user32.NewProc("CreateWindowExW")
-	procDefWindowProcW              = user32.NewProc("DefWindowProcW")
-	procDestroyWindow               = user32.NewProc("DestroyWindow")
-	procGetMessageW                 = user32.NewProc("GetMessageW")
-	procTranslateMessage            = user32.NewProc("TranslateMessage")
-	procDispatchMessageW            = user32.NewProc("DispatchMessageW")
-	procPostQuitMessage             = user32.NewProc("PostQuitMessage")
-	procPostMessageW                = user32.NewProc("PostMessageW")
-	procSendMessageTimeoutW         = user32.NewProc("SendMessageTimeoutW")
-	procRegisterWindowMessageW      = user32.NewProc("RegisterWindowMessageW")
-	procCreatePopupMenu             = user32.NewProc("CreatePopupMenu")
-	procAppendMenuW                 = user32.NewProc("AppendMenuW")
-	procCheckMenuRadioItem          = user32.NewProc("CheckMenuRadioItem")
-	procSetMenuDefaultItem          = user32.NewProc("SetMenuDefaultItem")
-	procTrackPopupMenu              = user32.NewProc("TrackPopupMenu")
-	procDestroyMenu                 = user32.NewProc("DestroyMenu")
-	procSetForegroundWindow         = user32.NewProc("SetForegroundWindow")
-	procGetCursorPos                = user32.NewProc("GetCursorPos")
-	procRegisterHotKey              = user32.NewProc("RegisterHotKey")
-	procUnregisterHotKey            = user32.NewProc("UnregisterHotKey")
-	procSetTimer                    = user32.NewProc("SetTimer")
-	procKillTimer                   = user32.NewProc("KillTimer")
-	procMessageBoxW                 = user32.NewProc("MessageBoxW")
-	procLoadImageW                  = user32.NewProc("LoadImageW")
-	procDestroyIcon                 = user32.NewProc("DestroyIcon")
-	procGetSystemMetrics            = user32.NewProc("GetSystemMetrics")
-	procLookupIconIdFromDirectoryEx = user32.NewProc("LookupIconIdFromDirectoryEx")
-	procCreateIconFromResourceEx    = user32.NewProc("CreateIconFromResourceEx")
+	procGetModuleHandleW           = kernel32.NewProc("GetModuleHandleW")
+	procGetCurrentThreadId         = kernel32.NewProc("GetCurrentThreadId")
+	procCreateMutexW               = kernel32.NewProc("CreateMutexW")
+	procGetSystemDirectoryW        = kernel32.NewProc("GetSystemDirectoryW")
+	procOpenProcess                = kernel32.NewProc("OpenProcess")
+	procCloseHandle                = kernel32.NewProc("CloseHandle")
+	procQueryFullProcessImageNameW = kernel32.NewProc("QueryFullProcessImageNameW")
+	procGlobalFree                 = kernel32.NewProc("GlobalFree")
+	procLoadLibraryExW             = kernel32.NewProc("LoadLibraryExW")
+	procGetProcAddress             = kernel32.NewProc("GetProcAddress")
 
-	procGetModuleHandleW    = kernel32.NewProc("GetModuleHandleW")
-	procGetCurrentThreadId  = kernel32.NewProc("GetCurrentThreadId")
-	procCreateMutexW        = kernel32.NewProc("CreateMutexW")
-	procGetSystemDirectoryW = kernel32.NewProc("GetSystemDirectoryW")
+	procRegisterClassExW         = user32.NewProc("RegisterClassExW")
+	procCreateWindowExW          = user32.NewProc("CreateWindowExW")
+	procDefWindowProcW           = user32.NewProc("DefWindowProcW")
+	procDestroyWindow            = user32.NewProc("DestroyWindow")
+	procGetMessageW              = user32.NewProc("GetMessageW")
+	procTranslateMessage         = user32.NewProc("TranslateMessage")
+	procDispatchMessageW         = user32.NewProc("DispatchMessageW")
+	procPostQuitMessage          = user32.NewProc("PostQuitMessage")
+	procPostMessageW             = user32.NewProc("PostMessageW")
+	procSendMessageTimeoutW      = user32.NewProc("SendMessageTimeoutW")
+	procRegisterWindowMessageW   = user32.NewProc("RegisterWindowMessageW")
+	procCreatePopupMenu          = user32.NewProc("CreatePopupMenu")
+	procAppendMenuW              = user32.NewProc("AppendMenuW")
+	procSetMenuItemInfoW         = user32.NewProc("SetMenuItemInfoW")
+	procSetMenuDefaultItem       = user32.NewProc("SetMenuDefaultItem")
+	procTrackPopupMenu           = user32.NewProc("TrackPopupMenu")
+	procDestroyMenu              = user32.NewProc("DestroyMenu")
+	procSetForegroundWindow      = user32.NewProc("SetForegroundWindow")
+	procAllowSetForegroundWindow = user32.NewProc("AllowSetForegroundWindow")
+	procGetCursorPos             = user32.NewProc("GetCursorPos")
+	procRegisterHotKey           = user32.NewProc("RegisterHotKey")
+	procUnregisterHotKey         = user32.NewProc("UnregisterHotKey")
+	procSetTimer                 = user32.NewProc("SetTimer")
+	procKillTimer                = user32.NewProc("KillTimer")
+	procMessageBoxW              = user32.NewProc("MessageBoxW")
+	procDestroyIcon              = user32.NewProc("DestroyIcon")
+	procCreateIconIndirect       = user32.NewProc("CreateIconIndirect")
+	procGetSystemMetrics         = user32.NewProc("GetSystemMetrics")
+	procGetDpiForSystem          = user32.NewProc("GetDpiForSystem")
+	procGetDoubleClickTime       = user32.NewProc("GetDoubleClickTime")
+	procFindWindowW              = user32.NewProc("FindWindowW")
+	procEnumWindows              = user32.NewProc("EnumWindows")
+	procGetWindowTextW           = user32.NewProc("GetWindowTextW")
+	procGetClassNameW            = user32.NewProc("GetClassNameW")
+	procIsWindowVisible          = user32.NewProc("IsWindowVisible")
+	procIsIconic                 = user32.NewProc("IsIconic")
+	procShowWindow               = user32.NewProc("ShowWindow")
+
+	procCreateDIBSection = gdi32.NewProc("CreateDIBSection")
+	procCreateBitmap     = gdi32.NewProc("CreateBitmap")
+	procDeleteObject     = gdi32.NewProc("DeleteObject")
 
 	procShellNotifyIconW = shell32.NewProc("Shell_NotifyIconW")
 	procShellExecuteW    = shell32.NewProc("ShellExecuteW")
 
-	procInternetSetOptionW = wininet.NewProc("InternetSetOptionW")
+	procCoInitializeEx = ole32.NewProc("CoInitializeEx")
+	procRtlGetVersion  = ntdll.NewProc("RtlGetVersion")
+
+	procInternetSetOptionW   = wininet.NewProc("InternetSetOptionW")
+	procInternetQueryOptionW = wininet.NewProc("InternetQueryOptionW")
+
+	procRasEnumEntriesW = rasapi32.NewProc("RasEnumEntriesW")
+
+	procGetAdaptersAddresses = iphlpapi.NewProc("GetAdaptersAddresses")
+	procGetIpNetTable        = iphlpapi.NewProc("GetIpNetTable")
+	procGetExtendedTcpTable  = iphlpapi.NewProc("GetExtendedTcpTable")
+	procSendARP              = iphlpapi.NewProc("SendARP")
+
+	procWlanOpenHandle     = wlanapi.NewProc("WlanOpenHandle")
+	procWlanCloseHandle    = wlanapi.NewProc("WlanCloseHandle")
+	procWlanEnumInterfaces = wlanapi.NewProc("WlanEnumInterfaces")
+	procWlanQueryInterface = wlanapi.NewProc("WlanQueryInterface")
+	procWlanFreeMemory     = wlanapi.NewProc("WlanFreeMemory")
 
 	procRegOpenKeyExW    = advapi32.NewProc("RegOpenKeyExW")
 	procRegCreateKeyExW  = advapi32.NewProc("RegCreateKeyExW")
@@ -66,26 +106,29 @@ var (
 	procRegSetValueExW   = advapi32.NewProc("RegSetValueExW")
 	procRegDeleteValueW  = advapi32.NewProc("RegDeleteValueW")
 	procRegCloseKey      = advapi32.NewProc("RegCloseKey")
+	procRegEnumKeyExW    = advapi32.NewProc("RegEnumKeyExW")
 )
 
 const (
-	wmNull          = 0x0000
-	wmDestroy       = 0x0002
-	wmClose         = 0x0010
-	wmSettingChange = 0x001A
-	wmContextMenu   = 0x007B
-	wmCommand       = 0x0111
-	wmTimer         = 0x0113
-	wmMouseMove     = 0x0200
-	wmLButtonUp     = 0x0202
-	wmLButtonDblClk = 0x0203
-	wmRButtonUp     = 0x0205
-	wmHotkey        = 0x0312
-	wmUser          = 0x0400
-	wmApp           = 0x8000
+	wmNull            = 0x0000
+	wmDestroy         = 0x0002
+	wmClose           = 0x0010
+	wmQueryEndSession = 0x0011
+	wmEndSession      = 0x0016
+	wmSettingChange   = 0x001A
+	wmDisplayChange   = 0x007E
+	wmCopyData        = 0x004A
+	wmContextMenu     = 0x007B
+	wmTimer           = 0x0113
+	wmLButtonDblClk   = 0x0203
+	wmHotkey          = 0x0312
+	wmDpiChanged      = 0x02E0
+	wmUser            = 0x0400
+	wmApp             = 0x8000
 
-	wmTrayCallback = wmApp + 1 // 托盘图标回调消息
-	wmRunOnUI      = wmApp + 2 // 让 UI 线程执行排队的函数
+	wmTrayCallback = wmApp + 1
+	wmRunOnUi      = wmApp + 2
+	wmActivate     = wmApp + 3
 
 	ninSelect    = wmUser + 0
 	ninKeySelect = wmUser + 1
@@ -95,203 +138,271 @@ const (
 	nimDelete     = 0x2
 	nimSetVersion = 0x4
 
+	notifyIconVersion4 = 4
+
 	nifMessage = 0x01
 	nifIcon    = 0x02
 	nifTip     = 0x04
 	nifInfo    = 0x10
 	nifShowTip = 0x80
 
-	niifNone             = 0x00
 	niifInfo             = 0x01
 	niifWarning          = 0x02
 	niifError            = 0x03
-	niifNoSound          = 0x10
+	niifUser             = 0x04
+	niifLargeIcon        = 0x20
 	niifRespectQuietTime = 0x80
 
 	mfString    = 0x0000
 	mfGrayed    = 0x0001
 	mfChecked   = 0x0008
 	mfSeparator = 0x0800
-	mfByCommand = 0x0000
+	mftRadio    = 0x0200
 
-	tpmLeftAlign   = 0x0000
+	miimBitmap = 0x0080
+	miimFType  = 0x0100
+
 	tpmRightButton = 0x0002
 	tpmBottomAlign = 0x0020
 	tpmNoNotify    = 0x0080
 	tpmReturnCmd   = 0x0100
 
-	modAlt      = 0x0001
-	modControl  = 0x0002
-	modShift    = 0x0004
-	modWin      = 0x0008
 	modNoRepeat = 0x4000
 
-	imageIcon      = 1
-	lrDefaultColor = 0x0000
-	lrLoadFromFile = 0x0010
-	lrDefaultSize  = 0x0040
+	smCxIcon      = 11
+	smCxSmIcon    = 49
+	smCxMenuCheck = 71
 
-	smCxSmIcon = 49
-	smCySmIcon = 50
-
-	mbOK              = 0x00000000
+	mbOk              = 0x00000000
 	mbIconError       = 0x00000010
 	mbIconWarning     = 0x00000030
 	mbIconInformation = 0x00000040
 	mbSetForeground   = 0x00010000
 	mbTopmost         = 0x00040000
 
+	swRestore = 9
+
 	hwndBroadcast          = 0xFFFF
 	smtoAbortIfHung        = 0x0002
 	smtoNoTimeoutIfNotHung = 0x0008
 
-	wsOverlapped = 0x00000000
-	cwUseDefault = 0x80000000
+	errorSuccess            = 0
+	errorFileNotFound       = 2
+	errorAccessDenied       = 5
+	errorMoreData           = 234
+	errorAlreadyExists      = 183
+	errorBufferTooSmall     = 603
+	errorInsufficientBuffer = 122
 
-	errorSuccess       = 0
-	errorFileNotFound  = 2
-	errorMoreData      = 234
-	errorAlreadyExists = 183
+	hkeyCurrentUser  = 0x80000001
+	hkeyLocalMachine = 0x80000002
+	keyRead          = 0x20019
+	keyWrite         = 0x20006
 
-	hkeyCurrentUser = 0x80000001
-	keyQueryValue   = 0x0001
-	keySetValue     = 0x0002
-	keyRead         = 0x20019
-	keyWrite        = 0x20006
-
-	regNone     = 0
 	regSz       = 1
 	regExpandSz = 2
 	regDword    = 4
 
-	internetOptionRefresh              = 37
-	internetOptionSettingsChanged      = 39
-	internetOptionProxySettingsChanged = 95
+	processQueryLimitedInformation = 0x1000
+
+	loadLibrarySearchSystem32 = 0x00000800
+
+	coinitApartmentThreaded = 0x2
+	coinitDisableOle1Dde    = 0x4
 )
 
 type wndClassExW struct {
-	cbSize        uint32
-	style         uint32
-	lpfnWndProc   uintptr
-	cbClsExtra    int32
-	cbWndExtra    int32
-	hInstance     uintptr
-	hIcon         uintptr
-	hCursor       uintptr
-	hbrBackground uintptr
-	lpszMenuName  *uint16
-	lpszClassName *uint16
-	hIconSm       uintptr
+	size        uint32
+	style       uint32
+	windowProc  uintptr
+	classExtra  int32
+	windowExtra int32
+	instance    uintptr
+	icon        uintptr
+	cursor      uintptr
+	background  uintptr
+	menuName    *uint16
+	className   *uint16
+	smallIcon   uintptr
 }
 
 type point struct {
 	x, y int32
 }
 
-type msgW struct {
-	hwnd    uintptr
+type message struct {
+	window  uintptr
 	message uint32
 	wParam  uintptr
 	lParam  uintptr
 	time    uint32
-	pt      point
+	point   point
 }
 
-// notifyIconDataW 对应 NOTIFYICONDATAW（Vista 及以后版本，976 字节）。
+// notifyIconDataW 对应 NOTIFYICONDATAW（Vista 及以后，976 字节）。timeoutOrVersion 在 NIM_SETVERSION 时是版本号。
 type notifyIconDataW struct {
-	cbSize           uint32
-	hWnd             uintptr
-	uID              uint32
-	uFlags           uint32
-	uCallbackMessage uint32
-	hIcon            uintptr
-	szTip            [128]uint16
-	dwState          uint32
-	dwStateMask      uint32
-	szInfo           [256]uint16
-	uVersion         uint32 // 与 uTimeout 共用
-	szInfoTitle      [64]uint16
-	dwInfoFlags      uint32
+	size             uint32
+	window           uintptr
+	id               uint32
+	flags            uint32
+	callbackMessage  uint32
+	icon             uintptr
+	tip              [128]uint16
+	state            uint32
+	stateMask        uint32
+	info             [256]uint16
+	timeoutOrVersion uint32
+	infoTitle        [64]uint16
+	infoFlags        uint32
 	guidItem         [16]byte
-	hBalloonIcon     uintptr
+	balloonIcon      uintptr
+}
+
+type iconInfo struct {
+	isIcon   int32
+	hotspotX uint32
+	hotspotY uint32
+	mask     uintptr
+	color    uintptr
+}
+
+type bitmapInfoHeader struct {
+	size            uint32
+	width           int32
+	height          int32
+	planes          uint16
+	bitCount        uint16
+	compression     uint32
+	sizeImage       uint32
+	xPelsPerMeter   int32
+	yPelsPerMeter   int32
+	colorsUsed      uint32
+	colorsImportant uint32
+}
+
+type menuItemInfoW struct {
+	size      uint32
+	mask      uint32
+	kind      uint32
+	state     uint32
+	id        uint32
+	subMenu   uintptr
+	checked   uintptr
+	unchecked uintptr
+	itemData  uintptr
+	typeData  *uint16
+	length    uint32
+	bitmap    uintptr
+}
+
+type copyDataStruct struct {
+	data    uintptr
+	size    uint32
+	pointer uintptr
+}
+
+type osVersionInfo struct {
+	size        uint32
+	major       uint32
+	minor       uint32
+	build       uint32
+	platform    uint32
+	servicePack [128]uint16
 }
 
 // ---------- 小工具 ----------
 
-func utf16Ptr(s string) *uint16 {
-	p, err := syscall.UTF16PtrFromString(s)
+func utf16Pointer(text string) *uint16 {
+	pointer, err := syscall.UTF16PtrFromString(text)
 	if err != nil {
-		// 字符串里带 NUL，替换掉再试
-		p, _ = syscall.UTF16PtrFromString(replaceNUL(s))
+		pointer, _ = syscall.UTF16PtrFromString(replaceNul(text))
 	}
-	return p
+	return pointer
 }
 
-func replaceNUL(s string) string {
-	b := []rune(s)
-	for i, r := range b {
-		if r == 0 {
-			b[i] = ' '
+func replaceNul(text string) string {
+	runes := []rune(text)
+	for index, char := range runes {
+		if char == 0 {
+			runes[index] = ' '
 		}
 	}
-	return string(b)
+	return string(runes)
 }
 
-// copyUTF16 把字符串写入定长 UTF-16 数组，超长截断并保证以 NUL 结尾。
-func copyUTF16(dst []uint16, s string) {
-	u := syscall.StringToUTF16(replaceNUL(s))
-	n := len(u)
-	if n > len(dst) {
-		n = len(dst)
-		u[n-1] = 0
+// copyUtf16 把字符串写入定长 UTF-16 数组，超长截断并保证以 NUL 结尾。
+func copyUtf16(destination []uint16, text string) {
+	encoded := syscall.StringToUTF16(replaceNul(text))
+	length := len(encoded)
+	if length > len(destination) {
+		length = len(destination)
+		encoded[length-1] = 0
 	}
-	copy(dst, u[:n])
-	for i := n; i < len(dst); i++ {
-		dst[i] = 0
+	copy(destination, encoded[:length])
+	for index := length; index < len(destination); index++ {
+		destination[index] = 0
 	}
+}
+
+// utf16PointerToString 读取以 NUL 结尾的 UTF-16 字符串。
+func utf16PointerToString(pointer *uint16) string {
+	if pointer == nil {
+		return ""
+	}
+	var runes []uint16
+	for address := unsafe.Pointer(pointer); ; address = unsafe.Add(address, 2) {
+		char := *(*uint16)(address)
+		if char == 0 {
+			break
+		}
+		runes = append(runes, char)
+	}
+	return syscall.UTF16ToString(runes)
 }
 
 func systemDir() string {
-	var buf [260]uint16
-	n, _, _ := procGetSystemDirectoryW.Call(uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
-	if n == 0 || int(n) >= len(buf) {
+	var buffer [260]uint16
+	length, _, _ := procGetSystemDirectoryW.Call(uintptr(unsafe.Pointer(&buffer[0])), uintptr(len(buffer)))
+	if length == 0 || int(length) >= len(buffer) {
 		return `C:\Windows\System32`
 	}
-	return syscall.UTF16ToString(buf[:n])
+	return syscall.UTF16ToString(buffer[:length])
 }
 
 func moduleHandle() uintptr {
-	h, _, _ := procGetModuleHandleW.Call(0)
-	return h
+	handle, _, _ := procGetModuleHandleW.Call(0)
+	return handle
 }
 
-func messageBox(hwnd uintptr, text, title string, flags uint32) {
-	procMessageBoxW.Call(hwnd,
-		uintptr(unsafe.Pointer(utf16Ptr(text))),
-		uintptr(unsafe.Pointer(utf16Ptr(title))),
-		uintptr(flags))
+func currentThreadId() uint32 {
+	id, _, _ := procGetCurrentThreadId.Call()
+	return uint32(id)
 }
 
-// createSingleInstanceMutex 创建命名互斥量；已存在则返回 false。
+func messageBox(window uintptr, text, title string, flags uint32) {
+	procMessageBoxW.Call(window, uintptr(unsafe.Pointer(utf16Pointer(text))), uintptr(unsafe.Pointer(utf16Pointer(title))), uintptr(flags))
+}
+
+// createSingleInstanceMutex 创建命名互斥量；已存在时返回 false。
 func createSingleInstanceMutex(name string) (bool, error) {
-	h, _, e := procCreateMutexW.Call(0, 0, uintptr(unsafe.Pointer(utf16Ptr(name))))
-	if h == 0 {
-		return false, fmt.Errorf("CreateMutex: %v", e)
+	handle, _, err := procCreateMutexW.Call(0, 0, uintptr(unsafe.Pointer(utf16Pointer(name))))
+	if handle == 0 {
+		return false, fmt.Errorf("CreateMutex: %v", err)
 	}
-	if errno, ok := e.(syscall.Errno); ok && errno == errorAlreadyExists {
+	if errno, ok := err.(syscall.Errno); ok && errno == errorAlreadyExists {
 		return false, nil
 	}
 	return true, nil
 }
 
-// shellOpen 用系统默认方式打开文件/目录/URL。
+// shellOpen 用系统默认方式打开文件、目录或网址。
 func shellOpen(target string) error {
-	r, _, _ := procShellExecuteW.Call(0,
-		uintptr(unsafe.Pointer(utf16Ptr("open"))),
-		uintptr(unsafe.Pointer(utf16Ptr(target))),
-		0, 0, 1 /* SW_SHOWNORMAL */)
-	if r <= 32 {
-		return fmt.Errorf("ShellExecute 失败，返回码 %d", r)
+	result, _, _ := procShellExecuteW.Call(0,
+		uintptr(unsafe.Pointer(utf16Pointer("open"))),
+		uintptr(unsafe.Pointer(utf16Pointer(target))),
+		0, 0, 1)
+	if result <= 32 {
+		return fmt.Errorf("无法打开 %s（错误码 %d）", target, result)
 	}
 	return nil
 }
@@ -299,8 +410,31 @@ func shellOpen(target string) error {
 // broadcastSettingChange 通知所有顶层窗口某类设置已变更（例如 "Environment"）。
 func broadcastSettingChange(section string) {
 	procSendMessageTimeoutW.Call(hwndBroadcast, wmSettingChange, 0,
-		uintptr(unsafe.Pointer(utf16Ptr(section))),
+		uintptr(unsafe.Pointer(utf16Pointer(section))),
 		smtoAbortIfHung|smtoNoTimeoutIfNotHung, 2000, 0)
 }
 
-var errNotFound = errors.New("not found")
+// windowsBuild 返回 Windows 的内部版本号，例如 Windows 11 23H2 为 22631。
+func windowsBuild() uint32 {
+	info := osVersionInfo{}
+	info.size = uint32(unsafe.Sizeof(info))
+	if status, _, _ := procRtlGetVersion.Call(uintptr(unsafe.Pointer(&info))); status != 0 {
+		return 0
+	}
+	return info.build
+}
+
+func systemMetric(index int) int {
+	value, _, _ := procGetSystemMetrics.Call(uintptr(index))
+	return int(value)
+}
+
+// systemDpi 返回系统 DPI，拿不到时按 96。
+func systemDpi() int {
+	if procGetDpiForSystem.Find() == nil {
+		if dpi, _, _ := procGetDpiForSystem.Call(); dpi != 0 {
+			return int(dpi)
+		}
+	}
+	return 96
+}
