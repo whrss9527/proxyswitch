@@ -1,4 +1,4 @@
-ProxySwitch.exe
+dist/
 *.exe
 *.log
-assets/preview_*.png
+__pycache__/
