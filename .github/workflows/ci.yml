@@ -1,0 +1,52 @@
+name: ci
+
+# 推送代码和合并请求时运行：Linux 上跑单元测试和设置页的浏览器测试，Windows 上跑包括修改系统设置在内的全部测试。
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  linux:
+    name: 单元测试和设置页测试（Linux）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - name: 静态检查（Linux 和 Windows 两个平台）
+        run: make vet
+      - name: 单元测试
+        run: go test ./...
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 安装 Playwright 和中文字体
+        run: |
+          sudo apt-get update && sudo apt-get install -y fonts-noto-cjk
+          pip install playwright
+          python -m playwright install --with-deps chromium
+      - name: 设置页测试
+        run: python tools/ui_test.py ui-screenshots
+      - name: 上传截图
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-screenshots
+          path: ui-screenshots
+
+  windows:
+    name: 全部测试（Windows）
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - name: go vet
+        run: go vet ./...
+      - name: go test（包括修改系统代理和环境变量的测试，结束后恢复）
+        env:
+          PROXYSWITCH_TEST_REGISTRY: "1"
+        run: go test -v ./...
