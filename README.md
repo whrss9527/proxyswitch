@@ -1,177 +1,217 @@
-# ProxySwitch
+<p align="center"><img src="docs/logo.png" width="96" alt="ProxySwitch"></p>
 
-一个常驻系统托盘的 Windows 小工具，用来一键开关、切换代理：
+<h1 align="center">ProxySwitch</h1>
 
-- **左键**托盘图标：开 / 关当前代理（图标绿色 = 已开启，灰色 = 已关闭）
-- **右键**托盘图标：在多套代理配置之间切换、打开设置页面、开机自启、退出
-- **图形化设置页面**：新建 / 编辑 / 排序配置、按键录入快捷键、勾选生效范围、测试代理能否连通，不用碰配置文件
-- **全局快捷键**（默认 `Ctrl+Alt+P`）：不用找托盘也能一键开关
-- 支持 **Windows 系统代理**（含 PAC 自动配置脚本），可选同时设置 **用户环境变量**（`HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`）、**git** 全局代理、**npm / pnpm** 代理
-- 别的程序（比如 Clash）改了系统代理，托盘图标也会在几秒内自动跟上
-- 单文件 exe，纯 Go 编写，不依赖任何第三方库，不需要管理员权限
+<p align="center">常驻任务栏托盘的 Windows 代理开关：单击开关，右键切换，按所在网络自动切换。</p>
 
-## 安装与使用
+![设置界面](docs/screenshot-light.png)
 
-1. 从 [Releases](https://github.com/whrss9527/proxyswitch/releases) 下载 `ProxySwitch.exe`，放到任意目录双击运行，任务栏右下角会出现托盘图标。
-   - 首次运行会生成默认配置，并自动在浏览器里打开**设置页面**。
-   - 如果 Windows SmartScreen 拦截（未签名的下载程序常见），点「更多信息 → 仍要运行」即可。
-2. 在设置页面里点「编辑」把示例改成你的代理地址（本机代理软件一般是 `127.0.0.1` + 它的端口，可以点「测试连接」确认），然后点右下角**保存并生效**。
-3. 左键图标或按 `Ctrl+Alt+P` 开关代理；右键选择某套配置会直接切换并开启。
+## 功能
 
-以后想改配置：右键托盘图标 → **设置…**，页面会在浏览器里打开（只监听本机 127.0.0.1，不需要联网）。
-想开机自动运行：设置页面里打开 **开机自启**，或右键菜单勾选（写入当前用户的启动项，无需管理员）。
+- **一键开关**：单击托盘图标开关代理，或按全局快捷键（默认 `Ctrl+Alt+P`）。托盘图标就是一个开关，颜色是当前配置的颜色；代理服务器连不上时滑块变红。
+- **多套配置**：右键托盘图标切换配置，也可以用 `Ctrl+Alt+数字` 直接切到第几个配置。
+- **自动检测本机代理**：找出正在运行的代理软件监听的端口，确认它确实能转发连接后一键添加。
+- **测速**：经代理实际访问一次测速地址，显示延迟。
+- **按网络自动切换**：连上公司 Wi-Fi 自动用公司代理，回家自动关闭；也可以按 DNS 后缀或网关判断，有线网络同样适用。
+- **健康检查**：代理软件没启动或崩溃时提醒你；也可以设为自动关闭代理，恢复后自动重新开启，不会因为代理挂了而上不了网。
+- **生效范围**：Windows 系统代理（支持 PAC 脚本，同时设置拨号和 VPN 连接），可选用户环境变量、git、npm / pnpm。
+- **关闭时恢复原设置**：公司电脑本来就配置了代理时，关闭后恢复成原来的样子，而不是直接断开。
+- **好看好用的设置界面**：独立窗口，跟随系统的深浅色和强调色，改动立即生效，不需要懂配置文件。
+- **命令行**：`ProxySwitch.exe on / off / use 配置名`，托盘程序在运行时命令交给它执行，图标立即更新。
+- 单个 exe，纯 Go 编写，没有第三方依赖，不需要管理员权限，不收集任何数据。提供 x64 和 ARM64 两个版本。
 
-### 设置页面
+## 安装
 
-![设置页面](docs/settings.png)
+从 [Releases](https://github.com/whrss9527/proxyswitch/releases) 下载：
 
-- **代理配置**：卡片列表，支持新建、编辑、复制、排序、删除；「使用」立刻切换到该配置并开启。
-- **新建 / 编辑**：手动指定服务器（地址 + 端口）或 PAC 脚本地址，勾选生效范围（系统代理 / 环境变量 / git / npm），「测试连接」检查端口是否可达，高级选项里可改例外列表和 NO_PROXY。
-- **通用设置**：点击输入框按下组合键即可录入快捷键；通知、退出时关闭代理、开机自启都是开关；通知默认 3 秒后自动关闭，时长可改。
-- 页面改动要点**保存并生效**才会写入配置文件并让托盘程序重新加载；开机自启是立即生效的。
-- 页面走的是本机随机端口 + 一次性令牌，只接受来自本机的请求；程序退出后链接即失效。
+| 文件 | 适用 |
+| --- | --- |
+| `ProxySwitch.exe` | 绝大多数电脑（Intel / AMD 处理器） |
+| `ProxySwitch-arm64.exe` | 骁龙等 ARM 处理器的 Windows 电脑 |
 
-### 文件位置
+放到任意文件夹后双击运行，任务栏右下角会出现托盘图标。支持 Windows 10 和 Windows 11。
 
-| 模式 | 目录 | 说明 |
-| --- | --- | --- |
-| 标准模式（默认） | `%APPDATA%\ProxySwitch\` | 配置 `config.jsonc`、状态 `state.json`、日志 `proxyswitch.log` |
-| 便携模式 | exe 所在目录 | 只要 exe 旁边存在 `config.jsonc`，所有文件都放在 exe 目录 |
+没有数字签名的程序第一次运行时，Windows 可能提示「Windows 已保护你的电脑」，点「更多信息」→「仍要运行」即可。
 
-右键菜单里的 **打开配置目录** 可以直接跳到这个目录。
+## 使用
 
-## 配置文件说明
+### 第一次使用
 
-日常用设置页面就够了；下面是给想手改的人看的。配置文件是 JSON（允许 `//` 注释和末尾逗号），右键菜单「编辑配置文件（高级）」可以直接打开。生成的默认配置如下：
+第一次运行会自动打开设置窗口，选一种方式添加代理：
 
-```jsonc
-{
-  // 全局快捷键：一键开/关当前代理。支持 Ctrl / Alt / Shift / Win 组合，
-  // 主键可以是字母、数字、F1~F12、Space、Enter 等。留空表示不注册快捷键。
-  "hotkey": "Ctrl+Alt+P",
+- **自动检测**：已经打开代理软件时选这个，它会列出本机可以使用的代理端口，点「添加」即可。
+- **手动填写**：填代理服务器的地址和端口。本机运行的代理软件一般是 `127.0.0.1` 加它设置里的「HTTP 端口」或「混合端口」。
+- **PAC 脚本**：公司或学校提供了自动配置脚本地址时选这个。
 
-  // 切换后是否弹出系统通知
-  "notify": true,
+保存时默认勾选「保存后立即使用」，保存完代理就开启了。
 
-  // 通知几秒后自动关闭（0 表示跟随系统默认，不主动关闭）
-  "notify_seconds": 3,
+### 日常使用
 
-  // 退出程序时是否顺便关闭代理
-  "disable_on_exit": false,
+- **单击**托盘图标：开关代理。
+- **右键**托盘图标：切换配置、测试连接、按网络自动切换、打开设置、开机自动启动、退出。
+- 再次双击 `ProxySwitch.exe` 会打开设置窗口，不会重复启动。
 
-  // 「编辑配置」使用的编辑器，留空用记事本；也可以填 "code"（VS Code）等
-  "editor": "",
+单击、双击托盘图标分别做什么可以在「设置 → 常规」里修改。
 
-  // 代理配置列表，托盘菜单按此顺序展示，点击即切换到该配置并开启。
-  "profiles": [
-    {
-      "name": "本地 Clash",
-      // 代理服务器，形式为 host:port；也可以按协议分别指定：
-      // "server": "http=127.0.0.1:7890;https=127.0.0.1:7890;socks=127.0.0.1:7891"
-      "server": "127.0.0.1:7890",
-      // 不走代理的地址（系统代理的“例外”列表，分号分隔），留空用默认值
-      "bypass": "localhost;127.*;10.*;172.16.*;...;192.168.*;<local>",
-      // 生效范围：system = 系统代理；env = 用户环境变量 HTTP_PROXY/HTTPS_PROXY/NO_PROXY；
-      //          git = git 全局代理；npm = ~/.npmrc（pnpm 也读它）
-      "apply_to": ["system"]
-    },
-    {
-      "name": "公司 PAC（示例）",
-      // 自动配置脚本地址。填了 pac 后系统代理走 PAC 模式；
-      // env / git / npm 不支持 PAC，若同时勾选它们需要再填 server。
-      "pac": "http://proxy.example.com/proxy.pac",
-      "apply_to": ["system"]
-    },
-    {
-      "name": "抓包 8080",
-      "server": "127.0.0.1:8080",
-      "bypass": "<local>",
-      "apply_to": ["system"]
-    }
-  ]
-}
+### 托盘图标
+
+| 图标 | 含义 |
+| --- | --- |
+| 灰色，滑块在左 | 代理已关闭 |
+| 配置的颜色，滑块在右 | 代理已开启，颜色对应正在使用的配置 |
+| 配置的颜色，滑块变成红点 | 代理已开启，但连不上代理服务器 |
+| 橙色，滑块在右 | 系统代理是其他程序设置的，单击会关闭它 |
+| 红色 | 配置文件有错误 |
+
+### 按网络自动切换
+
+在「设置 → 自动切换」里打开，然后添加规则。「当前网络」里列出了现在连接的 Wi-Fi 名称、DNS 后缀和网关，点旁边的按钮就能按当前网络添加规则。
+
+- 规则从上到下匹配，第一条匹配的生效；都不匹配时按「其他网络」的设置处理。
+- 只在网络变化时切换。你在某个网络里手动切换后，它不会再改回去，直到你换了网络。
+- Windows 11 24H2 起读取 Wi-Fi 名称需要打开「位置」权限。没打开时 ProxySwitch 会根据网关从系统记录的网络列表里找出 Wi-Fi 名称；也可以改用 DNS 后缀或网关作为条件，这两种不需要权限。
+
+![按网络自动切换](docs/screenshot-network.png)
+
+### 快捷键
+
+- 开关代理：默认 `Ctrl+Alt+P`，在「设置 → 常规」里点一下快捷键框，按下新的组合即可修改。
+- 按数字切换配置：选择修饰键后，例如 `Ctrl+Alt+1` 切到第 1 个配置，再按一次关闭代理。
+
+快捷键被其他程序占用时会有提示，换一个组合即可。
+
+### 命令行
+
+```
+ProxySwitch.exe on              开启代理（上次使用的配置）
+ProxySwitch.exe off             关闭代理
+ProxySwitch.exe toggle          开 / 关切换
+ProxySwitch.exe use 公司代理     切换到指定配置并开启
+ProxySwitch.exe status          查看状态（退出码 0 表示已开启，1 表示已关闭）
+ProxySwitch.exe settings        打开设置
 ```
 
-每套 `profile` 支持的字段：
+托盘程序在运行时，命令交给它执行；没有运行时直接修改设置后退出。可以用在脚本、计划任务或桌面快捷方式里。
+
+## 深色模式
+
+设置窗口和托盘菜单都跟随系统的深浅色，也可以在「设置 → 常规 → 外观」里固定为浅色或深色。
+
+![深色模式](docs/screenshot-dark.png)
+
+## 配置文件
+
+一般不需要手改，设置窗口里的修改会立即保存。想手改时在「设置 → 常规 → 配置文件」里点「编辑」，保存后几秒内自动生效；文件有错误时会提示，并继续使用修改前的配置。
+
+| 模式 | 位置 |
+| --- | --- |
+| 安装模式（默认） | `%APPDATA%\ProxySwitch\`：配置 `config.jsonc`、运行状态 `state.json`、日志 `proxyswitch.log` |
+| 便携模式 | exe 所在的文件夹。只要 exe 旁边有 `config.jsonc`，所有文件都放在这里，适合放在 U 盘里用 |
+
+配置文件是 JSON，允许 `//` 注释和末尾多余的逗号。第一次运行生成的文件里每一项都有注释说明。
+
+<details>
+<summary>全部字段</summary>
+
+| 字段 | 取值 | 说明 |
+| --- | --- | --- |
+| `hotkey` | 例如 `Ctrl+Alt+P` | 开关代理的快捷键，留空不注册 |
+| `profile_hotkeys` | 例如 `Ctrl+Alt` | 按数字切换配置的修饰键，留空不启用 |
+| `notify_level` | `all` / `errors` / `none` | 显示全部通知 / 只显示问题 / 不显示 |
+| `notify_seconds` | 0~60 | 通知几秒后自动消失，0 由系统决定 |
+| `startup_action` | `keep` / `on` / `off` | 启动时保持状态 / 自动开启 / 自动关闭 |
+| `off_mode` | `direct` / `restore` | 关闭代理时直接连接 / 恢复开启前的系统代理设置 |
+| `disable_on_exit` | `true` / `false` | 退出程序（包括关机、注销）时关闭代理 |
+| `health_check` | `notify` / `auto_off` / `off` | 代理服务器连不上时提醒 / 自动关闭并在恢复后重新开启 / 不检查 |
+| `tray_click` | `toggle` / `settings` / `menu` | 单击托盘图标的动作 |
+| `tray_double_click` | `none` / `settings` / `toggle` | 双击托盘图标的动作 |
+| `theme` | `system` / `light` / `dark` | 设置窗口的颜色 |
+| `settings_window` | `app` / `browser` | 设置界面用独立窗口还是默认浏览器打开 |
+| `test_url` | 网址 | 测速时经代理访问的地址 |
+| `editor` | 程序名 | 编辑配置文件用的编辑器，留空用记事本 |
+| `auto_switch` | 见下 | 按网络自动切换 |
+| `profiles` | 见下 | 代理配置，托盘菜单按这个顺序显示 |
+
+`profiles` 里每个配置：
 
 | 字段 | 说明 |
 | --- | --- |
-| `name` | 菜单里显示的名字，必填且不能重复 |
-| `server` | 代理地址。`host:port`、`http://host:port`、`socks5://host:port`，或 WinINET 的分协议写法 `http=…;https=…;socks=…` 都可以 |
-| `pac` | PAC 脚本地址。填了就以 PAC 模式开启系统代理（可与 `server` 同时填，两者都会写入系统设置） |
-| `bypass` | 系统代理的例外列表，分号分隔，`<local>` 表示所有不带点的本机名；留空用默认的内网地址列表 |
-| `no_proxy` | 写入环境变量 `NO_PROXY` / npm `noproxy` 的值，逗号分隔，默认 `localhost,127.0.0.1,::1` |
-| `apply_to` | 生效范围数组，可选 `system`、`env`、`git`、`npm`，默认 `["system"]` |
+| `name` | 名字，不能重复 |
+| `color` | 颜色 `#rrggbb`，托盘图标和设置界面用它区分配置 |
+| `server` | 代理地址：`127.0.0.1:7890`、`socks5://127.0.0.1:1080`，或按协议分别指定 `http=主机:端口;https=主机:端口;socks=主机:端口` |
+| `pac` | PAC 脚本地址，填了就以 PAC 方式开启系统代理 |
+| `bypass` | 系统代理的例外，分号分隔，`*` 是通配符，`<local>` 表示不含点的内网名称；留空时包含本机和局域网地址 |
+| `no_proxy` | 环境变量和 npm 的 NO_PROXY，逗号分隔 |
+| `apply_to` | 生效范围：`system` 系统代理、`env` 环境变量、`git`、`npm`。环境变量、git、npm 不能使用 PAC，npm 不支持 SOCKS5 |
 
-关于各个生效范围：
+`auto_switch`：
 
-- `system`：就是「设置 → 网络和 Internet → 代理」里的那个，浏览器和绝大多数桌面软件都走它。改完会通知 WinINET 立即刷新。
-- `env`：写入当前用户的环境变量 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`（`socks=` 写法会转成 `socks5://`），curl、Go、cargo、docker CLI、pip 等命令行工具都认。**已经打开的终端不会感知变化，需要重新开一个**（Windows Terminal 需要新开窗口而不是新标签）。关闭时会删除这三个变量。
-- `git`：执行 `git config --global http.proxy / https.proxy`，关闭时 `--unset-all`。需要 `git` 在 PATH 里。
-- `npm`：直接改用户目录下的 `.npmrc` 里的 `proxy` / `https-proxy` / `noproxy` 三行，其它内容原样保留；pnpm 也读这个文件。
+| 字段 | 说明 |
+| --- | --- |
+| `enabled` | 是否启用 |
+| `rules` | 规则列表，每条 `{"match": "ssid" / "dns_suffix" / "gateway", "value": "…", "action": "use" / "off", "profile": "配置名"}` |
+| `default_action` | 没有规则匹配时：`keep` 保持不变、`off` 关闭代理、`use` 使用 `default_profile` |
 
-## 命令行用法
+</details>
 
-exe 也可以当命令行工具用（不会启动托盘，托盘实例若在运行会在几秒内自动同步状态），方便写进脚本或做成快捷方式：
-
-```
-ProxySwitch.exe on            开启当前（最近选择的）配置
-ProxySwitch.exe off           关闭代理
-ProxySwitch.exe toggle        开 / 关切换
-ProxySwitch.exe use 本地 Clash   切换到某套配置并开启
-ProxySwitch.exe status        弹窗显示当前状态；退出码 0 = 开启，1 = 关闭
-ProxySwitch.exe settings      打开设置页面（托盘程序需在运行）
-```
+从 1.x 升级时，原来的配置文件可以直接使用。
 
 ## 常见问题
 
-- **设置页面打不开**：确认托盘程序在运行；浏览器没自动弹出的话，托盘通知里会给出地址，复制到浏览器打开即可。页面地址每次启动都不一样，不要收藏。
-- **快捷键没反应**：多半是被别的程序占用了，启动时会弹出提示。在设置页面里换一个组合保存即可。
-- **通知没弹出来**：Windows 的「专注助手 / 勿扰模式」会拦掉托盘通知；也可以把 `notify` 设为 `false` 关掉。通知默认 3 秒自动关闭（出错的通知会多留几秒），`notify_seconds` 可调，填 0 则由系统决定。
-- **系统设置里的开关看起来没变**：设置页面不会实时刷新，关掉重开即可看到实际状态。
-- **公司电脑改了没效果**：如果管理员通过组策略把代理设置锁在了机器级别（`ProxySettingsPerUser=0`），当前用户的设置会被忽略，这个工具也改不了。
-- **Clash / v2rayN 也在管系统代理**：两边互相覆盖是正常的。建议在那些软件里关掉「系统代理」功能，只用 ProxySwitch 来开关。
-- **出问题了想看原因**：右键 → 关于，里面有日志文件位置；日志超过 1MB 会自动轮转。
-- **杀毒软件误报**：Go 编译的小工具偶尔会被误报，可以自己从源码编译（见下）。
+**设置窗口是在浏览器里打开的？**
+设置界面优先用 Edge 或 Chrome 的应用模式打开成独立窗口（Windows 10 / 11 都自带 Edge），使用单独的数据目录，不影响你自己的浏览器。都没有时用默认浏览器打开。
 
-## 从源码编译
+**改了代理，某个程序还是没走代理？**
+大多数程序跟随系统代理，但也有程序只认自己的设置。命令行工具看环境变量：已经打开的终端不会感知变化，需要新开一个。
 
-需要 Go 1.21 或更新版本，纯 Go 实现，没有任何第三方依赖，也不需要 CGO / gcc。
+**公司电脑上改了没效果？**
+管理员可能通过组策略把代理设置锁定为按计算机统一设置，这时当前用户的设置不会生效。ProxySwitch 写入后会读回确认，出现这种情况会提示，「设置 → 诊断」里也能看到。
 
-```bat
-:: Windows
-build.cmd
-```
+**连着 VPN 时代理不生效？**
+Windows 的拨号和 VPN 连接各有一份代理设置。ProxySwitch 开关代理时会同时设置它们，新建 VPN 连接后重新开关一次即可。
+
+**其他代理软件也在管系统代理？**
+两边会互相覆盖。建议在那些软件里关闭「自动设置系统代理」，只用 ProxySwitch 开关。ProxySwitch 发现系统代理被其他程序改掉时，托盘图标会变成橙色。
+
+**上不了网，也不知道是哪里的代理设置在起作用？**
+打开「设置 → 诊断」，可以看到系统代理、环境变量、git、npm 的当前设置；「清除所有代理设置」会把它们全部恢复为直接连接。
+
+**没有弹出通知？**
+Windows 的「专注助手 / 免打扰」会拦截通知。通知的显示范围和时长在「设置 → 常规 → 通知」里修改。
+
+**被杀毒软件误报？**
+Go 编写的小工具偶尔会被误报。可以核对 Release 附带的 SHA256SUMS.txt，或者自己从源码编译。
+
+## 开发
+
+需要 Go 1.22 或更新版本，不需要 CGO。在 Linux / macOS 上交叉编译：
 
 ```bash
-# Linux / macOS 交叉编译
-./build.sh
+make              # 编译 dist/ProxySwitch.exe 和 dist/ProxySwitch-arm64.exe
+make test         # 静态检查（含 Windows 平台）和单元测试
+make dev          # 在本机预览设置界面，系统设置用内存模拟，带假的代理和测速地址
+make ui-test      # 设置界面的浏览器自动化测试（需要 Python Playwright）
 ```
 
-也就是一句 `GOOS=windows GOARCH=amd64 go build -ldflags="-H windowsgui -s -w" -o ProxySwitch.exe .`。
-仓库里的 `resource_windows_amd64.syso` 是 exe 的图标、版本信息和清单（DPI 感知、不请求管理员），
-用 [goversioninfo](https://github.com/josephspurrier/goversioninfo) 从 `versioninfo.json` + `app.manifest` + `assets/app.ico` 生成；
-托盘图标由 `tools/make_icons.py` 生成。
+在 Windows 上编译：
 
-运行测试：`go test ./...`（纯逻辑部分在任何平台都能跑；`win_test.go` 里的注册表往返测试需要在 Windows 上设置 `PROXYSWITCH_TEST_REGISTRY=1` 后运行）。
-发布：推送 `v*` 标签后，GitHub Actions（`.github/workflows/release.yml`）会在 Windows 上跑完测试、交叉编译 exe，并把 exe、源码包和 `SHA256SUMS.txt` 传到对应的 Release。
-设置页面可以在任何平台预览和调试：`go run . --dev-settings` 会打印一个本地地址（用内存里的假后端，不碰系统代理）；`tools/ui_test.py` 是基于 Playwright 的页面自动化测试。
+```bat
+go build -trimpath -ldflags="-H windowsgui -s -w" -o ProxySwitch.exe .
+```
 
-## 代码结构
+代码结构：
 
 | 文件 | 内容 |
 | --- | --- |
-| `main_windows.go` | 入口：单实例检查、命令行模式、日志 |
-| `app_windows.go` | 核心逻辑：状态判断、开/关/切换、菜单、通知、配置重载、设置页面后端 |
-| `settings.go` / `web/settings.html` | 图形化设置页面：本机 HTTP 服务 + 单文件网页（内联 CSS/JS，离线可用） |
-| `settings_dev.go` | `--dev-settings` 开发模式的假后端 |
-| `tray_windows.go` | 托盘图标、隐藏窗口、消息循环、右键菜单、全局快捷键、气泡通知 |
-| `win32_windows.go` / `registry_windows.go` | Win32 API 与注册表的最小封装 |
-| `sysproxy_windows.go` | Windows 系统代理读写 + WinINET 刷新 |
-| `envproxy_windows.go` / `devtools_windows.go` / `npmrc.go` | 环境变量、git、npm 三种生效范围 |
-| `autostart_windows.go` | 开机自启（HKCU Run 键） |
-| `config.go` / `paths.go` / `hotkey.go` / `proxyurl.go` | 配置文件（JSONC）、路径、快捷键解析、代理地址格式转换 |
+| `engine.go` | 核心逻辑：状态判断、开关与切换、配置变更后重新应用、健康检查、按网络自动切换，与平台无关，在 Linux 上测试 |
+| `config.go` `jsonc.go` | 配置文件的解析、校验和保存 |
+| `probe.go` | 本机代理检测和测速 |
+| `settings.go` `web/` | 设置界面的本地服务和页面 |
+| `*_windows.go` | Windows 实现：系统代理（WinINET）、托盘、菜单、通知、快捷键、网络信息、监听端口 |
+| `settings_dev.go` `dev_fakes.go` `memorysystem.go` | 开发模式和测试用的内存实现、假代理 |
 
-## License
+推送代码时 GitHub Actions 会在 Linux 上跑单元测试和界面测试，在 Windows 上跑包括读写系统代理在内的全部测试；推送 `v*` 标签会自动编译并发布 Release。
 
-MIT
+## 许可证
+
+[MIT](LICENSE)
