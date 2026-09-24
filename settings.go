@@ -425,18 +425,17 @@ func (settings *SettingsServer) handleTest(writer http.ResponseWriter, request *
 		}
 	}
 	server, pac := strings.TrimSpace(body.Server), strings.TrimSpace(body.Pac)
-	switch {
-	case server != "":
+	if server == "" && pac == "" {
+		writeError(writer, http.StatusBadRequest, "没有可测试的地址")
+		return
+	}
+	if server != "" {
 		if err := validateServer(server); err != nil {
 			writeJson(writer, http.StatusOK, TestResult{Message: "地址格式不对：" + err.Error()})
 			return
 		}
-		writeJson(writer, http.StatusOK, testProxyServer(server, testUrl, proxyTestTimeout))
-	case pac != "":
-		writeJson(writer, http.StatusOK, testPacUrl(pac, proxyTestTimeout))
-	default:
-		writeError(writer, http.StatusBadRequest, "没有可测试的地址")
 	}
+	writeJson(writer, http.StatusOK, testProfileConnection(server, pac, testUrl, proxyTestTimeout))
 }
 
 func (settings *SettingsServer) handleDetect(writer http.ResponseWriter, request *http.Request) {

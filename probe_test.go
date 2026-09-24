@@ -3,6 +3,7 @@ package main
 import (
 	"net"
 	"net/http"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -106,7 +107,8 @@ func TestTestProxyServer(t *testing.T) {
 	}
 }
 
-func TestTestPacUrl(t *testing.T) {
+func TestTestPac(t *testing.T) {
+	httpProxy, _, testUrl := startTestFakes(t)
 	server, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -116,7 +118,13 @@ func TestTestPacUrl(t *testing.T) {
 		_ = http.Serve(server, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 			switch request.URL.Path {
 			case "/proxy.pac":
+				_, _ = writer.Write([]byte(`function FindProxyForURL(url, host) { return "PROXY ` + httpProxy.Address() + `; DIRECT"; }`))
+			case "/direct.pac":
 				_, _ = writer.Write([]byte(`function FindProxyForURL(url, host) { return "DIRECT"; }`))
+			case "/broken.pac":
+				_, _ = writer.Write([]byte(`function FindProxyForURL(url, host) { return undefinedFunction(host); }`))
+			case "/socks.pac":
+				_, _ = writer.Write([]byte(`function FindProxyForURL(url, host) { return "SOCKS5 127.0.0.1:1080; SOCKS 127.0.0.1:1080; DIRECT"; }`))
 			case "/page":
 				_, _ = writer.Write([]byte("<html></html>"))
 			default:
@@ -125,14 +133,38 @@ func TestTestPacUrl(t *testing.T) {
 		}))
 	}()
 	base := "http://" + server.Addr().String()
-	if result := testPacUrl(base+"/proxy.pac", time.Second); !result.Ok {
+	if script, result := downloadPacScript(base+"/proxy.pac", time.Second); !result.Ok || !strings.Contains(script, "FindProxyForURL") {
 		t.Errorf("PAC 应可下载：%+v", result)
 	}
-	if result := testPacUrl(base+"/page", time.Second); result.Ok || !strings.Contains(result.Message, "FindProxyForURL") {
+	if _, result := downloadPacScript(base+"/page", time.Second); result.Ok || !strings.Contains(result.Message, "FindProxyForURL") {
 		t.Errorf("不是 PAC 的内容应提示：%+v", result)
 	}
-	if result := testPacUrl(base+"/missing", time.Second); result.Ok || result.Status != http.StatusNotFound {
+	if _, result := downloadPacScript(base+"/missing", time.Second); result.Ok || result.Status != http.StatusNotFound {
 		t.Errorf("404 应提示：%+v", result)
+	}
+	if result := testPacProfile(base+"/missing", testUrl, time.Second); result.Ok {
+		t.Errorf("PAC 下载失败时测速应失败：%+v", result)
+	}
+
+	result := testPacProfile(base+"/proxy.pac", testUrl, 3*time.Second)
+	if runtime.GOOS != "windows" {
+		// 其他平台不执行 PAC 脚本，只检查能否下载，也不显示延迟。
+		if !result.Ok || result.Route != "" || result.Millis != 0 {
+			t.Errorf("不能执行 PAC 时应只检查下载：%+v", result)
+		}
+		return
+	}
+	if !result.Ok || result.Route != httpProxy.Address() || !strings.Contains(result.Message, "经代理访问成功") {
+		t.Errorf("应按 PAC 选择的代理测速：%+v", result)
+	}
+	if direct := testPacProfile(base+"/direct.pac", testUrl, 3*time.Second); !direct.Ok || direct.Route != pacRouteDirect || !strings.Contains(direct.Message, "直连") {
+		t.Errorf("PAC 选择直连时应直接访问：%+v", direct)
+	}
+	if broken := testPacProfile(base+"/broken.pac", testUrl, 3*time.Second); broken.Ok || !strings.Contains(broken.Message, "执行失败") {
+		t.Errorf("脚本出错时应提示：%+v", broken)
+	}
+	if socks := testPacProfile(base+"/socks.pac", testUrl, 3*time.Second); !socks.Ok || socks.Route != "" || socks.Millis != 0 || !strings.Contains(socks.Message, "SOCKS") {
+		t.Errorf("用 SOCKS 的 PAC 不应当成直连测速：%+v", socks)
 	}
 }
 

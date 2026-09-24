@@ -33,6 +33,8 @@ func TestStructSizes(t *testing.T) {
 		{"ICONINFO", unsafe.Sizeof(iconInfo{}), 32},
 		{"BITMAPINFOHEADER", unsafe.Sizeof(bitmapInfoHeader{}), 40},
 		{"MSG", unsafe.Sizeof(message{}), 48},
+		{"WINHTTP_AUTOPROXY_OPTIONS", unsafe.Sizeof(winHttpAutoProxyOptions{}), 32},
+		{"WINHTTP_PROXY_INFO", unsafe.Sizeof(winHttpProxyInfo{}), 24},
 	}
 	for _, size := range sizes {
 		if size.actual != size.wanted {

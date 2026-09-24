@@ -342,12 +342,22 @@ func commonPortListeners() []Listener {
 	return listeners
 }
 
-// TestResult 是一次连通性测试的结果。
+// TestResult 是一次连通性测试的结果。Millis 为 0 表示没有测出延迟（例如只检查了 PAC 脚本能否下载）；
+// Route 是 PAC 为测速地址选择的代理，pacRouteDirect 表示直连。
 type TestResult struct {
 	Ok      bool   `json:"ok"`
 	Millis  int64  `json:"millis"`
 	Status  int    `json:"status,omitempty"`
 	Message string `json:"message"`
+	Route   string `json:"route,omitempty"`
+}
+
+// testProfileConnection 测试一套配置：填了代理服务器时经它测速，只有 PAC 时按 PAC 为测速地址选择的代理测速。
+func testProfileConnection(server, pac, testUrl string, timeout time.Duration) TestResult {
+	if server != "" {
+		return testProxyServer(server, testUrl, timeout)
+	}
+	return testPacProfile(pac, testUrl, timeout)
 }
 
 // testProxyServer 先确认能连上代理端口，再经代理请求测速地址，记录请求耗时。
@@ -366,13 +376,19 @@ func testProxyServer(server, testUrl string, timeout time.Duration) TestResult {
 		return TestResult{Message: "连不上代理 " + proxyUrl.Host + "：" + friendlyNetError(err)}
 	}
 	connection.Close()
+	return measureRequest(proxyUrl, testUrl, timeout)
+}
 
+// measureRequest 经 proxyUrl 请求测速地址并记录耗时，proxyUrl 为 nil 时直接访问。
+func measureRequest(proxyUrl *url.URL, testUrl string, timeout time.Duration) TestResult {
 	transport := &http.Transport{
-		Proxy:                 http.ProxyURL(proxyUrl),
 		DialContext:           (&net.Dialer{Timeout: timeout}).DialContext,
 		TLSHandshakeTimeout:   timeout,
 		ResponseHeaderTimeout: timeout,
 		DisableKeepAlives:     true,
+	}
+	if proxyUrl != nil {
+		transport.Proxy = http.ProxyURL(proxyUrl)
 	}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{
@@ -386,7 +402,7 @@ func testProxyServer(server, testUrl string, timeout time.Duration) TestResult {
 	defer cancel()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, testUrl, nil)
 	if err != nil {
-		return TestResult{Message: err.Error()}
+		return TestResult{Message: "测速地址格式不对：" + testUrl}
 	}
 	request.Header.Set("User-Agent", appName+"/"+appVersion)
 	started := time.Now()
@@ -401,22 +417,64 @@ func testProxyServer(server, testUrl string, timeout time.Duration) TestResult {
 	switch {
 	case response.StatusCode == http.StatusProxyAuthRequired:
 		result.Message = "代理要求用户名和密码（HTTP 407）"
-	case response.StatusCode < 400:
+	case response.StatusCode < 400 && proxyUrl != nil:
 		result.Ok = true
 		result.Message = fmt.Sprintf("经代理访问成功，HTTP %d", response.StatusCode)
-	default:
+	case response.StatusCode < 400:
+		result.Ok = true
+		result.Message = fmt.Sprintf("直接访问成功，HTTP %d", response.StatusCode)
+	case proxyUrl != nil:
 		result.Message = fmt.Sprintf("代理有响应，但测速地址返回 HTTP %d", response.StatusCode)
+	default:
+		result.Message = fmt.Sprintf("测速地址返回 HTTP %d", response.StatusCode)
 	}
 	return result
 }
 
-// testPacUrl 下载 PAC 脚本并检查内容。
-func testPacUrl(pacUrl string, timeout time.Duration) TestResult {
-	started := time.Now()
+// errPacUnsupported 表示不能执行 PAC 脚本（非 Windows 平台，或 file:// 地址），这时 PAC 测速只检查脚本能否下载。
+var errPacUnsupported = errors.New("不能执行 PAC 脚本")
+
+const pacRouteDirect = "DIRECT"
+
+// testPacProfile 先确认 PAC 脚本能下载，再按脚本为测速地址选择的代理（或直连）实际访问一次。
+func testPacProfile(pacUrl, testUrl string, timeout time.Duration) TestResult {
+	script, download := downloadPacScript(pacUrl, timeout)
+	if !download.Ok {
+		return download
+	}
+	route, err := "", errPacUnsupported
+	if !strings.HasPrefix(strings.ToLower(pacUrl), "file:") {
+		route, err = pacProxyForUrl(pacUrl, testUrl, timeout)
+	}
+	if errors.Is(err, errPacUnsupported) {
+		return download
+	}
+	if err != nil {
+		return TestResult{Message: "PAC 脚本能下载，但执行失败：" + err.Error()}
+	}
+	// Windows 执行 PAC 时会忽略 SOCKS 项，只剩直连；这种脚本测不出真实的去向，只报告能否下载。
+	if route == "" && strings.Contains(strings.ToUpper(script), "SOCKS") {
+		download.Message += "。脚本里用了 SOCKS 代理，Windows 执行 PAC 时不支持，测不出延迟"
+		return download
+	}
+	if route == "" {
+		result := measureRequest(nil, testUrl, timeout)
+		result.Route = pacRouteDirect
+		result.Message = "PAC 选择直连：" + result.Message
+		return result
+	}
+	result := testProxyServer(route, testUrl, timeout)
+	result.Route = route
+	result.Message = "PAC 选择 " + route + "：" + result.Message
+	return result
+}
+
+// downloadPacScript 下载 PAC 脚本并检查内容，返回脚本和检查结果。
+func downloadPacScript(pacUrl string, timeout time.Duration) (string, TestResult) {
 	var body []byte
 	parsed, err := url.Parse(pacUrl)
 	if err != nil {
-		return TestResult{Message: "PAC 地址格式不对"}
+		return "", TestResult{Message: "PAC 地址格式不对"}
 	}
 	if parsed.Scheme == "file" {
 		path := parsed.Path
@@ -425,25 +483,25 @@ func testPacUrl(pacUrl string, timeout time.Duration) TestResult {
 		}
 		body, err = os.ReadFile(strings.TrimPrefix(path, "/"))
 		if err != nil {
-			return TestResult{Message: "读取 PAC 文件失败：" + err.Error()}
+			return "", TestResult{Message: "读取 PAC 文件失败：" + err.Error()}
 		}
 	} else {
 		client := &http.Client{Timeout: timeout, Transport: &http.Transport{Proxy: nil, DisableKeepAlives: true}}
 		response, err := client.Get(pacUrl)
 		if err != nil {
-			return TestResult{Millis: time.Since(started).Milliseconds(), Message: "下载 PAC 失败：" + friendlyRequestError(err, timeout)}
+			return "", TestResult{Message: "下载 PAC 失败：" + friendlyRequestError(err, timeout)}
 		}
 		body, _ = io.ReadAll(io.LimitReader(response.Body, 2<<20))
 		response.Body.Close()
 		if response.StatusCode != http.StatusOK {
-			return TestResult{Millis: time.Since(started).Milliseconds(), Status: response.StatusCode, Message: fmt.Sprintf("PAC 地址返回 HTTP %d", response.StatusCode)}
+			return "", TestResult{Status: response.StatusCode, Message: fmt.Sprintf("PAC 地址返回 HTTP %d", response.StatusCode)}
 		}
 	}
-	elapsed := time.Since(started).Milliseconds()
-	if !strings.Contains(string(body), "FindProxyForURL") {
-		return TestResult{Millis: elapsed, Message: "能下载，但内容不像 PAC 脚本（没有 FindProxyForURL）"}
+	script := string(body)
+	if !strings.Contains(script, "FindProxyForURL") {
+		return "", TestResult{Message: "能下载，但内容不像 PAC 脚本（没有 FindProxyForURL）"}
 	}
-	return TestResult{Ok: true, Millis: elapsed, Message: fmt.Sprintf("PAC 脚本可以下载（%.1f KB）", float64(len(body))/1024)}
+	return script, TestResult{Ok: true, Message: fmt.Sprintf("PAC 脚本可以下载（%.1f KB）", float64(len(body))/1024)}
 }
 
 // checkProxyReachable 只检查能否连上代理端口，用于开启后的持续检查。

@@ -26,6 +26,7 @@ var (
 	rasapi32 = syscall.NewLazyDLL(systemDir() + `\rasapi32.dll`)
 	iphlpapi = syscall.NewLazyDLL(systemDir() + `\iphlpapi.dll`)
 	wlanapi  = syscall.NewLazyDLL(systemDir() + `\wlanapi.dll`)
+	winhttp  = syscall.NewLazyDLL(systemDir() + `\winhttp.dll`)
 
 	procGetModuleHandleW           = kernel32.NewProc("GetModuleHandleW")
 	procGetCurrentThreadId         = kernel32.NewProc("GetCurrentThreadId")
@@ -108,6 +109,11 @@ var (
 	procWlanEnumInterfaces = wlanapi.NewProc("WlanEnumInterfaces")
 	procWlanQueryInterface = wlanapi.NewProc("WlanQueryInterface")
 	procWlanFreeMemory     = wlanapi.NewProc("WlanFreeMemory")
+
+	procWinHttpOpen           = winhttp.NewProc("WinHttpOpen")
+	procWinHttpCloseHandle    = winhttp.NewProc("WinHttpCloseHandle")
+	procWinHttpSetTimeouts    = winhttp.NewProc("WinHttpSetTimeouts")
+	procWinHttpGetProxyForUrl = winhttp.NewProc("WinHttpGetProxyForUrl")
 
 	procRegOpenKeyExW    = advapi32.NewProc("RegOpenKeyExW")
 	procRegCreateKeyExW  = advapi32.NewProc("RegCreateKeyExW")
@@ -312,6 +318,21 @@ type copyDataStruct struct {
 	data    uintptr
 	size    uint32
 	pointer uintptr
+}
+
+type winHttpAutoProxyOptions struct {
+	flags                 uint32
+	autoDetectFlags       uint32
+	autoConfigUrl         *uint16
+	reserved              uintptr
+	reservedFlags         uint32
+	autoLogonIfChallenged int32
+}
+
+type winHttpProxyInfo struct {
+	accessType uint32
+	proxy      *uint16
+	bypass     *uint16
 }
 
 type osVersionInfo struct {

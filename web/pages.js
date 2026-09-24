@@ -92,8 +92,10 @@ function heroView() {
       health = html`<span class="dot" style="background:var(--danger)"></span><span style="color:var(--danger)">连不上代理服务器：${status.health_message}</span>`;
     } else if (latency && latency.running) {
       health = html`<span class="spinner" style="width:12px;height:12px"></span>正在测速…`;
+    } else if (latency && latency.ok && latency.millis) {
+      health = html`<span class="dot" style="background:var(--success)"></span>连接正常，延迟 <span class="numeric">${latency.millis} ms</span>${latency.route ? html`<span class="faint">（${routeText(latency)}）</span>` : ""}`;
     } else if (latency && latency.ok) {
-      health = html`<span class="dot" style="background:var(--success)"></span>连接正常，延迟 <span class="numeric">${latency.millis} ms</span>`;
+      health = html`<span class="dot" style="background:var(--success)"></span>${latency.message}`;
     } else if (latency) {
       health = html`<span class="dot" style="background:var(--danger)"></span><span style="color:var(--danger)">${latency.message}</span>`;
     } else if (status.health === "ok") {
@@ -114,7 +116,7 @@ function heroView() {
     subtitle = html`<span>还没有代理配置</span>`;
   }
   const hotkey = app.state.hotkeys.toggle && !app.state.hotkeys.toggle_error ? app.state.hotkeys.toggle : "";
-  const canTest = status.state === "on" && profile && profile.server;
+  const canTest = status.state === "on" && profile && (profile.server || profile.pac);
   const terminal = status.state === "on" && status.terminal && status.terminal.length > 0;
   const saveExternal = status.state === "external" && status.external_profile;
   return html`
@@ -146,6 +148,9 @@ function latencyBadge(profile) {
   }
   if (!latency.ok) {
     return html`<span class="badge danger" title="${latency.message}">失败</span>`;
+  }
+  if (!latency.millis) {
+    return html`<span class="badge success" title="${latency.message}">可用</span>`;
   }
   const level = latency.millis < 300 ? "success" : latency.millis < 1000 ? "warning" : "danger";
   return html`<span class="badge ${level} numeric" title="${latency.message}">${latency.millis} ms</span>`;

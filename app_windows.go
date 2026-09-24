@@ -388,8 +388,10 @@ func (app *App) menuItems() []MenuItem {
 		}
 	}
 	items = append(items, separator)
-	if status.State == statusOn && status.Profile.Server != "" {
+	if status.State == statusOn {
 		items = append(items, MenuItem{Id: menuTest, Text: "测试代理连接"})
+	}
+	if status.State == statusOn && status.Profile.Server != "" {
 		var commands []MenuItem
 		for index, command := range terminalCommands(serverToUrl(status.Profile.Server), status.Profile.NoProxy) {
 			commands = append(commands, MenuItem{Id: uint32(menuTerminalBase + index), Text: command.Label})
@@ -487,14 +489,19 @@ func (app *App) copyTerminalCommand(index int) {
 func (app *App) testActiveProxy() {
 	status := app.engine.Status()
 	config := app.engine.Config()
-	if status.State != statusOn || status.Profile.Server == "" || config == nil {
+	if status.State != statusOn || config == nil {
 		return
 	}
 	profile := *status.Profile
 	testUrl := config.TestUrl
 	go func() {
-		result := testProxyServer(profile.Server, testUrl, proxyTestTimeout)
-		notice := Notice{Level: noticeInfo, Title: fmt.Sprintf("%s：连接正常，%d ms", profile.Name, result.Millis), Text: result.Message, Icon: iconStateOn, Color: profile.Color}
+		result := testProfileConnection(profile.Server, profile.Pac, testUrl, proxyTestTimeout)
+		// 没有测出延迟时（例如只能检查 PAC 脚本能否读取）不说“连接正常”。
+		title := profile.Name + "：可以使用"
+		if result.Millis > 0 {
+			title = fmt.Sprintf("%s：连接正常，%d ms", profile.Name, result.Millis)
+		}
+		notice := Notice{Level: noticeInfo, Title: title, Text: result.Message, Icon: iconStateOn, Color: profile.Color}
 		if !result.Ok {
 			notice = Notice{Level: noticeWarning, Title: profile.Name + "：连接失败", Text: result.Message}
 		}

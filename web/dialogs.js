@@ -507,6 +507,14 @@ function renderPreview(draft) {
   return html`<div class="preview"><strong>开启后会做这些修改</strong><ul>${draft.preview.map((line) => html`<li>${line}</li>`)}</ul></div>`;
 }
 
+// routeText 描述 PAC 为测速地址选择的去向。
+function routeText(result) {
+  if (!result || !result.route) {
+    return "";
+  }
+  return result.route === "DIRECT" ? "PAC 选择直连" : `PAC 选择 ${result.route}`;
+}
+
 function renderTestResult(test) {
   if (!test) {
     return html``;
@@ -514,8 +522,11 @@ function renderTestResult(test) {
   if (test.running) {
     return html`<span class="spinner"></span><span class="muted">正在测试…</span>`;
   }
+  if (test.ok && test.millis) {
+    return html`${icon("success")}<span style="color:var(--success)">连接正常，<span class="numeric">${test.millis} ms</span></span>${test.route ? html`<span class="muted">${routeText(test)}</span>` : ""}`;
+  }
   if (test.ok) {
-    return html`${icon("success")}<span style="color:var(--success)">连接正常${test.millis ? html`，<span class="numeric">${test.millis} ms</span>` : ""}</span>`;
+    return html`${icon("success")}<span style="color:var(--success)">${test.message}</span>`;
   }
   return html`${icon("warning")}<span style="color:var(--danger)">${test.message}</span>`;
 }
