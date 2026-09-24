@@ -1,6 +1,6 @@
 name: release
 
-# 推送 v* 标签时：先在 Windows 上跑全部测试，再编译 amd64 和 arm64 两个 exe（版本号取自标签），
+# 推送 v* 标签时：先在 Windows 上跑全部测试，再编译 amd64 和 arm64 两个 exe（版本号取自标签），macOS 上打包 macOS 版，
 # 用 CHANGELOG.md 里对应版本的内容创建 GitHub Release 并上传附件。
 # Release 先以草稿创建，附件上传完才发布：程序内更新读取最新发布，不能读到还没有附件的发布。
 # 也可以在 Actions 页面手动运行，填一个已有的标签重新上传附件。
@@ -38,9 +38,33 @@ jobs:
           PROXYSWITCH_TEST_REGISTRY: "1"
         run: go test ./...
 
+  build-macos:
+    name: 编译 macOS 版
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: macos
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: 选择最新的 Xcode
+        run: |
+          latest=$(ls -d /Applications/Xcode*.app | sort -V | tail -1)
+          sudo xcode-select -s "$latest"
+          swift --version
+      - name: 单元测试
+        run: swift test
+      - name: 打包通用二进制的 .app
+        run: VERSION="${TAG#v}" Scripts/build-app.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-app
+          path: macos/dist/ProxySwitch-macos.zip
+
   build-and-upload:
     name: 编译并发布
-    needs: test-windows
+    needs: [test-windows, build-macos]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -55,7 +79,14 @@ jobs:
           go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0
           make resources windows VERSION="$VERSION"
           git archive --format=zip --prefix="proxyswitch-$VERSION/" -o "dist/proxyswitch-$VERSION-src.zip" HEAD
-          cd dist && sha256sum ProxySwitch.exe ProxySwitch-arm64.exe "proxyswitch-$VERSION-src.zip" > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-app
+          path: dist
+      - name: 生成校验和
+        run: |
+          VERSION="${TAG#v}"
+          cd dist && sha256sum ProxySwitch.exe ProxySwitch-arm64.exe ProxySwitch-macos.zip "proxyswitch-$VERSION-src.zip" > SHA256SUMS.txt && cat SHA256SUMS.txt
       - name: 发布
         env:
           GH_TOKEN: ${{ github.token }}
@@ -65,6 +96,6 @@ jobs:
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             gh release create "$TAG" --draft --title "ProxySwitch $TAG" --notes-file notes.md
           fi
-          gh release upload "$TAG" dist/ProxySwitch.exe dist/ProxySwitch-arm64.exe "dist/proxyswitch-$VERSION-src.zip" dist/SHA256SUMS.txt --clobber
+          gh release upload "$TAG" dist/ProxySwitch.exe dist/ProxySwitch-arm64.exe dist/ProxySwitch-macos.zip "dist/proxyswitch-$VERSION-src.zip" dist/SHA256SUMS.txt --clobber
           gh release edit "$TAG" --draft=false --latest
           echo "已发布到 https://github.com/${GITHUB_REPOSITORY}/releases/tag/$TAG"

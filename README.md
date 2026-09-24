@@ -213,6 +213,32 @@ Go 编写的小工具偶尔会被误报。可以核对 Release 附带的 SHA256S
 **怎么卸载？**
 先在「设置 → 诊断」里点「清除所有代理设置」，在「设置 → 常规」里关闭开机自动启动，然后从托盘菜单退出，删除 exe 和 `%APPDATA%\ProxySwitch` 文件夹（便携模式是 exe 旁边的文件）。设置窗口的浏览器数据在 `%LOCALAPPDATA%\ProxySwitch`，也可以一并删除。
 
+## macOS 版
+
+`macos/` 目录是原生的 macOS 菜单栏工具，用 Swift 写，界面是 SwiftUI 的毛玻璃风格（用 Xcode 26 编译时在 macOS 26 上自动换成 Liquid Glass）。它和 Windows 版共用一个仓库，但不是复刻：以菜单栏里的操作为主。
+
+- **菜单栏面板**：点图标弹出面板，大开关、配置列表、每个配置的延迟、复制终端命令、进设置；右键或 Control + 点击是简洁菜单。
+- **配置**：HTTP / SOCKS5 / PAC 三种；生效范围可选系统代理、环境变量（launchd）、git、npm；PAC 由系统执行，测速和浏览器看到的一致。
+- **系统代理**：用 SystemConfiguration 读取和监听，别的程序改了代理会立刻反映在图标上，可以一键保存成配置；写入用 `networksetup`，需要管理员账户，标准账户会弹系统的授权对话框。
+- **其他**：全局快捷键（默认 ⌃⌥P）、登录时启动（系统设置的「登录项」里能看到）、代理服务器连不上时提醒、自动检测本机代理软件、`proxyswitch://` 命令（`open proxyswitch://toggle`，可以接快捷指令）。
+
+### 安装
+
+1. 在 [Releases](https://github.com/whrss9527/proxyswitch/releases) 下载 `ProxySwitch-macos.zip`，解压后把 `ProxySwitch.app` 拖到「应用程序」。
+2. 程序没有 Apple 开发者签名，第一次打开会被拦下：在 `ProxySwitch.app` 上右键 → 打开 → 再点「打开」；或者在终端运行 `xattr -dr com.apple.quarantine /Applications/ProxySwitch.app`。
+3. 需要 macOS 14 或更新版本。
+
+### 编译
+
+```bash
+cd macos
+swift build                     # 编译（需要 Xcode 16 或更新版本）
+swift test                      # 单元测试
+VERSION=2.1.0 Scripts/build-app.sh   # 组装通用二进制的 ProxySwitch.app 和 zip，ad-hoc 签名
+```
+
+配置和日志在 `~/Library/Application Support/ProxySwitch/`。
+
 ## 开发
 
 需要 Go 1.23 或更新版本，不需要 CGO。在 Linux / macOS 上交叉编译：
