@@ -270,6 +270,11 @@ def run_flows(page, api, info, config_path):
     # ---------- 其他程序设置的代理 ----------
     api.call("POST", "/api/dev/external", {"server": "192.168.1.9:3128"})
     check(wait_until(lambda: "其他程序" in page.inner_text(".hero"), timeout=5), "识别其他程序设置的系统代理")
+    page.click("[data-action=save-external]")
+    page.wait_for_selector(".dialog [data-field=name]")
+    check(page.input_value(".dialog [data-field=name]") == "原有代理" and page.input_value(".dialog [data-field=host]") == "192.168.1.9" and page.input_value(".dialog [data-field=port]") == "3128", "其他程序设置的代理可以一键保存为配置")
+    page.click(".dialog [data-action=dialog-cancel]")
+    page.wait_for_selector(".dialog", state="detached")
     page.click(".hero-switch")
     check(wait_until(lambda: api.call("GET", "/api/state")["status"]["state"] == "off"), "点开关关闭其他程序的代理")
 

@@ -508,4 +508,21 @@ func TestEngineSettingsState(t *testing.T) {
 	if state.Network.Ssids == nil || state.Network.Adapters == nil || state.Config == nil || len(state.Palette) == 0 {
 		t.Error("设置页状态缺少字段")
 	}
+	if len(state.Status.Terminal) != 3 || !strings.Contains(state.Status.Terminal[0].Command, "http://10.0.0.1:8080") || state.Status.ExternalProfile != nil {
+		t.Errorf("开启时应提供终端命令：%+v", state.Status)
+	}
+
+	fixture.system.System = SystemProxyState{ProxyEnabled: true, Server: "socks=192.168.1.9:1080", Bypass: "<local>"}
+	state = fixture.engine.settingsState()
+	external := state.Status.ExternalProfile
+	if state.Status.State != statusExternal || external == nil || external.Server != "socks5://192.168.1.9:1080" || external.Bypass != "<local>" || external.Pac != "" {
+		t.Errorf("其他程序设置的代理应转成配置：%+v %+v", state.Status, external)
+	}
+	if state.Status.Terminal != nil {
+		t.Error("其他程序设置的代理不提供终端命令")
+	}
+	fixture.system.System = SystemProxyState{PacEnabled: true, Pac: "http://wpad/proxy.pac", Server: "1.2.3.4:80"}
+	if external := fixture.engine.settingsState().Status.ExternalProfile; external == nil || external.Pac != "http://wpad/proxy.pac" || external.Server != "" {
+		t.Errorf("只开了 PAC 时不应带上未启用的代理服务器：%+v", external)
+	}
 }

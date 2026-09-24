@@ -104,7 +104,7 @@ function heroView() {
     checked = true;
     title = "系统代理由其他程序设置";
     subtitle = html`<span class="mono">${status.external}</span>`;
-    health = html`<span>可能是代理软件自己设置的。点开关会改为直接连接，也可以在下面选一个配置使用。</span>`;
+    health = html`<span>可能是代理软件或 Windows 设置里开启的。点开关会改为直接连接；保存为配置后，就能用 ProxySwitch 随时开关它。</span>`;
   } else if (profile) {
     subtitle = html`<span>打开后使用</span><strong style="color:var(--text)">${profile.name}</strong><span class="mono">${describeServer(profile)}</span>`;
     if (status.health === "down") {
@@ -116,6 +116,7 @@ function heroView() {
   const hotkey = app.state.hotkeys.toggle && !app.state.hotkeys.toggle_error ? app.state.hotkeys.toggle : "";
   const canTest = status.state === "on" && profile && profile.server;
   const terminal = status.state === "on" && status.terminal && status.terminal.length > 0;
+  const saveExternal = status.state === "external" && status.external_profile;
   return html`
     <div class="card hero" style="--tint:${track === grayTrack ? "transparent" : track}">
       <button class="hero-switch ${busy} ${warn}" role="switch" aria-checked="${checked}" aria-label="开关代理" data-action="toggle" style="--track:${track}"></button>
@@ -125,9 +126,10 @@ function heroView() {
         ${health.text ? html`<div class="hero-health">${health}</div>` : ""}
       </div>
       <div class="hero-actions">
-        ${canTest || terminal ? html`<div class="hero-buttons">
+        ${canTest || terminal || saveExternal ? html`<div class="hero-buttons">
           ${canTest ? html`<button class="button" data-action="test-profile" data-id="${profile.id}">${icon("gauge")}测速</button>` : ""}
           ${terminal ? html`<button class="button" data-action="terminal-menu" title="复制在当前终端里使用代理的命令" aria-haspopup="menu">${icon("terminal")}终端命令</button>` : ""}
+          ${saveExternal ? html`<button class="button" data-action="save-external">${icon("plus")}保存为配置</button>` : ""}
         </div>` : ""}
         ${hotkey ? html`<span class="caption faint" style="display:flex;gap:6px;align-items:center">快捷键 ${hotkeyKeys(hotkey)}</span>` : ""}
       </div>

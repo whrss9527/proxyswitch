@@ -38,6 +38,37 @@ func serverToWinInet(server string) string {
 	return rest
 }
 
+// serverFromWinInet 把 WinINET 的 ProxyServer 转成配置里的写法：只有 socks 项时写成 socks5://；
+// http 和 https 指向同一个地址（ftp 没有或也相同）时合并成一个地址；其余情况保持按协议分别指定，不扩大或缩小代理的范围。
+func serverFromWinInet(value string) string {
+	value = strings.TrimSpace(value)
+	if !strings.Contains(value, "=") {
+		return value
+	}
+	normalized := serverToWinInet(value)
+	entries := map[string]string{}
+	for _, entry := range strings.Split(normalized, ";") {
+		protocol, address, found := strings.Cut(entry, "=")
+		if !found {
+			return normalized
+		}
+		entries[strings.ToLower(strings.TrimSpace(protocol))] = stripScheme(strings.TrimSpace(address))
+	}
+	if socks := entries["socks"]; socks != "" && len(entries) == 1 {
+		return "socks5://" + socks
+	}
+	address := entries["http"]
+	if address == "" || entries["https"] != address {
+		return normalized
+	}
+	for protocol, entry := range entries {
+		if (protocol != "http" && protocol != "https" && protocol != "ftp") || entry != address {
+			return normalized
+		}
+	}
+	return address
+}
+
 // serverToUrl 把 server 转成环境变量 / git / npm 能用的 URL。
 // 按协议分别指定时优先取 https 项，其次 http，再次 socks（转为 socks5://）。
 func serverToUrl(server string) string {

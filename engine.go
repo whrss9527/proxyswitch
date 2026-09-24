@@ -788,6 +788,10 @@ func (engine *Engine) settingsState() SettingsState {
 			info.Terminal = terminalCommands(serverToUrl(status.Profile.Server), status.Profile.NoProxy)
 		}
 	}
+	if status.State == statusExternal {
+		external := profileFromSystem(status.System)
+		info.ExternalProfile = &external
+	}
 	info.Health, info.HealthMessage = engine.HealthInfo()
 	if status.State != statusOn && !engine.AutoOffPending() {
 		info.Health, info.HealthMessage = "", ""
@@ -818,6 +822,18 @@ func (engine *Engine) settingsState() SettingsState {
 		Defaults:    defaultsInfo(),
 		Palette:     profilePalette,
 	}
+}
+
+// profileFromSystem 把其他程序设置的系统代理转成一套配置的内容（不含名称和颜色）。
+func profileFromSystem(state SystemProxyState) Profile {
+	profile := Profile{Bypass: state.Bypass, ApplyTo: []string{targetSystem}}
+	if state.PacEnabled {
+		profile.Pac = state.Pac
+	}
+	if state.ProxyEnabled {
+		profile.Server = serverFromWinInet(state.Server)
+	}
+	return profile
 }
 
 // configStamp 记录配置文件的修改时间和大小，用于发现手动修改。

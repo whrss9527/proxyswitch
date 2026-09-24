@@ -28,6 +28,26 @@ func TestServerConversions(t *testing.T) {
 	}
 }
 
+func TestServerFromWinInet(t *testing.T) {
+	cases := map[string]string{
+		"127.0.0.1:7890":                            "127.0.0.1:7890",
+		"socks=127.0.0.1:1080":                      "socks5://127.0.0.1:1080",
+		"http=10.0.0.1:80;https=10.0.0.1:80":        "10.0.0.1:80",
+		"http=http://10.0.0.1:80;https=10.0.0.1:80": "10.0.0.1:80",
+		"http=a:1":                           "http=a:1",
+		"http=a:1;https=b:2":                 "http=a:1;https=b:2",
+		"http=a:1;socks=a:1":                 "http=a:1;socks=a:1",
+		"c:3;http=a:1;https=a:1":             "c:3;http=a:1;https=a:1",
+		" http=a:1 ; https=a:1 ; ftp=a:1 ; ": "a:1",
+		"http=a:1;https=a:1;ftp=b:2":         "http=a:1;https=a:1;ftp=b:2",
+	}
+	for value, wanted := range cases {
+		if got := serverFromWinInet(value); got != wanted {
+			t.Errorf("serverFromWinInet(%q) = %q，应为 %q", value, got, wanted)
+		}
+	}
+}
+
 func TestProxyUrlForTarget(t *testing.T) {
 	cases := []struct {
 		server, scheme, wanted string

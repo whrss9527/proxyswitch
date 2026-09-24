@@ -470,6 +470,18 @@ const actions = {
   use: (element) => runOperation("/api/use", { name: element.dataset.name }),
   add: () => openProfileEditor(),
   "add-pac": () => openProfileEditor({}, { kind: "pac" }),
+  "save-external": () => {
+    const external = app.state.status.external_profile;
+    if (!external) {
+      return;
+    }
+    const names = new Set(app.config.profiles.map((profile) => profile.name.toLowerCase()));
+    let name = "原有代理";
+    for (let suffix = 2; names.has(name.toLowerCase()); suffix++) {
+      name = `原有代理 ${suffix}`;
+    }
+    openProfileEditor({ ...external, name });
+  },
   detect: () => openDetectDialog(),
   edit: (element) => {
     const profile = profileById(element.dataset.id);
