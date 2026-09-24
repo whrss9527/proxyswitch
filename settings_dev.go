@@ -22,6 +22,7 @@ type devBackend struct {
 	notices   []Notice
 	httpProxy *fakeProxy
 	socks     *fakeProxy
+	update    *UpdateInfo
 }
 
 var devDefaultNetwork = NetworkInfo{
@@ -62,6 +63,7 @@ func (backend *devBackend) State() SettingsState {
 	state.Autostart = backend.autostart
 	state.Accent = "#0067c0"
 	state.Targets = targetInfos(true)
+	state.Update = backend.update
 	if config := backend.engine.Config(); config != nil && config.Hotkey != "" {
 		if hotkey, err := parseHotkey(config.Hotkey); err == nil {
 			state.Hotkeys.Toggle = hotkey.Text
@@ -159,6 +161,16 @@ func (backend *devBackend) OpenUrl(address string) error {
 
 func (backend *devBackend) ActiveProxyUrl() string {
 	return ""
+}
+
+// RememberUpdate 与 Windows 版一样记下检查发现的新版本，没有新版本时清除。
+func (backend *devBackend) RememberUpdate(info UpdateInfo) {
+	backend.mutex.Lock()
+	defer backend.mutex.Unlock()
+	backend.update = nil
+	if info.Newer {
+		backend.update = &info
+	}
 }
 
 // InstallUpdate 在开发模式下只下载并校验新版本（保存到配置目录），不替换程序。
@@ -295,10 +307,11 @@ func runDevSettings(args []string) int {
 		backend.devRoutes(mux)
 		mux.HandleFunc("POST /api/dev/navigate", func(writer http.ResponseWriter, request *http.Request) {
 			var body struct {
-				Page string `json:"page"`
+				Page   string `json:"page"`
+				Action string `json:"action"`
 			}
 			if decodeJsonBody(writer, request, &body) {
-				settings.ShowPage(body.Page)
+				settings.ShowPage(body.Page, body.Action)
 				writeJson(writer, http.StatusOK, map[string]bool{"ok": true})
 			}
 		})

@@ -22,6 +22,7 @@ const (
 	menuAutoSwitch
 	menuTest
 	menuEditConfig
+	menuUpdate
 	menuExit
 	menuTerminalBase = 50
 	menuProfileBase  = 100
@@ -58,7 +59,7 @@ type App struct {
 	noticePage string
 	// 这次是程序内更新后重新启动，保持原来的代理状态。
 	restartedForUpdate bool
-	// 自动检查更新发现的新版本，设置页据此提示。
+	// 最近一次检查更新发现的新版本，设置页和托盘菜单据此提示。
 	latestUpdate *UpdateInfo
 	// 上次运行时程序崩溃过，启动后提示。
 	crashedLastTime bool
@@ -116,7 +117,7 @@ func (app *App) run(autostarted bool, settingsPage string) error {
 	config := app.engine.Config()
 	switch {
 	case settingsPage != "":
-		app.openSettingsAt(settingsPage)
+		app.openSettingsAt(settingsPage, "")
 	case created || (config != nil && len(config.Profiles) == 0 && !autostarted):
 		app.openSettings()
 	}
@@ -425,10 +426,19 @@ func (app *App) menuItems() []MenuItem {
 	items = append(items,
 		MenuItem{Id: menuSettings, Text: "设置...", Default: config.TrayClick == "settings"},
 		MenuItem{Id: menuAutostart, Text: "开机自动启动", Checked: isAutostartEnabled()},
+		MenuItem{Id: menuUpdate, Text: app.updateMenuText()},
 		separator,
 		MenuItem{Id: menuExit, Text: "退出"},
 	)
 	return items
+}
+
+// updateMenuText 是托盘菜单里检查更新一项的文字，已经知道有新版本时直接显示版本号。
+func (app *App) updateMenuText() string {
+	if app.latestUpdate != nil {
+		return "更新到 " + escapeMenuText(app.latestUpdate.Latest) + "..."
+	}
+	return "检查更新..."
 }
 
 // menuDot 返回配置颜色的圆点位图，按颜色缓存。
@@ -471,6 +481,9 @@ func (app *App) handleMenu(command uint32) {
 		}
 	case command == menuTest:
 		app.testActiveProxy()
+	case command == menuUpdate:
+		// 打开「关于」页并立即检查，有新版本时在那里一键更新。
+		app.openSettingsAt("about", "check-update")
 	case command >= menuTerminalBase && command < menuProfileBase:
 		app.copyTerminalCommand(int(command - menuTerminalBase))
 	case command == menuEditConfig:
@@ -599,7 +612,7 @@ func (app *App) onNotificationClick() {
 	if page == "" {
 		page = "proxies"
 	}
-	app.openSettingsAt(page)
+	app.openSettingsAt(page, "")
 }
 
 func (app *App) onSettingChange(section string) {
@@ -650,18 +663,18 @@ func (app *App) clearIcons() {
 
 // openSettings 打开设置页（已打开时切到前台）。
 func (app *App) openSettings() {
-	app.openSettingsAt("")
+	app.openSettingsAt("", "")
 }
 
-// openSettingsAt 打开设置页并切到 page；page 为空时保持设置页当前的页面。
-func (app *App) openSettingsAt(page string) {
+// openSettingsAt 打开设置页并切到 page；page 为空时保持设置页当前的页面。action 不为空时切换后执行页面上的这个操作。
+func (app *App) openSettingsAt(page, action string) {
 	address, err := app.settings.Start()
 	if err != nil {
 		app.notify(Notice{Level: noticeError, Title: "无法打开设置", Text: err.Error()})
 		return
 	}
 	if page != "" {
-		app.settings.ShowPage(page)
+		app.settings.ShowPage(page, action)
 		address += "#" + page
 	}
 	mode := "app"
@@ -828,6 +841,16 @@ func (app *App) OpenLogFile() error {
 
 func (app *App) OpenUrl(address string) error {
 	return app.onUi(func() error { return shellOpen(address) })
+}
+
+// RememberUpdate 记下检查更新的结果：有新版本时托盘菜单显示「更新到 x.y.z」，没有时清除。
+func (app *App) RememberUpdate(info UpdateInfo) {
+	_ = app.tray.RunOnUi(func() {
+		app.latestUpdate = nil
+		if info.Newer {
+			app.latestUpdate = &info
+		}
+	})
 }
 
 // ActiveProxyUrl 返回正在使用的代理地址，检查更新时经它访问 GitHub。

@@ -46,6 +46,7 @@ type SettingsBackend interface {
 	OpenLogFile() error
 	OpenUrl(address string) error
 	ActiveProxyUrl() string
+	RememberUpdate(info UpdateInfo)
 	InstallUpdate(progress func(received, total int64)) error
 }
 
@@ -69,9 +70,11 @@ type SettingsState struct {
 	Installing  *InstallProgress `json:"installing,omitempty"`
 }
 
-// NavigateInfo 是让已打开的设置页切换页面的请求，Serial 每次加一，页面发现变化时切到 Page。
+// NavigateInfo 是让已打开的设置页切换页面的请求，Serial 每次加一，页面发现变化时切到 Page；
+// Action 不为空时切换后再执行页面上的这个操作，例如托盘菜单的「检查更新」让关于页立即检查。
 type NavigateInfo struct {
 	Page   string `json:"page"`
+	Action string `json:"action,omitempty"`
 	Serial int    `json:"serial"`
 }
 
@@ -239,11 +242,11 @@ func (settings *SettingsServer) Start() (string, error) {
 	return settings.address, nil
 }
 
-// ShowPage 请求已经打开的设置页切到 page，页面下次同步状态时切换。
-func (settings *SettingsServer) ShowPage(page string) {
+// ShowPage 请求已经打开的设置页切到 page 并执行 action（可以为空），页面下次同步状态时切换。
+func (settings *SettingsServer) ShowPage(page, action string) {
 	settings.mutex.Lock()
 	defer settings.mutex.Unlock()
-	settings.navigate = NavigateInfo{Page: page, Serial: settings.navigate.Serial + 1}
+	settings.navigate = NavigateInfo{Page: page, Action: action, Serial: settings.navigate.Serial + 1}
 }
 
 func (settings *SettingsServer) state() SettingsState {
@@ -545,6 +548,7 @@ func (settings *SettingsServer) handleUpdate(writer http.ResponseWriter, request
 		writeError(writer, http.StatusBadGateway, "检查更新失败："+err.Error())
 		return
 	}
+	settings.backend.RememberUpdate(info)
 	writeJson(writer, http.StatusOK, info)
 }
 

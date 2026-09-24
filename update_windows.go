@@ -122,11 +122,10 @@ func (app *App) watchUpdates() {
 			info, err := checkLatestRelease(app.ActiveProxyUrl())
 			if err != nil {
 				slog.Warn("自动检查更新失败", "err", err)
+			} else {
+				app.RememberUpdate(info)
 			}
 			_ = app.tray.RunOnUi(func() {
-				if err == nil && info.Newer {
-					app.latestUpdate = &info
-				}
 				if app.engine.RecordUpdateCheck(info, err) {
 					text := "点这里查看更新内容"
 					if info.CanInstall {

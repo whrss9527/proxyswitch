@@ -43,12 +43,22 @@ function receiveState(state, options = {}) {
   app.navigateSerial = Math.max(app.navigateSerial, navigate.serial);
   if (requested) {
     goto(navigate.page);
+    runRequestedAction(navigate.action);
     return;
   }
   renderNav();
   const stateChanged = !previous || JSON.stringify(previous) !== JSON.stringify(state);
   if (options.force || stateChanged) {
     renderPage({ fromPoll: Boolean(options.fromPoll) });
+  }
+}
+
+// 程序可以请求页面执行的操作，例如托盘菜单的「检查更新」。
+const requestableActions = new Set(["check-update"]);
+
+function runRequestedAction(action) {
+  if (requestableActions.has(action)) {
+    actions[action]();
   }
 }
 
@@ -607,6 +617,9 @@ const actions = {
     }
   },
   "check-update": async () => {
+    if ((app.update && app.update.checking) || app.installing || app.restarting) {
+      return;
+    }
     app.update = { checking: true };
     app.installError = "";
     renderPage();
@@ -780,6 +793,10 @@ async function start() {
     renderPage({ animate: true });
     if (app.page === "diagnostics") {
       loadDiagnostics();
+    }
+    // 窗口是为程序的请求打开的（地址里就是请求的页面），例如托盘菜单的「检查更新」：执行请求的操作。
+    if (state.navigate && state.navigate.page === initialPage) {
+      runRequestedAction(state.navigate.action);
     }
     schedulePoll();
   } catch (error) {
