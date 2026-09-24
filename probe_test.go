@@ -154,13 +154,19 @@ func TestTestPac(t *testing.T) {
 		}
 		return
 	}
-	if !result.Ok || result.Route != httpProxy.Address() || !strings.Contains(result.Message, "经代理访问成功") {
-		t.Errorf("应按 PAC 选择的代理测速：%+v", result)
+	// WinHTTP 对回环地址（127.0.0.1、localhost）一律直连，不会执行脚本，所以测速地址在本机时只能测到直连。
+	if !result.Ok || result.Route != pacRouteDirect || !strings.Contains(result.Message, "直连") {
+		t.Errorf("测速地址是回环地址时应直连：%+v", result)
 	}
-	if direct := testPacProfile(base+"/direct.pac", testUrl, 3*time.Second); !direct.Ok || direct.Route != pacRouteDirect || !strings.Contains(direct.Message, "直连") {
-		t.Errorf("PAC 选择直连时应直接访问：%+v", direct)
+	// 脚本本身的执行用一个不在本机的目标地址检查：WinHTTP 只执行脚本，不会访问这个地址。
+	const remoteUrl = "http://example.com/"
+	if route, err := pacProxyForUrl(base+"/proxy.pac", remoteUrl, 3*time.Second); err != nil || route != httpProxy.Address() {
+		t.Errorf("应返回 PAC 选择的代理：%q，%v", route, err)
 	}
-	if broken := testPacProfile(base+"/broken.pac", testUrl, 3*time.Second); broken.Ok || !strings.Contains(broken.Message, "执行失败") {
+	if route, err := pacProxyForUrl(base+"/direct.pac", remoteUrl, 3*time.Second); err != nil || route != "" {
+		t.Errorf("PAC 选择直连时应返回空：%q，%v", route, err)
+	}
+	if broken := testPacProfile(base+"/broken.pac", remoteUrl, 3*time.Second); broken.Ok || !strings.Contains(broken.Message, "执行失败") {
 		t.Errorf("脚本出错时应提示：%+v", broken)
 	}
 	if socks := testPacProfile(base+"/socks.pac", testUrl, 3*time.Second); !socks.Ok || socks.Route != "" || socks.Millis != 0 || !strings.Contains(socks.Message, "SOCKS") {

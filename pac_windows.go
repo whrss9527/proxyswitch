@@ -30,6 +30,7 @@ const (
 )
 
 // pacProxyForUrl 返回 PAC 脚本为 targetUrl 选择的第一个代理（host:port），选择直连时返回空字符串。
+// targetUrl 是回环地址（127.0.0.1、localhost）时，WinHTTP 不执行脚本，直接按直连处理。
 func pacProxyForUrl(pacUrl, targetUrl string, timeout time.Duration) (string, error) {
 	if err := procWinHttpGetProxyForUrl.Find(); err != nil {
 		return "", errPacUnsupported
