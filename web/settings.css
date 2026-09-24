@@ -111,6 +111,20 @@ body {
   font: 14px/20px var(--font);
   -webkit-font-smoothing: antialiased;
   overflow: hidden;
+  /* 像普通程序一样，界面文字不能选中；地址、日志、错误信息等需要复制的内容除外。 */
+  user-select: none;
+}
+
+input,
+textarea,
+.mono,
+pre,
+code,
+dd,
+.infobar-body,
+.release-notes,
+.toast-text {
+  user-select: text;
 }
 
 button,
@@ -1322,6 +1336,11 @@ kbd.compact {
   font-size: 12px;
 }
 
+.network-values {
+  font-size: 12px;
+  line-height: 18px;
+}
+
 .network-quick {
   display: flex;
   flex-wrap: wrap;
@@ -1695,6 +1714,12 @@ kbd.compact {
   pointer-events: none;
 }
 
+/* 对话框打开时提示移到顶部，免得挡住对话框底部的按钮。 */
+body:has(.overlay) .toasts {
+  top: 16px;
+  bottom: auto;
+}
+
 .toast {
   display: flex;
   align-items: flex-start;
@@ -1822,6 +1847,83 @@ kbd.compact {
 
   .choices {
     grid-template-columns: 1fr;
+  }
+}
+
+/* Windows 高对比度主题：系统只保留少数几种颜色并去掉背景色，
+   开关、配置的颜色标记、选中状态改用系统颜色和边框表示。 */
+@media (forced-colors: active) {
+  .switch,
+  .hero-switch {
+    forced-color-adjust: none;
+    border: 1px solid CanvasText;
+    background: Canvas;
+    box-shadow: none;
+  }
+
+  .switch::after,
+  .hero-switch::after {
+    background: CanvasText;
+    box-shadow: none;
+  }
+
+  .switch[aria-checked="true"],
+  .hero-switch[aria-checked="true"] {
+    border-color: Highlight;
+    background: Highlight;
+  }
+
+  .switch[aria-checked="true"]::after,
+  .hero-switch[aria-checked="true"]::after,
+  .hero-switch.warn::after {
+    background: HighlightText;
+    box-shadow: none;
+  }
+
+  .switch:disabled {
+    border-color: GrayText;
+  }
+
+  .switch:disabled::after {
+    background: GrayText;
+  }
+
+  /* 配置的颜色是用来区分配置的，保留原色并加上边框。 */
+  .profile-marker,
+  .dot,
+  .swatch,
+  .nav-badge {
+    forced-color-adjust: none;
+    border: 1px solid CanvasText;
+  }
+
+  .swatch[aria-pressed="true"] {
+    outline: 2px solid Highlight;
+    outline-offset: 1px;
+  }
+
+  .profile.active,
+  .rule.matched {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+
+  .nav-item[aria-current="page"]::before,
+  .segmented button[aria-pressed="true"]::after,
+  .progress > span {
+    forced-color-adjust: none;
+    background: Highlight;
+  }
+
+  .segmented button[aria-pressed="true"] {
+    border-color: Highlight;
+  }
+
+  .progress,
+  .dialog,
+  .menu,
+  .toast {
+    border: 1px solid CanvasText;
   }
 }
 

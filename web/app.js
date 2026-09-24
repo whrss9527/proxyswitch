@@ -75,6 +75,10 @@ function applyAppearance() {
   const theme = currentTheme(app.config ? app.config.theme : "system");
   if (document.documentElement.dataset.theme !== theme) {
     document.documentElement.dataset.theme = theme;
+    // 独立窗口的标题栏跟随页面背景色；设置里选了固定的深浅色时两条都改成这个颜色。
+    for (const meta of document.querySelectorAll('meta[name="theme-color"]')) {
+      meta.setAttribute("content", theme === "dark" ? "#202020" : "#f3f3f3");
+    }
   }
   applyAccent(app.state.accent, theme);
   const status = app.state.status;
@@ -702,6 +706,15 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && event.target.matches(".page input.input")) {
     event.target.blur();
   }
+});
+
+// 像普通程序一样不弹出浏览器的右键菜单；输入框和选中的文字除外，方便复制粘贴。
+document.addEventListener("contextmenu", (event) => {
+  const selection = window.getSelection();
+  if (event.target.closest("input, textarea") || (selection && !selection.isCollapsed)) {
+    return;
+  }
+  event.preventDefault();
 });
 
 window.addEventListener("hashchange", () => {

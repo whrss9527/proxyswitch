@@ -430,6 +430,16 @@ def run_flows(page, api, info, config_path):
         pass
     check(updater.is_closed(), "更新完成后自动关闭旧的设置窗口")
 
+    # ---------- Windows 高对比度主题 ----------
+    contrast = page.context.browser.new_context(viewport={"width": 1120, "height": 800}, locale="zh-CN", forced_colors="active")
+    high = contrast.new_page()
+    high.goto(info["url"])
+    high.wait_for_selector(".hero-switch")
+    background = high.eval_on_selector(".hero-switch", "element => getComputedStyle(element).backgroundColor")
+    marker = high.eval_on_selector(".profile-marker", "element => getComputedStyle(element).backgroundColor")
+    check(background not in ("rgba(0, 0, 0, 0)", "transparent") and marker not in ("rgba(0, 0, 0, 0)", "transparent"), "高对比度主题下开关和配置颜色仍然可见")
+    contrast.close()
+
     # ---------- 窄窗口与页面失效 ----------
     page.set_viewport_size({"width": 760, "height": 640})
     check(page.locator(".nav-item span").first.is_hidden(), "窗口较窄时导航只显示图标")

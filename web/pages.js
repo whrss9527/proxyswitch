@@ -252,7 +252,7 @@ function networkPage() {
     <div class="network-item">
       <div>
         <div class="caption muted">${adapter.wireless ? "无线网卡" : "网卡"} · ${adapter.name}</div>
-        <div class="mono">${adapter.dns_suffix ? `DNS 后缀 ${adapter.dns_suffix} · ` : ""}网关 ${adapter.gateway}${adapter.gateway_mac ? ` · ${adapter.gateway_mac}` : ""}</div>
+        <div class="network-values">${adapter.dns_suffix ? html`<span class="muted">DNS 后缀</span> <span class="mono">${adapter.dns_suffix}</span><span class="faint"> · </span>` : ""}<span class="muted">网关</span> <span class="mono">${adapter.gateway}</span>${adapter.gateway_mac ? html`<span class="faint"> · </span><span class="mono">${adapter.gateway_mac}</span>` : ""}</div>
       </div>
       <div class="network-quick">
         ${adapter.dns_suffix ? quickButton("dns_suffix", adapter.dns_suffix, "按 DNS 后缀") : ""}
