@@ -35,6 +35,8 @@ def check(condition, message):
 
 # 模拟 GitHub 的最新发布接口：版本 99.0.0，附件是一段假的程序内容和它的 SHA256SUMS.txt。
 FAKE_PROGRAM = b"fake new version " * 4096
+# 最新发布接口被访问的次数，用来确认页面确实检查了更新。
+release_checks = {"count": 0}
 
 
 def start_release_server():
@@ -45,6 +47,7 @@ def start_release_server():
         def do_GET(self):
             base = f"http://127.0.0.1:{self.server.server_port}"
             if self.path == "/releases/latest":
+                release_checks["count"] += 1
                 assets = [{"name": name, "browser_download_url": f"{base}/download/program", "size": len(FAKE_PROGRAM)} for name in ("ProxySwitch.exe", "ProxySwitch-arm64.exe")]
                 assets.append({"name": "SHA256SUMS.txt", "browser_download_url": f"{base}/download/sums", "size": len(sums)})
                 body = json.dumps({"tag_name": "v99.0.0", "html_url": f"{base}/release", "published_at": "2026-10-01T00:00:00Z", "body": "- 新功能一\n- 修复二", "assets": assets}).encode()
@@ -412,15 +415,20 @@ def run_flows(page, api, info, config_path):
     shot(page, "docs_dark")
 
     # ---------- 程序内更新（模拟的发布，开发模式只下载校验、不替换程序） ----------
-    # 用 window.open 打开：与独立设置窗口一样，页面可以自己关闭窗口。
+    # 托盘菜单的「检查更新」：已经打开的设置窗口切到「关于」页并立即检查。
+    api.call("POST", "/api/dev/navigate", {"page": "about", "action": "check-update"})
+    check(wait_until(lambda: page.locator("[data-action=install-update]").count() == 1, timeout=10), "托盘菜单「检查更新」让打开的设置窗口切到关于页并检查")
+    check("99.0.0" in page.inner_text(".infobar") and "新功能一" in page.inner_text(".infobar"), "检查更新显示新版本和更新内容")
+    check(page.locator(".nav-item[data-page=about] .nav-badge").count() == 1, "有新版本时导航的「关于」带提示点")
+    check((api.call("GET", "/api/state").get("update") or {}).get("latest") == "99.0.0", "记下检查发现的新版本，托盘菜单据此显示版本号")
+    # 为「检查更新」新打开的设置窗口也立即检查。用 window.open 打开：与独立设置窗口一样，页面可以自己关闭窗口。
+    checks = release_checks["count"]
     with page.expect_popup() as popup:
         page.evaluate(f"window.open({json.dumps(info['url'] + '#about')})")
     updater = popup.value
     updater.wait_for_selector(".about-hero")
-    updater.click("[data-action=check-update]")
+    check(wait_until(lambda: release_checks["count"] > checks, timeout=10), "为「检查更新」打开的设置窗口立即检查")
     updater.wait_for_selector("[data-action=install-update]", timeout=10000)
-    check("99.0.0" in updater.inner_text(".infobar") and "新功能一" in updater.inner_text(".infobar"), "检查更新显示新版本和更新内容")
-    check(updater.locator(".nav-item[data-page=about] .nav-badge").count() == 1, "有新版本时导航的「关于」带提示点")
     updater.click("[data-action=install-update]")
     check(wait_until(lambda: updater.locator(".progress").count() == 1, timeout=3), "下载时显示进度")
     check(wait_until(lambda: updater.is_closed() or "正在重新启动" in updater.inner_text("#page"), timeout=10), "下载校验完成后提示正在重新启动")

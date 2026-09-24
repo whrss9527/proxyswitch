@@ -243,6 +243,35 @@ func TestSettingsOpenUrlRestricted(t *testing.T) {
 	}
 }
 
+// 托盘菜单的「检查更新」请求设置页切到关于页并检查；检查的结果记下来，托盘菜单据此显示新版本号。
+func TestSettingsUpdateCheck(t *testing.T) {
+	release := &fakeRelease{tag: "v99.0.0", program: []byte("new program"), withSums: true}
+	startFakeRelease(t, release)
+	fixture := newSettingsFixture(t, "")
+
+	fixture.server.ShowPage("about", "check-update")
+	_, data := fixture.request(t, "GET", "/api/state", nil, nil)
+	if navigate := fixture.state(t, data).Navigate; navigate.Page != "about" || navigate.Action != "check-update" || navigate.Serial != 1 {
+		t.Errorf("切换页面的请求不对：%+v", navigate)
+	}
+
+	status, data := fixture.request(t, "GET", "/api/update", nil, nil)
+	if status != http.StatusOK || !strings.Contains(string(data), `"latest":"99.0.0"`) {
+		t.Fatalf("检查更新失败：%d %s", status, data)
+	}
+	_, data = fixture.request(t, "GET", "/api/state", nil, nil)
+	if update := fixture.state(t, data).Update; update == nil || update.Latest != "99.0.0" {
+		t.Errorf("应记下发现的新版本：%+v", update)
+	}
+
+	release.tag = "v" + appVersion
+	fixture.request(t, "GET", "/api/update", nil, nil)
+	_, data = fixture.request(t, "GET", "/api/state", nil, nil)
+	if update := fixture.state(t, data).Update; update != nil {
+		t.Errorf("已经是最新版本时应清除记下的新版本：%+v", update)
+	}
+}
+
 func TestCompareVersions(t *testing.T) {
 	cases := []struct {
 		first, second string
