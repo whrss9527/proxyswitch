@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -19,8 +20,13 @@ import (
 // 检查和下载更新：读取 GitHub 上的最新发布，找到本机架构的 exe，用发布里的 SHA256SUMS.txt 校验。
 // 替换正在运行的程序并重新启动由 Windows 版的 App 完成。
 
-// releaseApiUrl 是变量，测试版本可以用 -ldflags -X 把它指到本地的模拟服务。
-var releaseApiUrl = "https://api.github.com/repos/whrss9527/proxyswitch/releases/latest"
+// 两个地址都是变量，测试版本可以用 -ldflags -X 把它们指到本地的模拟服务。
+var (
+	releaseApiUrl = "https://api.github.com/repos/whrss9527/proxyswitch/releases/latest"
+	// releasePageUrl 是最新发布的网页，GitHub 会把它跳转到 /releases/tag/<标签>。接口拒绝访问时从这里找最新版本：
+	// 接口对未登录的访问每个 IP 每小时只允许 60 次，公司网络、代理服务器的出口 IP 很多人共用，很容易超过。
+	releasePageUrl = repositoryUrl + "/releases/latest"
+)
 
 const (
 	checksumsAssetName  = "SHA256SUMS.txt"
@@ -72,21 +78,40 @@ func updateClient(proxyUrl string, timeout time.Duration) *http.Client {
 	return &http.Client{Transport: transport, Timeout: timeout}
 }
 
+// checkLatestRelease 读取最新发布的信息。GitHub 接口拒绝访问（多半是超过了访问次数限制）时改从发布页查找。
 func checkLatestRelease(proxyUrl string) (UpdateInfo, error) {
 	client := updateClient(proxyUrl, updateCheckTimeout)
+	info, rejected, err := latestReleaseFromApi(client)
+	if !rejected {
+		return info, err
+	}
+	fallback, pageErr := latestReleaseFromPage(client)
+	if pageErr != nil {
+		slog.Warn("从发布页查找最新版本失败", "err", pageErr)
+		return UpdateInfo{}, err
+	}
+	return fallback, nil
+}
+
+// latestReleaseFromApi 用 GitHub 接口读取最新发布。第二个返回值为 true 表示接口返回了错误状态，可以改从发布页查找。
+func latestReleaseFromApi(client *http.Client) (UpdateInfo, bool, error) {
 	request, err := http.NewRequest(http.MethodGet, releaseApiUrl, nil)
 	if err != nil {
-		return UpdateInfo{}, err
+		return UpdateInfo{}, false, err
 	}
 	request.Header.Set("Accept", "application/vnd.github+json")
 	request.Header.Set("User-Agent", appName+"/"+appVersion)
 	response, err := client.Do(request)
 	if err != nil {
-		return UpdateInfo{}, errors.New(friendlyRequestError(err, updateCheckTimeout))
+		return UpdateInfo{}, false, errors.New(friendlyRequestError(err, client.Timeout))
 	}
 	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return UpdateInfo{}, fmt.Errorf("GitHub 返回 HTTP %d", response.StatusCode)
+	switch response.StatusCode {
+	case http.StatusOK:
+	case http.StatusForbidden, http.StatusTooManyRequests:
+		return UpdateInfo{}, true, errors.New("GitHub 暂时限制了当前网络的访问次数，请过一会儿再试")
+	default:
+		return UpdateInfo{}, true, fmt.Errorf("GitHub 返回 HTTP %d", response.StatusCode)
 	}
 	var release struct {
 		TagName     string `json:"tag_name"`
@@ -100,7 +125,7 @@ func checkLatestRelease(proxyUrl string) (UpdateInfo, error) {
 		} `json:"assets"`
 	}
 	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&release); err != nil {
-		return UpdateInfo{}, err
+		return UpdateInfo{}, false, err
 	}
 	latest := strings.TrimPrefix(release.TagName, "v")
 	notes := release.Body
@@ -125,6 +150,43 @@ func checkLatestRelease(proxyUrl string) (UpdateInfo, error) {
 		}
 	}
 	info.CanInstall = info.Newer && info.assetUrl != "" && info.checksumsUrl != ""
+	return info, false, nil
+}
+
+// latestReleaseFromPage 从最新发布的网页跳转到的地址（…/releases/tag/<标签>）得到版本号，附件用固定的下载地址。
+// 发布流程先上传附件再发布，校验文件里有本机程序的校验值就可以在程序里更新。这样得不到更新说明、发布时间和文件大小。
+func latestReleaseFromPage(client *http.Client) (UpdateInfo, error) {
+	request, err := http.NewRequest(http.MethodGet, releasePageUrl, nil)
+	if err != nil {
+		return UpdateInfo{}, err
+	}
+	request.Header.Set("User-Agent", appName+"/"+appVersion)
+	noRedirect := *client
+	noRedirect.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	response, err := noRedirect.Do(request)
+	if err != nil {
+		return UpdateInfo{}, errors.New(friendlyRequestError(err, client.Timeout))
+	}
+	response.Body.Close()
+	location, err := response.Location()
+	if err != nil {
+		return UpdateInfo{}, fmt.Errorf("发布页没有跳转到最新版本（HTTP %d）", response.StatusCode)
+	}
+	repository, tag, found := strings.Cut(location.Path, "/releases/tag/")
+	if !found || tag == "" || strings.Contains(tag, "/") {
+		return UpdateInfo{}, errors.New("发布页跳转到了意外的地址：" + location.String())
+	}
+	latest := strings.TrimPrefix(tag, "v")
+	info := UpdateInfo{Current: appVersion, Latest: latest, Newer: compareVersions(latest, appVersion) > 0, Url: location.String()}
+	if !info.Newer {
+		return info, nil
+	}
+	downloads := (&url.URL{Scheme: location.Scheme, Host: location.Host, Path: repository + "/releases/download/" + tag + "/"}).String()
+	info.assetName = updateAssetName(runtime.GOARCH)
+	info.assetUrl = downloads + info.assetName
+	info.checksumsUrl = downloads + checksumsAssetName
+	_, err = fetchChecksum(client, info.checksumsUrl, info.assetName)
+	info.CanInstall = err == nil
 	return info, nil
 }
 
