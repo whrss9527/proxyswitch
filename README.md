@@ -213,6 +213,10 @@ Go 编写的小工具偶尔会被误报。可以核对 Release 附带的 SHA256S
 **怎么卸载？**
 先在「设置 → 诊断」里点「清除所有代理设置」，在「设置 → 常规」里关闭开机自动启动，然后从托盘菜单退出，删除 exe 和 `%APPDATA%\ProxySwitch` 文件夹（便携模式是 exe 旁边的文件）。设置窗口的浏览器数据在 `%LOCALAPPDATA%\ProxySwitch`，也可以一并删除。
 
+## macOS 版
+
+macOS 的原生菜单栏版本在另一个仓库：[proxyswitch-mac](https://github.com/whrss9527/proxyswitch-mac)。它用 Swift 写成，功能各自演进，不共享代码。
+
 ## 开发
 
 需要 Go 1.23 或更新版本，不需要 CGO。在 Linux / macOS 上交叉编译：
