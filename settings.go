@@ -53,6 +53,9 @@ type SettingsBackend interface {
 	TestNodes(profileId string) (CoreNodes, error)
 	UpdateSubscription(profileId string) error
 	CheckSubscription(address string) (SubscriptionCheck, error)
+	UpdateRules(profileId string) error
+	CheckRules(address string) (RulesCheck, error)
+	SetMode(profileId, mode string) error
 	InstallCore() error
 }
 
@@ -74,8 +77,11 @@ type SettingsState struct {
 	Navigate    NavigateInfo     `json:"navigate"`
 	Update      *UpdateInfo      `json:"update,omitempty"`
 	Installing  *InstallProgress `json:"installing,omitempty"`
-	// Subscriptions 按配置 id 给出订阅的下载情况，Core 是订阅使用的代理内核的情况。
+	// Subscriptions 和 Rules 按配置 id 给出订阅和分流规则的下载情况，RulePresets 是可以直接选的规则配置，
+	// Core 是订阅使用的代理内核的情况。
 	Subscriptions map[string]SubscriptionInfo `json:"subscriptions"`
+	Rules         map[string]RulesInfo        `json:"rules"`
+	RulePresets   []RulePreset                `json:"rule_presets"`
 	Core          CoreInfo                    `json:"core"`
 }
 
@@ -260,6 +266,9 @@ func (settings *SettingsServer) Start() (string, error) {
 	mux.HandleFunc("POST /api/subscriptions/{id}/test", settings.handleTestNodes)
 	mux.HandleFunc("POST /api/subscriptions/{id}/update", settings.handleUpdateSubscription)
 	mux.HandleFunc("POST /api/subscriptions/check", settings.handleCheckSubscription)
+	mux.HandleFunc("POST /api/subscriptions/{id}/rules", settings.handleUpdateRules)
+	mux.HandleFunc("POST /api/subscriptions/{id}/mode", settings.handleSetMode)
+	mux.HandleFunc("POST /api/rules/check", settings.handleCheckRules)
 	mux.HandleFunc("POST /api/core/install", settings.handleInstallCore)
 	if settings.extra != nil {
 		settings.extra(mux)
@@ -654,6 +663,35 @@ func (settings *SettingsServer) handleCheckSubscription(writer http.ResponseWrit
 		return
 	}
 	result, err := settings.backend.CheckSubscription(strings.TrimSpace(body.Url))
+	if err != nil {
+		writeError(writer, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJson(writer, http.StatusOK, result)
+}
+
+func (settings *SettingsServer) handleUpdateRules(writer http.ResponseWriter, request *http.Request) {
+	settings.respondState(writer, request, settings.backend.UpdateRules(request.PathValue("id")))
+}
+
+func (settings *SettingsServer) handleSetMode(writer http.ResponseWriter, request *http.Request) {
+	var body struct {
+		Mode string `json:"mode"`
+	}
+	if !decodeJsonBody(writer, request, &body) {
+		return
+	}
+	settings.respondState(writer, request, settings.backend.SetMode(request.PathValue("id"), body.Mode))
+}
+
+func (settings *SettingsServer) handleCheckRules(writer http.ResponseWriter, request *http.Request) {
+	var body struct {
+		Url string `json:"url"`
+	}
+	if !decodeJsonBody(writer, request, &body) {
+		return
+	}
+	result, err := settings.backend.CheckRules(strings.TrimSpace(body.Url))
 	if err != nil {
 		writeError(writer, http.StatusBadGateway, err.Error())
 		return

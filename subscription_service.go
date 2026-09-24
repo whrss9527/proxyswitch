@@ -27,6 +27,8 @@ type subscriptionService struct {
 
 	mutex      sync.Mutex
 	installing *InstallProgress
+	// rulesMutex 让分流规则同一时间只下载一份：每次下载成功都会删掉其他版本的文件，并发下载会删掉对方刚写的文件。
+	rulesMutex sync.Mutex
 }
 
 func newSubscriptionService(engine *Engine, core *Core, onEngine func(action func()) error) *subscriptionService {
@@ -67,13 +69,31 @@ func (service *subscriptionService) downloadDue() {
 		result, err := fetchSubscription(profile.Subscription, paths)
 		_ = service.onEngine(func() { _ = service.engine.RecordSubscription(profile.Id, profile.Subscription, result, err) })
 	}
+	// 订阅下载后内核可能已经可用，分流规则和地理数据可以经内核下载。
+	if service.onEngine(func() { due, paths = service.engine.RulesDue(), service.engine.DownloadPaths() }) != nil {
+		return
+	}
+	for _, profile := range due {
+		_ = service.updateRules(profile, paths)
+	}
 	geoDue := false
-	// 订阅下载后内核可能已经可用，地理数据可以经内核下载。
 	if service.onEngine(func() { geoDue, paths = service.engine.GeoDue(), service.engine.DownloadPaths() }) != nil || !geoDue {
 		return
 	}
 	err := downloadGeoData(service.engine.paths.Core, proxiesFirst(paths))
 	_ = service.onEngine(func() { service.engine.RecordGeoDownload(err) })
+}
+
+// updateRules 下载订阅配置的分流规则并记下结果。规则一般放在 GitHub 上，先经代理下载。
+func (service *subscriptionService) updateRules(profile Profile, paths []string) error {
+	service.rulesMutex.Lock()
+	defer service.rulesMutex.Unlock()
+	result, err := fetchRules(service.engine.paths.Core, profile.Id, profile.Rules, proxiesFirst(paths))
+	var recordErr error
+	if runErr := service.onEngine(func() { recordErr = service.engine.RecordRules(profile.Id, profile.Rules, result, err) }); runErr != nil {
+		return runErr
+	}
+	return recordErr
 }
 
 // ---------- 设置页上的订阅操作 ----------
@@ -163,6 +183,50 @@ func (service *subscriptionService) UpdateSubscription(profileId string) error {
 	var generation int
 	if runErr := service.onEngine(func() {
 		err = service.engine.RecordSubscription(profile.Id, profile.Subscription, result, downloadErr)
+		generation = service.engine.CoreGeneration()
+	}); runErr != nil {
+		return runErr
+	}
+	if err != nil {
+		return err
+	}
+	return service.core.Wait(generation, coreWaitTimeout)
+}
+
+// UpdateRules 立即重新下载订阅配置的分流规则，等内核用上新规则后返回。
+func (service *subscriptionService) UpdateRules(profileId string) error {
+	profile, paths, err := service.subscriptionProfile(profileId)
+	if err != nil {
+		return err
+	}
+	if profile.Rules == "" {
+		return errors.New("这个配置使用内置的大陆直连规则，不需要下载")
+	}
+	if err := service.updateRules(profile, paths); err != nil {
+		return err
+	}
+	var generation int
+	if err := service.onEngine(func() { generation = service.engine.CoreGeneration() }); err != nil {
+		return err
+	}
+	return service.core.Wait(generation, coreWaitTimeout)
+}
+
+// CheckRules 下载规则配置检查地址是否可用，给编辑配置的对话框显示规则数，不保存。
+func (service *subscriptionService) CheckRules(address string) (RulesCheck, error) {
+	var paths []string
+	if err := service.onEngine(func() { paths = service.engine.DownloadPaths() }); err != nil {
+		return RulesCheck{}, err
+	}
+	return checkRuleConfig(address, proxiesFirst(paths))
+}
+
+// SetMode 切换订阅配置的分流模式，等内核切换后返回。
+func (service *subscriptionService) SetMode(profileId, mode string) error {
+	var err error
+	var generation int
+	if runErr := service.onEngine(func() {
+		err = service.engine.SetMode(profileId, mode)
 		generation = service.engine.CoreGeneration()
 	}); runErr != nil {
 		return runErr

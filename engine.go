@@ -89,6 +89,8 @@ type Engine struct {
 	core            ProxyCore
 	coreGeneration  int
 	downloadsNeeded func()
+	// ruleCache 按配置 id 缓存读过的分流规则，避免每次生成内核的设定都读文件。
+	ruleCache map[string]cachedRules
 
 	config      *Config
 	configError string
@@ -108,7 +110,7 @@ type Engine struct {
 }
 
 func newEngine(system ProxySystem, paths Paths, notify func(Notice)) *Engine {
-	return &Engine{system: system, paths: paths, notify: notify, now: time.Now, state: loadState(paths.State)}
+	return &Engine{system: system, paths: paths, notify: notify, now: time.Now, state: loadState(paths.State), ruleCache: map[string]cachedRules{}}
 }
 
 // LoadConfig 从文件加载配置；出错时继续使用上次成功加载的配置，错误记在 configError。
@@ -206,7 +208,7 @@ func (engine *Engine) ReplaceConfig(config *Config) {
 func (engine *Engine) afterConfigChange() {
 	engine.forgetSubscriptions()
 	engine.syncCore()
-	if len(engine.SubscriptionsDue()) > 0 || engine.GeoDue() {
+	if len(engine.SubscriptionsDue()) > 0 || len(engine.RulesDue()) > 0 || engine.GeoDue() {
 		engine.requestDownloads()
 	}
 }
@@ -907,6 +909,8 @@ func (engine *Engine) settingsState() SettingsState {
 		Defaults:      defaultsInfo(),
 		Palette:       profilePalette,
 		Subscriptions: engine.subscriptionInfos(),
+		Rules:         engine.rulesInfos(),
+		RulePresets:   rulePresets,
 		Core:          engine.coreInfo(),
 	}
 }

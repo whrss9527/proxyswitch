@@ -1,8 +1,10 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -346,5 +348,137 @@ func TestDownloadPaths(t *testing.T) {
 	}
 	if paths := engine.DownloadPaths(); len(paths) != 2 || paths[1] != "http://127.0.0.1:7890" {
 		t.Errorf("应尝试正在使用的代理：%v", paths)
+	}
+}
+
+// saveTestRules 转换一份规则并保存到内核的工作目录，返回交给 RecordRules 的结果。
+func saveTestRules(t *testing.T, engine *Engine, profileId, text string) rulesDownload {
+	t.Helper()
+	config, err := parseRuleConfig([]byte(text))
+	if err != nil {
+		t.Fatal(err)
+	}
+	converted := convertRules(config, nil, profileId+"-rules")
+	revision, err := writeConvertedRules(engine.paths.Core, profileId, converted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rulesDownload{Revision: revision, Count: converted.Count, Final: converted.Final, Geo: converted.Geo}
+}
+
+func TestEngineRules(t *testing.T) {
+	rulesUrl := "https://rules.example.com/sr.conf"
+	fixture, core, downloads := newSubscriptionFixture(t, `{"profiles": [
+		{"name": "机场", "subscription": "https://sub.example.com/api?token=abc", "rules": " `+rulesUrl+` ", "apply_to": ["system"]}
+	]}`)
+	engine := fixture.engine
+	now := time.Date(2026, 9, 24, 9, 0, 0, 0, time.Local)
+	engine.now = func() time.Time { return now }
+	profile := *engine.Config().FindProfile("机场")
+	if profile.Rules != rulesUrl || profile.Mode != "rule" {
+		t.Fatalf("规则地址应去掉空格，模式默认按规则分流：%+v", profile)
+	}
+	installFakeCoreBinary(t, engine)
+	recordTestSubscription(t, engine, &profile)
+	if err := engine.UseProfile("机场"); err != nil {
+		t.Fatal(err)
+	}
+	if due := engine.RulesDue(); len(due) != 1 || due[0].Id != profile.Id {
+		t.Fatalf("新填的规则地址应立即下载：%+v", due)
+	}
+	// 规则还没下载好时先用内置的大陆直连，也需要地理数据。
+	if settings := core.last(); settings.Rules != nil || settings.Mode != "rule" || !engine.GeoDue() {
+		t.Errorf("规则还没下载好时应使用内置的大陆直连：%+v", settings)
+	}
+
+	if err := engine.RecordRules(profile.Id, rulesUrl, rulesDownload{}, errors.New("连接超时")); err == nil {
+		t.Error("下载失败应返回错误")
+	}
+	if info := engine.rulesInfos()[profile.Id]; info.Error != "连接超时" || info.Updated != "" {
+		t.Errorf("应记下失败原因：%+v", info)
+	}
+	if len(engine.RulesDue()) != 0 {
+		t.Error("失败后应等一段时间再试")
+	}
+	now = now.Add(2 * time.Hour)
+	if len(engine.RulesDue()) != 1 {
+		t.Error("失败一段时间后应重试")
+	}
+
+	result := saveTestRules(t, engine, profile.Id, "[Rule]\nDOMAIN-SUFFIX,google.com,Proxy\nDOMAIN-SUFFIX,ads.example.com,Reject\nFINAL,DIRECT\n")
+	result.Sets, result.Skipped = 1, 2
+	before := *downloads
+	if err := engine.RecordRules(profile.Id, rulesUrl, result, nil); err != nil {
+		t.Fatal(err)
+	}
+	settings := core.last()
+	want := []string{"DOMAIN-SUFFIX,google.com,ProxySwitch", "DOMAIN-SUFFIX,ads.example.com,REJECT", "MATCH,DIRECT"}
+	if !reflect.DeepEqual(settings.Rules, want) || settings.Active != profile.Id {
+		t.Errorf("下载好后内核应使用这份规则：%+v", settings)
+	}
+	if info := engine.rulesInfos()[profile.Id]; info.Rules != 2 || info.Sets != 1 || info.Skipped != 2 || info.Final != rulePolicyDirect || info.Error != "" || info.Source != "" || info.Revision != "" {
+		t.Errorf("设置页的规则信息不对：%+v", info)
+	}
+	if len(engine.RulesDue()) != 0 || engine.GeoDue() || *downloads != before {
+		t.Error("规则里没有 GEOIP，不再需要地理数据，也不用再下载")
+	}
+	now = now.Add(25 * time.Hour)
+	if len(engine.RulesDue()) != 1 {
+		t.Error("规则应每天更新一次")
+	}
+
+	// 更新失败时继续使用上次的规则；新版本下载好后换用，删除旧版本。
+	_ = engine.RecordRules(profile.Id, rulesUrl, rulesDownload{}, errors.New("HTTP 502"))
+	if core.last().Rules == nil {
+		t.Error("更新失败时应继续使用上次的规则")
+	}
+	old := result.Revision
+	result = saveTestRules(t, engine, profile.Id, "[Rule]\nGEOIP,CN,DIRECT\nFINAL,PROXY\n")
+	if err := engine.RecordRules(profile.Id, rulesUrl, result, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(core.last().Rules, []string{"GEOIP,CN,DIRECT", "MATCH,ProxySwitch"}) || fileExists(filepath.Join(engine.paths.Core, "rules", profile.Id, old)) {
+		t.Errorf("应换用新版本的规则并删除旧版本：%+v", core.last().Rules)
+	}
+	if !engine.GeoDue() {
+		t.Error("规则里有 GEOIP 时需要地理数据")
+	}
+
+	// 切换到全局代理：不用规则；切回来立即用上已下载的规则。
+	if err := engine.SetMode(profile.Id, "global"); err != nil {
+		t.Fatal(err)
+	}
+	if reloaded, _, _ := loadConfig(engine.paths.Config); reloaded.FindProfile("机场").Mode != "global" || core.last().Mode != "global" || core.last().Rules != nil {
+		t.Errorf("应保存并切换到全局代理：%+v", core.last())
+	}
+	fixture.expectStatus(t, statusOn, "机场")
+	if err := engine.SetMode(profile.Id, "rule"); err != nil || core.last().Rules == nil {
+		t.Errorf("切回按规则分流应立即用上规则：%v %+v", err, core.last())
+	}
+	if engine.SetMode(profile.Id, "fast") == nil || engine.SetMode("不存在", "rule") == nil {
+		t.Error("不认识的模式或配置应报错")
+	}
+
+	// 改了规则地址：旧规则不再使用，重新下载；下载期间地址被改掉的结果忽略。
+	updated := engine.Config().Clone()
+	updated.FindProfile("机场").Rules = "https://rules.example.com/other.conf"
+	if err := engine.SaveConfig(updated); err != nil {
+		t.Fatal(err)
+	}
+	if core.last().Rules != nil || len(engine.RulesDue()) != 1 {
+		t.Errorf("改了规则地址后应重新下载，期间使用内置的大陆直连：%+v", core.last())
+	}
+	if err := engine.RecordRules(profile.Id, rulesUrl, result, nil); err == nil || !strings.Contains(err.Error(), "改了") {
+		t.Errorf("旧地址的下载结果应忽略：%v", err)
+	}
+
+	// 清空规则地址：删除记录和文件。
+	updated = engine.Config().Clone()
+	updated.FindProfile("机场").Rules = ""
+	if err := engine.SaveConfig(updated); err != nil {
+		t.Fatal(err)
+	}
+	if _, found := engine.state.Rules[profile.Id]; found || fileExists(filepath.Join(engine.paths.Core, "rules", profile.Id)) || len(engine.rulesInfos()) != 0 {
+		t.Error("不再使用的规则应删除")
 	}
 }
