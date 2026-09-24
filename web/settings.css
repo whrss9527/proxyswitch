@@ -1430,6 +1430,10 @@ kbd.compact {
   color: var(--warning);
 }
 
+.log.crash {
+  max-height: 240px;
+}
+
 .log .error {
   color: var(--danger);
 }

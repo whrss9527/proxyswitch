@@ -463,6 +463,10 @@ function diagnosticsPage() {
       <button class="button" data-action="copy-diagnostics" ${diagnostics ? "" : raw("disabled")}>${icon("copy")}复制诊断信息</button>
       <button class="button danger" data-action="clear-all">${icon("trash")}清除所有代理设置</button>
     </div>
+    ${diagnostics && diagnostics.last_crash ? html`
+      <div class="section-title">${icon("warning")}最近一次意外退出<span class="caption faint">${diagnostics.last_crash_time}</span></div>
+      <div class="infobar warning" style="margin-bottom:8px">${icon("warning")}<div class="infobar-body">ProxySwitch 在 ${diagnostics.last_crash_time} 出错退出过。反馈问题时请附上「复制诊断信息」的内容，里面包含下面的记录。</div></div>
+      <div class="card"><pre class="log crash">${diagnostics.last_crash}</pre></div>` : ""}
     <div class="section-title">${icon("monitor")}Windows 系统代理</div>
     ${systemCard}
     <div class="section-title">${icon("terminal")}命令行与开发工具</div>

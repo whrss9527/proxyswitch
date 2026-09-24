@@ -334,9 +334,12 @@ def run_flows(page, api, info, config_path):
     check(wait_until(lambda: page.locator(".hero-switch.warn").count() == 0, timeout=8), "代理软件恢复后提示消失")
 
     # ---------- 诊断、关于 ----------
+    with open(os.path.join(info["dir"], "crash-previous.log"), "w", encoding="utf-8") as file:
+        file.write("panic: 测试崩溃\n\ngoroutine 1 [running]:\nmain.main()\n")
     page.click("[data-page=diagnostics]")
     page.wait_for_selector(".kv")
     check(info["http_proxy"] in page.inner_text(".kv >> nth=0"), "诊断页显示系统代理地址")
+    check("测试崩溃" in page.inner_text(".log.crash"), "诊断页显示上次意外退出的记录")
     check("level=" in page.inner_text("#log"), "诊断页显示日志")
     page.click("[data-action=clear-all]")
     page.click(".dialog [data-dialog-result=yes]")

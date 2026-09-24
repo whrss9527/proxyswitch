@@ -338,6 +338,9 @@ function diagnosticsText() {
     "最近日志：",
     (app.log || "").split("\n").slice(-40).join("\n"),
   ];
+  if (diagnostics.last_crash) {
+    lines.push("", `最近一次意外退出（${diagnostics.last_crash_time}）：`, diagnostics.last_crash.split("\n").slice(0, 60).join("\n"));
+  }
   return lines.join("\n");
 }
 

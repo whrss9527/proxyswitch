@@ -89,6 +89,7 @@ func main() {
 	}
 
 	app := newApp(paths)
+	app.crashedLastTime = setupCrashOutput(paths)
 	app.restartedForUpdate = updatedFrom > 0
 	if err := app.run(autostarted, settingsPage); err != nil {
 		slog.Error("启动失败", "err", err)

@@ -141,6 +141,8 @@ type Diagnostics struct {
 	Git           GitStatus         `json:"git"`
 	Npm           map[string]string `json:"npm"`
 	NpmrcPath     string            `json:"npmrc_path"`
+	LastCrash     string            `json:"last_crash,omitempty"`
+	LastCrashTime string            `json:"last_crash_time,omitempty"`
 }
 
 func targetInfos(gitAvailable bool) []TargetInfo {

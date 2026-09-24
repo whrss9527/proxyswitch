@@ -60,6 +60,8 @@ type App struct {
 	restartedForUpdate bool
 	// 自动检查更新发现的新版本，设置页据此提示。
 	latestUpdate *UpdateInfo
+	// 上次运行时程序崩溃过，启动后提示。
+	crashedLastTime bool
 }
 
 func newApp(paths Paths) *App {
@@ -103,6 +105,9 @@ func (app *App) run(autostarted bool, settingsPage string) error {
 
 	if created {
 		app.notify(Notice{Level: noticeInfo, Title: "ProxySwitch 已在托盘运行", Text: "单击托盘图标开关代理，右键打开菜单", Icon: iconStateOff})
+	}
+	if app.crashedLastTime {
+		app.notify(Notice{Level: noticeWarning, Title: "ProxySwitch 上次意外退出了", Text: "详细信息已记录，点这里查看；反馈问题时附上会更快解决", Page: "diagnostics"})
 	}
 	if previous := app.engine.RecordVersion(appVersion); previous != "" {
 		app.notify(Notice{Level: noticeInfo, Title: "ProxySwitch 已更新到 " + appVersion, Text: "原来的版本是 " + previous + "，设置和代理配置都已保留", Icon: iconStateOn, Color: profilePalette[1], Page: "about"})
@@ -790,6 +795,9 @@ func (app *App) Diagnostics() Diagnostics {
 	}
 	if err != nil {
 		diagnostics.SystemError = err.Error()
+	}
+	if crash, when := readPreviousCrash(app.paths.PreviousCrash, time.Now()); crash != "" {
+		diagnostics.LastCrash, diagnostics.LastCrashTime = crash, when.Format("2006-01-02 15:04")
 	}
 	diagnostics.NpmrcPath, _ = npmrcPath()
 	app.gitAvailable.Store(diagnostics.Git.Available)

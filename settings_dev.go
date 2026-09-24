@@ -118,7 +118,7 @@ func (backend *devBackend) Diagnostics() Diagnostics {
 	for key, value := range system.Npm {
 		npm[key] = value
 	}
-	return Diagnostics{
+	diagnostics := Diagnostics{
 		System:       system.System,
 		SystemSource: "内存（开发模式）",
 		Connections:  []string{"局域网"},
@@ -127,6 +127,10 @@ func (backend *devBackend) Diagnostics() Diagnostics {
 		Npm:          npm,
 		NpmrcPath:    "~/.npmrc",
 	}
+	if crash, when := readPreviousCrash(backend.engine.paths.PreviousCrash, time.Now()); crash != "" {
+		diagnostics.LastCrash, diagnostics.LastCrashTime = crash, when.Format("2006-01-02 15:04")
+	}
+	return diagnostics
 }
 
 func (backend *devBackend) LogTail(maxLines int) string {
