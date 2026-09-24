@@ -198,9 +198,11 @@ func buildMenu(items []MenuItem, texts *[]*uint16) uintptr {
 	if menu == 0 {
 		return 0
 	}
+	position := 0
 	for _, item := range items {
 		if item.Separator {
 			procAppendMenuW.Call(menu, mfSeparator, 0, 0)
+			position++
 			continue
 		}
 		flags := uintptr(mfString)
@@ -218,27 +220,41 @@ func buildMenu(items []MenuItem, texts *[]*uint16) uintptr {
 				continue
 			}
 			procAppendMenuW.Call(menu, flags|mfPopup, subMenu, uintptr(unsafe.Pointer(text)))
+			// 子菜单项没有命令 id，按位置设置样式。
+			setMenuItemStyle(menu, uintptr(position), true, item)
+			position++
 			continue
 		}
 		procAppendMenuW.Call(menu, flags, uintptr(item.Id), uintptr(unsafe.Pointer(text)))
-		if item.Radio || item.Bitmap != 0 {
-			info := menuItemInfoW{}
-			info.size = uint32(unsafe.Sizeof(info))
-			if item.Radio {
-				info.mask |= miimFType
-				info.kind = mftRadio
-			}
-			if item.Bitmap != 0 {
-				info.mask |= miimBitmap
-				info.bitmap = item.Bitmap
-			}
-			procSetMenuItemInfoW.Call(menu, uintptr(item.Id), 0, uintptr(unsafe.Pointer(&info)))
-		}
+		setMenuItemStyle(menu, uintptr(item.Id), false, item)
+		position++
 		if item.Default {
 			procSetMenuDefaultItem.Call(menu, uintptr(item.Id), 0)
 		}
 	}
 	return menu
+}
+
+// setMenuItemStyle 设置单选样式和颜色圆点；byPosition 为 true 时 item 是位置，否则是命令 id。
+func setMenuItemStyle(menu, item uintptr, byPosition bool, style MenuItem) {
+	if !style.Radio && style.Bitmap == 0 {
+		return
+	}
+	info := menuItemInfoW{}
+	info.size = uint32(unsafe.Sizeof(info))
+	if style.Radio {
+		info.mask |= miimFType
+		info.kind = mftRadio
+	}
+	if style.Bitmap != 0 {
+		info.mask |= miimBitmap
+		info.bitmap = style.Bitmap
+	}
+	var flag uintptr
+	if byPosition {
+		flag = 1
+	}
+	procSetMenuItemInfoW.Call(menu, item, flag, uintptr(unsafe.Pointer(&info)))
 }
 
 func cursorPosition() point {
