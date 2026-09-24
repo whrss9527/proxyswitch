@@ -47,7 +47,35 @@ func (engine *Engine) geoReady() bool {
 	return true
 }
 
-// coreSettings 按配置和已下载的订阅算出内核应处于的状态。正在使用的订阅是最近使用的配置（如果它是订阅）。
+// cachedRules 是读过的某个版本的分流规则。
+type cachedRules struct {
+	revision string
+	manifest *ruleManifest
+}
+
+// loadedRules 返回订阅配置按当前规则地址下载好的规则；没填规则地址、还没下载好或读不出来时返回 nil。
+func (engine *Engine) loadedRules(profile *Profile) *ruleManifest {
+	if profile.Rules == "" {
+		return nil
+	}
+	info := engine.state.Rules[profile.Id]
+	if info == nil || info.Revision == "" || info.Source != subscriptionSource(profile.Rules) {
+		return nil
+	}
+	if cached, found := engine.ruleCache[profile.Id]; found && cached.revision == info.Revision {
+		return cached.manifest
+	}
+	manifest, err := readRuleManifest(engine.paths.Core, profile.Id, info.Revision)
+	if err != nil {
+		slog.Warn("读取分流规则失败", "profile", profile.Name, "err", err)
+		return nil
+	}
+	engine.ruleCache[profile.Id] = cachedRules{info.Revision, manifest}
+	return manifest
+}
+
+// coreSettings 按配置和已下载的订阅算出内核应处于的状态。正在使用的订阅是最近使用的配置（如果它是订阅），
+// 它按规则分流并且规则已下载好时用它的规则，否则用内置的大陆直连。
 func (engine *Engine) coreSettings() CoreSettings {
 	settings := CoreSettings{Dir: engine.paths.Core, Mode: "rule"}
 	if engine.config == nil {
@@ -68,6 +96,9 @@ func (engine *Engine) coreSettings() CoreSettings {
 	}
 	if selected := engine.selectedProfile(); selected != nil && selected.IsSubscription() && engine.subscriptionLoaded(selected) {
 		settings.Active, settings.Mode = selected.Id, selected.Mode
+		if manifest := engine.loadedRules(selected); manifest != nil && selected.Mode == "rule" {
+			settings.Rules, settings.RuleProviders = manifest.Rules, manifest.Providers
+		}
 	}
 	return settings
 }
@@ -223,7 +254,7 @@ func (engine *Engine) RecordSubscription(profileId, address string, result subsc
 	return nil
 }
 
-// forgetSubscriptions 删除已不在配置里的订阅的记录和文件。
+// forgetSubscriptions 删除已不在配置里的订阅的记录和文件，以及不再使用的分流规则。
 func (engine *Engine) forgetSubscriptions() {
 	changed := false
 	for profileId := range engine.state.Subscriptions {
@@ -233,9 +264,110 @@ func (engine *Engine) forgetSubscriptions() {
 			changed = true
 		}
 	}
+	for profileId := range engine.state.Rules {
+		if profile := engine.config.FindProfileById(profileId); profile == nil || !profile.IsSubscription() || profile.Rules == "" {
+			delete(engine.state.Rules, profileId)
+			delete(engine.ruleCache, profileId)
+			removeRuleRevisions(engine.paths.Core, profileId, "")
+			changed = true
+		}
+	}
 	if changed {
 		engine.saveState()
 	}
+}
+
+// RulesDue 返回该下载分流规则的订阅配置：新填的、地址改了的立即下载；下载成功后每天更新一次，
+// 失败或有规则列表没下载到时隔一段时间重试。按全局代理使用的也下载，切换模式时可以立即用上。
+func (engine *Engine) RulesDue() []Profile {
+	if engine.config == nil {
+		return nil
+	}
+	now := engine.now()
+	var due []Profile
+	for _, profile := range engine.config.Profiles {
+		if profile.IsSubscription() && profile.Rules != "" && engine.rulesDue(&profile, now) {
+			due = append(due, profile)
+		}
+	}
+	return due
+}
+
+func (engine *Engine) rulesDue(profile *Profile, now time.Time) bool {
+	info := engine.state.Rules[profile.Id]
+	if info == nil || info.Source != subscriptionSource(profile.Rules) {
+		return true
+	}
+	attempted, _ := time.Parse(time.RFC3339Nano, info.Attempted)
+	retry := now.Sub(attempted) >= subscriptionRetry || attempted.After(now)
+	if engine.loadedRules(profile) == nil {
+		return retry
+	}
+	updated, _ := time.Parse(time.RFC3339Nano, info.Updated)
+	stale := now.Sub(updated) >= subscriptionInterval || updated.After(now) || info.FailedSets > 0
+	return stale && retry
+}
+
+// RecordRules 记下一次分流规则下载的结果：成功时换用新版本的规则、删除旧版本，内核随之重新加载。
+// address 是下载时的规则地址，下载期间地址被改掉或配置被删除时忽略这次结果。
+func (engine *Engine) RecordRules(profileId, address string, result rulesDownload, downloadErr error) error {
+	if engine.config == nil {
+		return errNoConfig
+	}
+	profile := engine.config.FindProfileById(profileId)
+	if profile == nil || !profile.IsSubscription() || profile.Rules != address {
+		return errors.New("规则地址已经改了")
+	}
+	if engine.state.Rules == nil {
+		engine.state.Rules = map[string]*RulesInfo{}
+	}
+	info := engine.state.Rules[profileId]
+	source := subscriptionSource(address)
+	if info == nil || info.Source != source {
+		info = &RulesInfo{Source: source}
+		engine.state.Rules[profileId] = info
+	}
+	now := engine.now()
+	info.Attempted = now.Format(time.RFC3339Nano)
+	if downloadErr != nil {
+		info.Error = downloadErr.Error()
+		engine.saveState()
+		slog.Warn("下载分流规则失败", "profile", profile.Name, "err", downloadErr)
+		return downloadErr
+	}
+	*info = RulesInfo{
+		Source: source, Updated: now.Format(time.RFC3339Nano), Attempted: info.Attempted, Revision: result.Revision,
+		Rules: result.Count, Sets: result.Sets, FailedSets: result.FailedSets, Skipped: result.Skipped, Final: result.Final, Geo: result.Geo,
+	}
+	engine.saveState()
+	removeRuleRevisions(engine.paths.Core, profileId, result.Revision)
+	slog.Info("分流规则已更新", "profile", profile.Name, "rules", result.Count, "sets", result.Sets, "failed_sets", result.FailedSets, "skipped", result.Skipped)
+	engine.syncCore()
+	if engine.GeoDue() {
+		engine.requestDownloads()
+	}
+	return nil
+}
+
+// SetMode 切换订阅配置的分流模式（rule 按规则分流 / global 全部走节点），保存到配置文件，内核随之切换。
+func (engine *Engine) SetMode(profileId, mode string) error {
+	if engine.config == nil {
+		return errNoConfig
+	}
+	if mode != "rule" && mode != "global" {
+		return fmt.Errorf("分流模式 %q 不认识", mode)
+	}
+	profile := engine.config.FindProfileById(profileId)
+	if profile == nil || !profile.IsSubscription() {
+		return errors.New("没有这个订阅配置")
+	}
+	if profile.Mode == mode {
+		engine.syncCore()
+		return nil
+	}
+	updated := engine.config.Clone()
+	updated.FindProfileById(profileId).Mode = mode
+	return engine.SaveConfig(updated)
 }
 
 // SelectNode 记下订阅配置选中的节点（空表示自动选择），内核随后切换。
@@ -256,14 +388,16 @@ func (engine *Engine) SelectNode(profileId, node string) error {
 	return engine.SaveConfig(updated)
 }
 
-// GeoDue 表示需要下载大陆直连规则用到的地理数据：有使用大陆直连的订阅，数据还没下载，并且离上次尝试已过了重试间隔。
+// GeoDue 表示需要下载地理数据：有按规则分流的订阅，用的是内置的大陆直连（包括自己的规则还没下载好时）或者规则里有 GEOIP，
+// 数据还没下载，并且离上次尝试已过了重试间隔。
 func (engine *Engine) GeoDue() bool {
 	if engine.config == nil {
 		return false
 	}
 	needed := false
-	for _, profile := range engine.config.Profiles {
-		if profile.IsSubscription() && profile.Mode == "rule" {
+	for index := range engine.config.Profiles {
+		profile := &engine.config.Profiles[index]
+		if profile.IsSubscription() && profile.Mode == "rule" && (engine.loadedRules(profile) == nil || engine.state.Rules[profile.Id].Geo) {
 			needed = true
 		}
 	}
@@ -318,6 +452,26 @@ func (engine *Engine) subscriptionInfos() map[string]SubscriptionInfo {
 		if info := engine.state.Subscriptions[profile.Id]; info != nil && info.Source == subscriptionSource(profile.Subscription) {
 			copied = *info
 			copied.Source = ""
+		}
+		infos[profile.Id] = copied
+	}
+	return infos
+}
+
+// rulesInfos 给设置页的分流规则下载情况：只列出填了规则地址的订阅配置，地址改了还没重新下载的显示为空（正在下载）。
+func (engine *Engine) rulesInfos() map[string]RulesInfo {
+	infos := map[string]RulesInfo{}
+	if engine.config == nil {
+		return infos
+	}
+	for _, profile := range engine.config.Profiles {
+		if !profile.IsSubscription() || profile.Rules == "" {
+			continue
+		}
+		var copied RulesInfo
+		if info := engine.state.Rules[profile.Id]; info != nil && info.Source == subscriptionSource(profile.Rules) {
+			copied = *info
+			copied.Source, copied.Revision = "", ""
 		}
 		infos[profile.Id] = copied
 	}

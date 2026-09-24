@@ -127,3 +127,104 @@ func TestDelaysNotice(t *testing.T) {
 		t.Errorf("测速失败时应说明原因：%+v", notice)
 	}
 }
+
+// 分流规则：检查规则地址；下载规则和它引用的规则列表，内核按规则把流量交给节点、拦截或直连；切换到全局代理后全部走节点。
+func TestSettingsRulesFlow(t *testing.T) {
+	binary := requireCoreBinary(t)
+	website := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		_, _ = io.WriteString(writer, "hello")
+	}))
+	defer website.Close()
+	node := startCountingProxy(t, strings.TrimPrefix(website.URL, "http://"))
+	rules := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/rules.conf":
+			fmt.Fprintf(writer, "[General]\nipv6 = false\n[Rule]\nDOMAIN,blocked.%s,Reject\nRULE-SET,http://%s/proxy.list,Proxy\nUSER-AGENT,Telegram*,PROXY\nFINAL,direct\n", coreTestHost, request.Host)
+		case "/proxy.list":
+			// 条数够多，转换成规则集文件，检验内核能读取它。
+			for index := 0; index < ruleSetMinimum; index++ {
+				fmt.Fprintf(writer, "DOMAIN-SUFFIX,site%d.example\n", index)
+			}
+			fmt.Fprintf(writer, "DOMAIN-SUFFIX,%s\n", coreTestHost)
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer rules.Close()
+	subscription := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		_, _ = io.WriteString(writer, nodesYaml(map[string]*countingProxy{"节点 A": node}, "节点 A"))
+	}))
+	defer subscription.Close()
+
+	port, _ := freeLocalPort()
+	configText := fmt.Sprintf(`{"test_url": "http://%s/", "core": {"port": %d}, "profiles": [
+		{"name": "机场", "subscription": %q, "rules": %q, "apply_to": ["system"]}
+	]}`, coreTestHost, port, subscription.URL, rules.URL+"/rules.conf")
+	fixture := newSettingsFixture(t, configText)
+	defer fixture.backend.Close()
+	if err := linkDevCore(fixture.backend.engine.paths, binary); err != nil {
+		t.Fatal(err)
+	}
+	profileId := fixture.backend.engine.Config().Profiles[0].Id
+	base := "/api/subscriptions/" + profileId
+
+	var check RulesCheck
+	status, data := fixture.request(t, "POST", "/api/rules/check", map[string]string{"url": rules.URL + "/rules.conf"}, nil)
+	if err := json.Unmarshal(data, &check); status != http.StatusOK || err != nil || check.Rules != 1 || check.Sets != 1 || check.Skipped != 1 || check.Final != rulePolicyDirect {
+		t.Errorf("检查规则的结果不对：%d %s", status, data)
+	}
+	if status, data := fixture.request(t, "POST", "/api/rules/check", map[string]string{"url": rules.URL + "/missing.conf"}, nil); status != http.StatusBadGateway || !strings.Contains(string(data), "404") {
+		t.Errorf("规则地址不存在时应说明：%d %s", status, data)
+	}
+
+	if status, data := fixture.request(t, "POST", base+"/update", nil, nil); status != http.StatusOK {
+		t.Fatalf("下载订阅失败：%d %s", status, data)
+	}
+	status, data = fixture.request(t, "POST", base+"/rules", nil, nil)
+	if status != http.StatusOK {
+		t.Fatalf("下载规则失败：%d %s", status, data)
+	}
+	state := fixture.state(t, data)
+	if info := state.Rules[profileId]; info.Rules != 2+ruleSetMinimum || info.Sets != 1 || info.FailedSets != 0 || info.Skipped != 1 || info.Final != rulePolicyDirect || info.Error != "" || info.Updated == "" {
+		t.Errorf("规则信息不对：%+v", info)
+	}
+	if len(state.RulePresets) == 0 || !strings.HasSuffix(state.RulePresets[0].Url, ".conf") {
+		t.Errorf("应提供可以直接选的规则：%+v", state.RulePresets)
+	}
+	if status, data := fixture.request(t, "POST", "/api/on", nil, nil); status != http.StatusOK {
+		t.Fatalf("开启失败：%d %s", status, data)
+	}
+
+	through := func(host string) (bool, string) {
+		t.Helper()
+		before := node.connections.Load()
+		status, body, err := requestThroughCore(port, host)
+		return node.connections.Load() != before, fmt.Sprintf("%d %s %v", status, body, err)
+	}
+	if viaNode, result := through(coreTestHost); !viaNode || result != "200 hello <nil>" {
+		t.Errorf("规则列表里的网站应经过节点：%s", result)
+	}
+	if viaNode, result := through("blocked." + coreTestHost); viaNode || strings.Contains(result, "hello") {
+		t.Errorf("被拦截的网站不应经过节点：%s", result)
+	}
+	if viaNode, _ := through("other.invalid"); viaNode {
+		t.Error("其余网站按 FINAL 直连，不应经过节点")
+	}
+
+	status, data = fixture.request(t, "POST", base+"/mode", map[string]string{"mode": "global"}, nil)
+	if state := fixture.state(t, data); status != http.StatusOK || state.Config.Profiles[0].Mode != "global" {
+		t.Fatalf("切换到全局代理失败：%d %s", status, data)
+	}
+	if viaNode, result := through("other.invalid"); !viaNode || result != "200 hello <nil>" {
+		t.Errorf("全局代理时所有网站都应经过节点：%s", result)
+	}
+	if status, _ := fixture.request(t, "POST", base+"/mode", map[string]string{"mode": "rule"}, nil); status != http.StatusOK {
+		t.Fatal("切回按规则分流失败")
+	}
+	if viaNode, _ := through("blocked." + coreTestHost); viaNode {
+		t.Error("切回按规则分流后应重新拦截")
+	}
+	if status, data := fixture.request(t, "POST", base+"/mode", map[string]string{"mode": "fast"}, nil); status == http.StatusOK || !strings.Contains(string(data), "fast") {
+		t.Errorf("不认识的模式应报错：%d %s", status, data)
+	}
+}

@@ -37,6 +37,7 @@ type menuChoice struct {
 	profileId string
 	node      string
 	action    string
+	mode      string
 }
 
 const (
@@ -457,11 +458,12 @@ func (app *App) menuItems() []MenuItem {
 	return items
 }
 
-// subscriptionMenu 是订阅配置的子菜单：没开启时可以直接开启；选择节点（自动选择或某个节点，显示最近测得的延迟）；测速、更新订阅。
+// subscriptionMenu 是订阅配置的子菜单：没开启时可以直接开启；选择节点（自动选择或某个节点，显示最近测得的延迟）；
+// 切换按规则分流和全局代理；测速、更新订阅和分流规则。
 func (app *App) subscriptionMenu(profile *Profile, active bool) []MenuItem {
 	var items []MenuItem
 	if !active {
-		items = append(items, app.menuChoice(MenuItem{Text: "使用这个配置"}, menuChoice{profile.Id, "", "use"}), MenuItem{Separator: true})
+		items = append(items, app.menuChoice(MenuItem{Text: "使用这个配置"}, menuChoice{profileId: profile.Id, action: "use"}), MenuItem{Separator: true})
 	}
 	if err := app.engine.subscriptionProblem(profile); err != nil {
 		items = append(items, MenuItem{Text: escapeMenuText(truncateRunes(err.Error(), 40)), Disabled: true})
@@ -472,7 +474,7 @@ func (app *App) subscriptionMenu(profile *Profile, active bool) []MenuItem {
 		if nodes.Selected == "" && nodes.Current != "" {
 			auto = "自动选择：" + escapeMenuText(nodes.Current)
 		}
-		items = append(items, app.menuChoice(MenuItem{Text: auto, Radio: true, Checked: nodes.Selected == ""}, menuChoice{profile.Id, "", "select"}))
+		items = append(items, app.menuChoice(MenuItem{Text: auto, Radio: true, Checked: nodes.Selected == ""}, menuChoice{profileId: profile.Id, action: "select"}))
 		for _, node := range nodes.Nodes {
 			text := escapeMenuText(node.Name)
 			switch {
@@ -481,12 +483,19 @@ func (app *App) subscriptionMenu(profile *Profile, active bool) []MenuItem {
 			case node.Tested:
 				text += fmt.Sprintf("\t%d ms", max(1, node.Delay))
 			}
-			items = append(items, app.menuChoice(MenuItem{Text: text, Radio: true, Checked: nodes.Selected == node.Name}, menuChoice{profile.Id, node.Name, "select"}))
+			items = append(items, app.menuChoice(MenuItem{Text: text, Radio: true, Checked: nodes.Selected == node.Name}, menuChoice{profileId: profile.Id, node: node.Name, action: "select"}))
 		}
 	}
-	return append(items, MenuItem{Separator: true},
-		app.menuChoice(MenuItem{Text: "全部测速"}, menuChoice{profile.Id, "", "test"}),
-		app.menuChoice(MenuItem{Text: "更新订阅"}, menuChoice{profile.Id, "", "update"}))
+	items = append(items, MenuItem{Separator: true},
+		app.menuChoice(MenuItem{Text: "按规则分流（" + escapeMenuText(rulesLabel(profile)) + "）", Radio: true, Checked: profile.Mode == "rule"}, menuChoice{profileId: profile.Id, action: "mode", mode: "rule"}),
+		app.menuChoice(MenuItem{Text: "全局代理", Radio: true, Checked: profile.Mode == "global"}, menuChoice{profileId: profile.Id, action: "mode", mode: "global"}),
+		MenuItem{Separator: true},
+		app.menuChoice(MenuItem{Text: "全部测速"}, menuChoice{profileId: profile.Id, action: "test"}),
+		app.menuChoice(MenuItem{Text: "更新订阅"}, menuChoice{profileId: profile.Id, action: "update"}))
+	if profile.Rules != "" {
+		items = append(items, app.menuChoice(MenuItem{Text: "更新分流规则"}, menuChoice{profileId: profile.Id, action: "rules"}))
+	}
+	return items
 }
 
 // menuChoice 给订阅子菜单的一项分配编号并记下它的含义。
@@ -496,7 +505,7 @@ func (app *App) menuChoice(item MenuItem, choice menuChoice) MenuItem {
 	return item
 }
 
-// runMenuChoice 执行订阅子菜单里的一项。选择节点时配置还没开启就顺便开启；测速和更新订阅在后台进行，完成后通知。
+// runMenuChoice 执行订阅子菜单里的一项。选择节点时配置还没开启就顺便开启；测速、更新订阅和分流规则在后台进行，完成后通知。
 func (app *App) runMenuChoice(choice menuChoice) {
 	config := app.engine.Config()
 	if config == nil {
@@ -530,6 +539,29 @@ func (app *App) runMenuChoice(choice menuChoice) {
 			delays, err := app.core.TestDelays(profileCopy.Id, testUrl)
 			notice := delaysNotice(profileCopy, delays, err)
 			_ = app.tray.RunOnUi(func() { app.notify(notice) })
+		}()
+	case "mode":
+		if err := app.engine.SetMode(profile.Id, choice.mode); err != nil {
+			app.notify(Notice{Level: noticeError, Title: "没有切换成功", Text: err.Error()})
+			return
+		}
+		text := "所有网站都经过节点"
+		if choice.mode == "rule" {
+			text = "分流规则：" + rulesLabel(&profileCopy)
+		}
+		title := map[string]string{"rule": "已切换到按规则分流", "global": "已切换到全局代理"}[choice.mode]
+		app.notify(Notice{Level: noticeInfo, Title: title, Text: profileCopy.Name + " · " + text, Icon: iconStateOn, Color: profileCopy.Color})
+	case "rules":
+		go func() {
+			err := app.UpdateRules(profileCopy.Id)
+			_ = app.tray.RunOnUi(func() {
+				if err != nil {
+					app.notify(Notice{Level: noticeWarning, Title: "分流规则没有更新成功", Text: profileCopy.Name + "\n" + err.Error(), Page: "proxies"})
+					return
+				}
+				info := app.engine.rulesInfos()[profileCopy.Id]
+				app.notify(Notice{Level: noticeInfo, Title: "分流规则已更新", Text: fmt.Sprintf("%s · 共 %d 条规则", rulesLabel(&profileCopy), info.Rules), Icon: iconStateOn, Color: profileCopy.Color})
+			})
 		}()
 	case "update":
 		go func() {
