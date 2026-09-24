@@ -145,7 +145,8 @@ func (engine *Engine) subscriptionDue(profile *Profile, now time.Time) bool {
 	return (now.Sub(updated) >= subscriptionInterval || updated.After(now)) && retry
 }
 
-// DownloadPaths 是下载订阅和地理数据时依次尝试的网络路径：直连，然后是正在使用的代理，最后是内核。
+// DownloadPaths 是下载订阅、内核和地理数据时依次尝试的网络路径：直连，然后是正在使用的代理，最后是内核。
+// 系统代理是其他程序设置的（例如从 Clash 换过来时它还开着）也经它试一次，PAC 除外。
 func (engine *Engine) DownloadPaths() []string {
 	paths := []string{""}
 	add := func(proxyUrl string) {
@@ -153,13 +154,27 @@ func (engine *Engine) DownloadPaths() []string {
 			paths = append(paths, proxyUrl)
 		}
 	}
-	if status := engine.Status(); status.State == statusOn && status.Profile != nil && status.Profile.Server != "" {
+	switch status := engine.Status(); {
+	case status.State == statusOn && status.Profile != nil && status.Profile.Server != "":
 		add(serverToUrl(status.Profile.Server))
+	case status.State == statusExternal && status.System.ProxyEnabled && !status.System.PacEnabled:
+		add(serverToUrl(status.System.Server))
 	}
 	if engine.config != nil && len(engine.coreSettings().Subscriptions) > 0 {
 		add("http://" + coreServer(engine.config.Core.Port))
 	}
 	return paths
+}
+
+// proxiesFirst 把直连挪到最后：内核和地理数据放在 GitHub 等国外网站上，国内直连常常很慢，有代理时先经代理下载。
+func proxiesFirst(paths []string) []string {
+	var ordered []string
+	for _, path := range paths {
+		if path != "" {
+			ordered = append(ordered, path)
+		}
+	}
+	return append(ordered, "")
 }
 
 // RecordSubscription 记下一次订阅下载的结果：成功时写入订阅文件，让内核重新读取。address 是下载时的订阅地址，

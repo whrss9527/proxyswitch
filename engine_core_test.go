@@ -320,3 +320,31 @@ func TestEngineGeoData(t *testing.T) {
 		t.Error("只用全局模式时不需要地理数据")
 	}
 }
+
+// 下载路径：从 Clash 等软件换过来时，它设置的系统代理也要用上；内核和地理数据先经代理下载。
+func TestDownloadPaths(t *testing.T) {
+	fixture, _, _ := newSubscriptionFixture(t, subscriptionTestConfig)
+	engine := fixture.engine
+	if paths := engine.DownloadPaths(); len(paths) != 1 || paths[0] != "" {
+		t.Errorf("代理关闭时只能直连：%v", paths)
+	}
+	fixture.system.System = SystemProxyState{ProxyEnabled: true, Server: "http=127.0.0.1:7897;https=127.0.0.1:7897"}
+	fixture.expectStatus(t, statusExternal, "")
+	if paths := engine.DownloadPaths(); len(paths) != 2 || paths[1] != "http://127.0.0.1:7897" {
+		t.Errorf("其他程序设置的系统代理也应尝试：%v", paths)
+	}
+	if paths := proxiesFirst(engine.DownloadPaths()); len(paths) != 2 || paths[0] != "http://127.0.0.1:7897" || paths[1] != "" {
+		t.Errorf("下载内核时应先经代理：%v", paths)
+	}
+	fixture.system.System = SystemProxyState{PacEnabled: true, Pac: "http://example.com/proxy.pac"}
+	if paths := engine.DownloadPaths(); len(paths) != 1 {
+		t.Errorf("PAC 无法直接使用，只能直连：%v", paths)
+	}
+	fixture.system.System = SystemProxyState{}
+	if err := engine.UseProfile("本机"); err != nil {
+		t.Fatal(err)
+	}
+	if paths := engine.DownloadPaths(); len(paths) != 2 || paths[1] != "http://127.0.0.1:7890" {
+		t.Errorf("应尝试正在使用的代理：%v", paths)
+	}
+}

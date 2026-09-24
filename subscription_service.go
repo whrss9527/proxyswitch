@@ -72,7 +72,7 @@ func (service *subscriptionService) downloadDue() {
 	if service.onEngine(func() { geoDue, paths = service.engine.GeoDue(), service.engine.DownloadPaths() }) != nil || !geoDue {
 		return
 	}
-	err := downloadGeoData(service.engine.paths.Core, paths)
+	err := downloadGeoData(service.engine.paths.Core, proxiesFirst(paths))
 	_ = service.onEngine(func() { service.engine.RecordGeoDownload(err) })
 }
 
@@ -204,7 +204,7 @@ func (service *subscriptionService) InstallCore() error {
 	if err := service.onEngine(func() { paths = service.engine.DownloadPaths() }); err != nil {
 		return err
 	}
-	err := installCore(service.engine.paths.Core, paths, func(received, total int64) {
+	err := installCore(service.engine.paths.Core, proxiesFirst(paths), func(received, total int64) {
 		service.mutex.Lock()
 		service.installing = &InstallProgress{Received: received, Total: total}
 		service.mutex.Unlock()

@@ -2,11 +2,13 @@ package main
 
 import (
 	"bufio"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -277,6 +279,46 @@ func TestCoreWithMihomo(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, coreConfigName)); err != nil {
 		t.Errorf("应在工作目录写入内核配置：%v", err)
+	}
+}
+
+// 很多机场默认返回 base64 编码的节点链接（没有识别出 Clash 时），内核也要能读出节点和名字。
+func TestCoreWithLinkSubscription(t *testing.T) {
+	binary := requireCoreBinary(t)
+	website := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		_, _ = io.WriteString(writer, "hello")
+	}))
+	defer website.Close()
+	target := strings.TrimPrefix(website.URL, "http://")
+	nodes := map[string]*countingProxy{"香港 01": startCountingProxy(t, target), "日本 02": startCountingProxy(t, target)}
+	var links strings.Builder
+	for _, name := range []string{"香港 01", "日本 02"} {
+		fmt.Fprintf(&links, "http://127.0.0.1:%d#%s\n", nodes[name].Port(), url.PathEscape(name))
+	}
+	content := []byte(base64.StdEncoding.EncodeToString([]byte(links.String())))
+	if format, count, err := inspectSubscription(content); format != "links" || count != 2 || err != nil {
+		t.Fatalf("应识别为节点链接：%s %d %v", format, count, err)
+	}
+	dir := t.TempDir()
+	if err := writeSubscriptionFile(dir, "pa", content); err != nil {
+		t.Fatal(err)
+	}
+	core := newCore(nil)
+	defer core.Stop()
+	port, _ := freeLocalPort()
+	settings := CoreSettings{
+		Binary: binary, Dir: dir, Port: port, TestUrl: "http://" + coreTestHost + "/", Active: "pa", Mode: "global",
+		Subscriptions: []CoreSubscription{{Id: "pa", Node: "日本 02", Revision: "1"}},
+	}
+	if err := core.Wait(core.Sync(settings), 30*time.Second); err != nil {
+		t.Fatalf("内核没能启动：%v", err)
+	}
+	if list, err := core.Nodes("pa"); err != nil || len(list.Nodes) != 2 || list.Nodes[0].Name != "香港 01" || list.Current != "日本 02" {
+		t.Fatalf("节点列表不对：%+v %v", list, err)
+	}
+	before := nodes["日本 02"].connections.Load()
+	if body := getThroughCore(t, port); body != "hello" || nodes["日本 02"].connections.Load() == before {
+		t.Errorf("流量应经过选中的节点：%q", body)
 	}
 }
 
