@@ -48,6 +48,12 @@ type SettingsBackend interface {
 	ActiveProxyUrl() string
 	RememberUpdate(info UpdateInfo)
 	InstallUpdate(progress func(received, total int64)) error
+	SubscriptionNodes(profileId string) (CoreNodes, error)
+	SelectNode(profileId, node string) (CoreNodes, error)
+	TestNodes(profileId string) (CoreNodes, error)
+	UpdateSubscription(profileId string) error
+	CheckSubscription(address string) (SubscriptionCheck, error)
+	InstallCore() error
 }
 
 type SettingsState struct {
@@ -68,6 +74,25 @@ type SettingsState struct {
 	Navigate    NavigateInfo     `json:"navigate"`
 	Update      *UpdateInfo      `json:"update,omitempty"`
 	Installing  *InstallProgress `json:"installing,omitempty"`
+	// Subscriptions 按配置 id 给出订阅的下载情况，Core 是订阅使用的代理内核的情况。
+	Subscriptions map[string]SubscriptionInfo `json:"subscriptions"`
+	Core          CoreInfo                    `json:"core"`
+}
+
+// CoreInfo 是订阅使用的代理内核的情况。Custom 表示使用配置里指定的内核；InstalledVersion 是下载的内核的版本，
+// Version 是这个版本的 ProxySwitch 使用的版本；Downloadable 表示可以在程序里下载内核。
+type CoreInfo struct {
+	Installed        bool             `json:"installed"`
+	Path             string           `json:"path"`
+	Custom           bool             `json:"custom"`
+	Version          string           `json:"version"`
+	InstalledVersion string           `json:"installed_version,omitempty"`
+	Port             int              `json:"port"`
+	Running          bool             `json:"running"`
+	Error            string           `json:"error,omitempty"`
+	GeoReady         bool             `json:"geo_ready"`
+	Downloadable     bool             `json:"downloadable"`
+	Installing       *InstallProgress `json:"installing,omitempty"`
 }
 
 // NavigateInfo 是让已打开的设置页切换页面的请求，Serial 每次加一，页面发现变化时切到 Page；
@@ -229,6 +254,12 @@ func (settings *SettingsServer) Start() (string, error) {
 	mux.HandleFunc("POST /api/open-url", settings.handleOpenUrl)
 	mux.HandleFunc("GET /api/update", settings.handleUpdate)
 	mux.HandleFunc("POST /api/update/install", settings.handleInstallUpdate)
+	mux.HandleFunc("GET /api/subscriptions/{id}/nodes", settings.handleNodes)
+	mux.HandleFunc("POST /api/subscriptions/{id}/select", settings.handleSelectNode)
+	mux.HandleFunc("POST /api/subscriptions/{id}/test", settings.handleTestNodes)
+	mux.HandleFunc("POST /api/subscriptions/{id}/update", settings.handleUpdateSubscription)
+	mux.HandleFunc("POST /api/subscriptions/check", settings.handleCheckSubscription)
+	mux.HandleFunc("POST /api/core/install", settings.handleInstallCore)
 	if settings.extra != nil {
 		settings.extra(mux)
 	}
@@ -575,6 +606,63 @@ func (settings *SettingsServer) handleInstallUpdate(writer http.ResponseWriter, 
 		return
 	}
 	writeJson(writer, http.StatusOK, map[string]bool{"restarting": true})
+}
+
+// ---------- 订阅 ----------
+
+// respondNodes 返回节点列表；内核没有运行等错误用 409 返回原因，页面直接显示。
+func respondNodes(writer http.ResponseWriter, request *http.Request, nodes CoreNodes, err error) {
+	if err != nil {
+		slog.WarnContext(request.Context(), "订阅操作失败", "path", request.URL.Path, "err", err)
+		writeError(writer, http.StatusConflict, err.Error())
+		return
+	}
+	writeJson(writer, http.StatusOK, nodes)
+}
+
+func (settings *SettingsServer) handleNodes(writer http.ResponseWriter, request *http.Request) {
+	nodes, err := settings.backend.SubscriptionNodes(request.PathValue("id"))
+	respondNodes(writer, request, nodes, err)
+}
+
+func (settings *SettingsServer) handleSelectNode(writer http.ResponseWriter, request *http.Request) {
+	var body struct {
+		Node string `json:"node"`
+	}
+	if !decodeJsonBody(writer, request, &body) {
+		return
+	}
+	nodes, err := settings.backend.SelectNode(request.PathValue("id"), body.Node)
+	respondNodes(writer, request, nodes, err)
+}
+
+func (settings *SettingsServer) handleTestNodes(writer http.ResponseWriter, request *http.Request) {
+	nodes, err := settings.backend.TestNodes(request.PathValue("id"))
+	respondNodes(writer, request, nodes, err)
+}
+
+func (settings *SettingsServer) handleUpdateSubscription(writer http.ResponseWriter, request *http.Request) {
+	settings.respondState(writer, request, settings.backend.UpdateSubscription(request.PathValue("id")))
+}
+
+func (settings *SettingsServer) handleCheckSubscription(writer http.ResponseWriter, request *http.Request) {
+	var body struct {
+		Url string `json:"url"`
+	}
+	if !decodeJsonBody(writer, request, &body) {
+		return
+	}
+	result, err := settings.backend.CheckSubscription(strings.TrimSpace(body.Url))
+	if err != nil {
+		writeError(writer, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJson(writer, http.StatusOK, result)
+}
+
+// handleInstallCore 下载内核，进度经 /api/state 的 core.installing 提供。
+func (settings *SettingsServer) handleInstallCore(writer http.ResponseWriter, request *http.Request) {
+	settings.respondState(writer, request, settings.backend.InstallCore())
 }
 
 // previewChanges 描述开启这套配置后会改动哪些设置，给编辑页的“将会进行的更改”用。

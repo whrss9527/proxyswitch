@@ -40,6 +40,8 @@ const (
 )
 
 type App struct {
+	// 订阅的下载和设置页上的订阅操作；托盘程序启动后才创建，命令行模式没有。
+	*subscriptionService
 	paths    Paths
 	engine   *Engine
 	tray     *Tray
@@ -84,6 +86,10 @@ func (app *App) run(autostarted bool, settingsPage string) error {
 		return err
 	}
 	app.tray = tray
+	// 内核和订阅下载会从后台通知 UI 线程，所以在托盘创建之后再启动；配置已经加载，立即把状态交给内核。
+	app.subscriptionService = newSubscriptionService(app.engine, newCore(app.onCoreError), app.tray.RunOnUi)
+	app.engine.syncCore()
+	go app.subscriptionService.Run()
 	app.applyUiConfig()
 	status := app.engine.Status()
 	if err := tray.Show(app.iconFor(status), app.tooltipFor(status)); err != nil {
@@ -632,6 +638,9 @@ func (app *App) onEndSession() {
 
 func (app *App) onDestroy() {
 	app.handleExit()
+	if app.subscriptionService != nil {
+		app.core.Kill()
+	}
 	app.settings.Stop()
 	app.clearIcons()
 	for key, bitmap := range app.menuBitmaps {
@@ -641,7 +650,8 @@ func (app *App) onDestroy() {
 	slog.Info("ProxySwitch 已退出")
 }
 
-// handleExit 在退出或注销时按 disable_on_exit 关闭代理，只执行一次。
+// handleExit 在退出或注销时按 disable_on_exit 关闭代理，只执行一次。正在使用订阅时，内核随程序退出，
+// 不管 disable_on_exit 都先关闭代理，下次启动后重新开启。
 func (app *App) handleExit() {
 	if app.exitHandled {
 		return
@@ -650,6 +660,17 @@ func (app *App) handleExit() {
 	if config := app.engine.Config(); config != nil && config.DisableOnExit && app.engine.Status().State == statusOn {
 		_ = app.engine.TurnOff()
 	}
+	app.engine.PrepareExit()
+}
+
+// onCoreError 在内核启动失败或意外退出时提示（在内核的后台 goroutine 里调用）。还没下载内核是正常情况，设置页会提示下载。
+func (app *App) onCoreError(message string) {
+	if message == errCoreMissing.Error() {
+		return
+	}
+	_ = app.tray.RunOnUi(func() {
+		app.notify(Notice{Level: noticeError, Title: "代理内核出错", Text: message, Page: "proxies"})
+	})
 }
 
 func (app *App) clearIcons() {
@@ -745,6 +766,9 @@ func (app *App) settingsState() SettingsState {
 	state.Accent = systemAccentColor()
 	state.Targets = targetInfos(app.gitAvailable.Load())
 	state.Update = app.latestUpdate
+	if app.subscriptionService != nil {
+		app.fillCoreInfo(&state.Core)
+	}
 	return state
 }
 

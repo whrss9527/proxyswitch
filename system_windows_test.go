@@ -35,6 +35,7 @@ func TestStructSizes(t *testing.T) {
 		{"MSG", unsafe.Sizeof(message{}), 48},
 		{"WINHTTP_AUTOPROXY_OPTIONS", unsafe.Sizeof(winHttpAutoProxyOptions{}), 32},
 		{"WINHTTP_PROXY_INFO", unsafe.Sizeof(winHttpProxyInfo{}), 24},
+		{"JOBOBJECT_EXTENDED_LIMIT_INFORMATION", unsafe.Sizeof(jobObjectExtendedLimitInformation{}), 144},
 	}
 	for _, size := range sizes {
 		if size.actual != size.wanted {

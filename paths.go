@@ -20,6 +20,7 @@ const (
 // Paths 是配置、状态、日志文件的位置。
 // exe 同目录下存在 config.jsonc 时为便携模式，所有文件放在 exe 目录；否则放在 %APPDATA%\ProxySwitch。
 // Crash 记录程序崩溃时的输出，PreviousCrash 是上次运行留下的崩溃记录。
+// Core 是代理内核的工作目录：内核程序、它的配置、订阅文件和地理数据。
 type Paths struct {
 	Dir           string
 	Config        string
@@ -27,6 +28,7 @@ type Paths struct {
 	Log           string
 	Crash         string
 	PreviousCrash string
+	Core          string
 	Portable      bool
 }
 
@@ -62,6 +64,7 @@ func pathsIn(directory string, portable bool) Paths {
 		Log:           filepath.Join(directory, logFileName),
 		Crash:         filepath.Join(directory, crashFileName),
 		PreviousCrash: filepath.Join(directory, "crash-previous.log"),
+		Core:          filepath.Join(directory, "core"),
 		Portable:      portable,
 	}
 }

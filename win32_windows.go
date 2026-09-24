@@ -42,6 +42,9 @@ var (
 	procGlobalFree                 = kernel32.NewProc("GlobalFree")
 	procLoadLibraryExW             = kernel32.NewProc("LoadLibraryExW")
 	procGetProcAddress             = kernel32.NewProc("GetProcAddress")
+	procCreateJobObjectW           = kernel32.NewProc("CreateJobObjectW")
+	procSetInformationJobObject    = kernel32.NewProc("SetInformationJobObject")
+	procAssignProcessToJobObject   = kernel32.NewProc("AssignProcessToJobObject")
 
 	procRegisterClassExW         = user32.NewProc("RegisterClassExW")
 	procCreateWindowExW          = user32.NewProc("CreateWindowExW")
@@ -222,7 +225,12 @@ const (
 	regDword    = 4
 
 	processQueryLimitedInformation = 0x1000
+	processSetQuota                = 0x0100
+	processTerminate               = 0x0001
 	synchronize                    = 0x00100000
+
+	jobObjectExtendedLimitInformationClass = 9
+	jobObjectLimitKillOnJobClose           = 0x2000
 
 	gmemMoveable  = 0x0002
 	cfUnicodeText = 13
@@ -336,6 +344,24 @@ type winHttpProxyInfo struct {
 	accessType uint32
 	proxy      *uint16
 	bypass     *uint16
+}
+
+// JOBOBJECT_EXTENDED_LIMIT_INFORMATION，含 JOBOBJECT_BASIC_LIMIT_INFORMATION 和 IO_COUNTERS。
+type jobObjectExtendedLimitInformation struct {
+	perProcessUserTimeLimit int64
+	perJobUserTimeLimit     int64
+	limitFlags              uint32
+	minimumWorkingSetSize   uintptr
+	maximumWorkingSetSize   uintptr
+	activeProcessLimit      uint32
+	affinity                uintptr
+	priorityClass           uint32
+	schedulingClass         uint32
+	ioCounters              [6]uint64
+	processMemoryLimit      uintptr
+	jobMemoryLimit          uintptr
+	peakProcessMemoryUsed   uintptr
+	peakJobMemoryUsed       uintptr
 }
 
 type osVersionInfo struct {
