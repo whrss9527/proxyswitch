@@ -57,21 +57,39 @@ jobs:
         run: swift test
       - name: 打包 .app（本机架构）
         run: VERSION=0.0.0 ARCHS="" Scripts/build-app.sh
-      - name: 冒烟启动
+      - name: 冒烟启动并截图
         run: |
+          support="$HOME/Library/Application Support/ProxySwitch"
+          mkdir -p "$support" screenshots
+          # 预置两套配置，面板里有内容可看。
+          cat > "$support/config.json" <<'JSON'
+          {"profiles":[{"id":"6D2F2A1E-0000-4000-8000-000000000001","name":"Clash","color":"#16a34a","kind":"http","host":"127.0.0.1","port":7890},
+                       {"id":"6D2F2A1E-0000-4000-8000-000000000002","name":"公司代理","color":"#2563eb","kind":"http","host":"proxy.corp.example","port":3128},
+                       {"id":"6D2F2A1E-0000-4000-8000-000000000003","name":"SOCKS 隧道","color":"#7c3aed","kind":"socks5","host":"127.0.0.1","port":1080}]}
+          JSON
           open dist/ProxySwitch.app
-          sleep 10
+          sleep 8
           if ! pgrep -x ProxySwitch >/dev/null; then
             echo "程序没有在运行"
-            cat "$HOME/Library/Application Support/ProxySwitch/proxyswitch.log" || true
+            cat "$support/proxyswitch.log" || true
             exit 1
           fi
-          cat "$HOME/Library/Application Support/ProxySwitch/proxyswitch.log" || true
+          open "proxyswitch://panel"; sleep 3
+          screencapture -x screenshots/panel.png || true
+          open "proxyswitch://settings"; sleep 4
+          screencapture -x screenshots/settings.png || true
+          cat "$support/proxyswitch.log" || true
           pkill -x ProxySwitch || true
+          ls -la screenshots
       - uses: actions/upload-artifact@v4
         with:
           name: ProxySwitch-macos
           path: macos/dist/ProxySwitch-macos.zip
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-screenshots
+          path: macos/screenshots
 
   windows:
     name: 全部测试（Windows）

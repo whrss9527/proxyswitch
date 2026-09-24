@@ -68,13 +68,14 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     }
 }
 
-/// proxyswitch:// 命令：on、off、toggle、use?name=配置名、settings。可以在终端里 open "proxyswitch://toggle"，也能接快捷指令。
+/// proxyswitch:// 命令：on、off、toggle、use?name=配置名、settings、panel。可以在终端里 open "proxyswitch://toggle"，也能接快捷指令。
 enum URLCommand: Equatable {
     case turnOn
     case turnOff
     case toggle
     case use(String)
     case settings
+    case panel
 
     static func parse(_ url: URL) -> URLCommand? {
         guard url.scheme?.lowercased() == "proxyswitch" else { return nil }
@@ -84,6 +85,7 @@ enum URLCommand: Equatable {
         case "off", "disable", "stop": return .turnOff
         case "toggle": return .toggle
         case "settings", "preferences": return .settings
+        case "panel", "menu": return .panel
         case "use", "switch":
             let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
             var name = components?.queryItems?.first { $0.name == "name" }?.value ?? ""

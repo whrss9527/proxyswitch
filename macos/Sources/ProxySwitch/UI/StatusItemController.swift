@@ -89,6 +89,8 @@ final class StatusItemController: NSObject {
             }
         case .settings:
             SettingsWindowController.shared.show(page: nil)
+        case .panel:
+            openPanel()
         }
     }
 

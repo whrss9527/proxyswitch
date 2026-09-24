@@ -132,6 +132,7 @@ final class ParsingTests: XCTestCase {
         XCTAssertEqual(URLCommand.parse(URL(string: "proxyswitch://on")!), .turnOn)
         XCTAssertEqual(URLCommand.parse(URL(string: "proxyswitch://off")!), .turnOff)
         XCTAssertEqual(URLCommand.parse(URL(string: "proxyswitch://settings")!), .settings)
+        XCTAssertEqual(URLCommand.parse(URL(string: "proxyswitch://panel")!), .panel)
         XCTAssertEqual(URLCommand.parse(URL(string: "proxyswitch://use?name=%E5%85%AC%E5%8F%B8")!), .use("公司"))
         XCTAssertEqual(URLCommand.parse(URL(string: "proxyswitch://use/home")!), .use("home"))
         XCTAssertNil(URLCommand.parse(URL(string: "proxyswitch://nope")!))
