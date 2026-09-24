@@ -155,7 +155,7 @@ function coreNotice() {
     }
     if (core.downloadable) {
       return html`<div class="infobar info">${icon("download")}<div class="infobar-body"><div class="infobar-title">使用订阅需要先下载代理内核</div>
-        ProxySwitch 用 mihomo（Clash.Meta）内核连接订阅里的节点。只需下载一次，约 17 MB，下载后自动校验。
+        ProxySwitch 用 mihomo（Clash.Meta）内核连接订阅里的节点。只需下载一次，约 20 MB，下载后自动校验。
         <div class="infobar-actions"><button class="button accent" data-action="install-core">${icon("download")}下载内核</button></div></div></div>`;
     }
     return html`<div class="infobar info">${icon("info")}<div class="infobar-body"><div class="infobar-title">使用订阅需要 mihomo 内核</div>
