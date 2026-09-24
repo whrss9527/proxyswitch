@@ -98,20 +98,32 @@ func nodesYaml(nodes map[string]*countingProxy, order ...string) string {
 // getThroughCore 经内核的代理端口访问测试域名。
 func getThroughCore(t *testing.T, port int) string {
 	t.Helper()
-	connection, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 3*time.Second)
-	if err != nil {
-		t.Fatalf("连不上内核的代理端口：%v", err)
-	}
-	defer connection.Close()
-	_ = connection.SetDeadline(time.Now().Add(10 * time.Second))
-	fmt.Fprintf(connection, "GET http://%s/ HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", coreTestHost, coreTestHost)
-	response, err := http.ReadResponse(bufio.NewReader(connection), nil)
+	status, body, err := requestThroughCore(port, coreTestHost)
 	if err != nil {
 		t.Fatalf("经内核访问失败：%v", err)
 	}
+	if status != http.StatusOK {
+		t.Errorf("经内核访问返回 HTTP %d", status)
+	}
+	return body
+}
+
+// requestThroughCore 经内核的代理端口访问 host，返回状态码和内容。
+func requestThroughCore(port int, host string) (int, string, error) {
+	connection, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 3*time.Second)
+	if err != nil {
+		return 0, "", fmt.Errorf("连不上内核的代理端口：%v", err)
+	}
+	defer connection.Close()
+	_ = connection.SetDeadline(time.Now().Add(10 * time.Second))
+	fmt.Fprintf(connection, "GET http://%s/ HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", host, host)
+	response, err := http.ReadResponse(bufio.NewReader(connection), nil)
+	if err != nil {
+		return 0, "", err
+	}
 	defer response.Body.Close()
 	body, _ := io.ReadAll(response.Body)
-	return string(body)
+	return response.StatusCode, string(body), nil
 }
 
 func TestCoreWithMihomo(t *testing.T) {

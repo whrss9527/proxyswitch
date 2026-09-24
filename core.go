@@ -366,7 +366,8 @@ func (core *Core) waitReady(exited chan struct{}, settings CoreSettings) error {
 	return nil
 }
 
-// waitProviders 等内核加载完所有订阅：REST API 比订阅先就绪，这时列出的节点还不完整。
+// waitProviders 等内核加载完所有订阅和规则集：REST API 比它们先就绪，这时列出的节点还不完整，规则也还没生效。
+// 规则集到期限还没加载完只记日志：内核照常工作，只是这些规则暂时不起作用。
 func (core *Core) waitProviders(settings CoreSettings, deadline time.Time) error {
 	for {
 		var result struct {
@@ -381,7 +382,7 @@ func (core *Core) waitProviders(settings CoreSettings, deadline time.Time) error
 				}
 			}
 			if !missing {
-				return nil
+				break
 			}
 		}
 		if time.Now().After(deadline) {
@@ -389,6 +390,35 @@ func (core *Core) waitProviders(settings CoreSettings, deadline time.Time) error
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+	if settings.Mode == "global" || len(settings.Rules) == 0 {
+		return nil
+	}
+	for !core.ruleProvidersLoaded(settings) {
+		if time.Now().After(deadline) {
+			slog.Warn("代理内核没能及时加载分流规则", "log", core.logTail())
+			return nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return nil
+}
+
+// ruleProvidersLoaded 表示规则集都已读进内核。规则集文件不会是空的，读到的规则数为 0 就是还没加载完。
+func (core *Core) ruleProvidersLoaded(settings CoreSettings) bool {
+	var result struct {
+		Providers map[string]struct {
+			RuleCount int `json:"ruleCount"`
+		} `json:"providers"`
+	}
+	if err := core.request(http.MethodGet, "/providers/rules", nil, &result, coreApiTimeout); err != nil {
+		return false
+	}
+	for name := range settings.RuleProviders {
+		if result.Providers[name].RuleCount == 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func (core *Core) reload(text []byte, settings CoreSettings) error {

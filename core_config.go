@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"strconv"
+	"strings"
 )
 
 // 订阅配置由 mihomo 内核代理。这里按订阅生成内核的配置：每个订阅是一个读本地文件的 proxy-provider，
@@ -22,7 +23,8 @@ const (
 
 // CoreSettings 是内核应该处于的状态，由引擎按配置和已下载的订阅算出来。BinaryStamp 是内核程序文件的修改时间，
 // 程序被替换（更新内核）后改变，内核随之重启。Active 是正在使用的订阅配置的 id（可以为空）；Mode 是它的模式；
-// GeoReady 表示地理数据已下载，大陆直连规则才能生效。
+// GeoReady 表示地理数据已下载，大陆直连规则和 GEOIP 规则才能生效。Rules 是它按规则分流时用的规则（见 rules.go，
+// 最后一条是 MATCH），RuleProviders 是其中的规则集文件；Rules 为空时用内置的大陆直连。
 type CoreSettings struct {
 	Binary        string
 	BinaryStamp   string
@@ -32,6 +34,8 @@ type CoreSettings struct {
 	Active        string
 	Mode          string
 	GeoReady      bool
+	Rules         []string
+	RuleProviders map[string]CoreRuleProvider
 	Subscriptions []CoreSubscription
 }
 
@@ -117,24 +121,32 @@ type coreGroup struct {
 	Lazy      bool     `json:"lazy,omitempty"`
 }
 
+type coreRuleProvider struct {
+	Type     string `json:"type"`
+	Behavior string `json:"behavior"`
+	Format   string `json:"format"`
+	Path     string `json:"path"`
+}
+
 type coreConfigFile struct {
-	MixedPort          int                     `json:"mixed-port"`
-	AllowLan           bool                    `json:"allow-lan"`
-	BindAddress        string                  `json:"bind-address"`
-	Mode               string                  `json:"mode"`
-	LogLevel           string                  `json:"log-level"`
-	UnifiedDelay       bool                    `json:"unified-delay"`
-	TcpConcurrent      bool                    `json:"tcp-concurrent"`
-	FindProcessMode    string                  `json:"find-process-mode"`
-	ExternalController string                  `json:"external-controller"`
-	Secret             string                  `json:"secret"`
-	Profile            map[string]bool         `json:"profile"`
-	GeoAutoUpdate      bool                    `json:"geo-auto-update"`
-	GeodataMode        bool                    `json:"geodata-mode"`
-	GeoxUrl            map[string]string       `json:"geox-url"`
-	ProxyProviders     map[string]coreProvider `json:"proxy-providers"`
-	ProxyGroups        []coreGroup             `json:"proxy-groups"`
-	Rules              []string                `json:"rules"`
+	MixedPort          int                         `json:"mixed-port"`
+	AllowLan           bool                        `json:"allow-lan"`
+	BindAddress        string                      `json:"bind-address"`
+	Mode               string                      `json:"mode"`
+	LogLevel           string                      `json:"log-level"`
+	UnifiedDelay       bool                        `json:"unified-delay"`
+	TcpConcurrent      bool                        `json:"tcp-concurrent"`
+	FindProcessMode    string                      `json:"find-process-mode"`
+	ExternalController string                      `json:"external-controller"`
+	Secret             string                      `json:"secret"`
+	Profile            map[string]bool             `json:"profile"`
+	GeoAutoUpdate      bool                        `json:"geo-auto-update"`
+	GeodataMode        bool                        `json:"geodata-mode"`
+	GeoxUrl            map[string]string           `json:"geox-url"`
+	ProxyProviders     map[string]coreProvider     `json:"proxy-providers"`
+	ProxyGroups        []coreGroup                 `json:"proxy-groups"`
+	RuleProviders      map[string]coreRuleProvider `json:"rule-providers,omitempty"`
+	Rules              []string                    `json:"rules"`
 }
 
 // coreConfigText 生成内核的配置。controller 和 secret 是 REST API 的地址和密码，只在本机监听。
@@ -179,10 +191,25 @@ func coreConfigText(settings CoreSettings, controller, secret string) []byte {
 	}
 	config.ProxyGroups = append(config.ProxyGroups, coreGroup{Name: coreTopGroup, Type: "select", Proxies: subscriptionGroups})
 	config.Rules = append(config.Rules, corePrivateRules...)
-	if settings.Mode != "global" && settings.GeoReady {
+	switch {
+	case settings.Mode == "global":
+	case len(settings.Rules) > 0:
+		// 地理数据还没下载时先跳过 GEOIP 规则：内核缺少数据会拒绝整个配置。
+		for _, rule := range settings.Rules {
+			if settings.GeoReady || !strings.HasPrefix(rule, "GEOIP,") {
+				config.Rules = append(config.Rules, rule)
+			}
+		}
+		config.RuleProviders = map[string]coreRuleProvider{}
+		for name, provider := range settings.RuleProviders {
+			config.RuleProviders[name] = coreRuleProvider{Type: "file", Behavior: provider.Behavior, Format: "text", Path: provider.Path}
+		}
+	case settings.GeoReady:
 		config.Rules = append(config.Rules, coreMainlandRules...)
 	}
-	config.Rules = append(config.Rules, "MATCH,"+coreTopGroup)
+	if !strings.HasPrefix(config.Rules[len(config.Rules)-1], "MATCH,") {
+		config.Rules = append(config.Rules, "MATCH,"+coreTopGroup)
+	}
 	data, _ := json.MarshalIndent(config, "", "  ")
 	return append(data, '\n')
 }

@@ -45,7 +45,8 @@ var profilePalette = []string{"#16a34a", "#2563eb", "#7c3aed", "#db2777", "#ea58
 
 // Profile 是一套代理配置。填了 Subscription（订阅地址）的配置由内置的代理内核连接机场的节点，
 // Server 由程序填成内核的本地端口；Node 是选中的节点，留空表示自动选择延迟最低的；
-// Mode 是 rule（大陆直连，其余走节点）或 global（全部走节点）。
+// Mode 是 rule（按规则分流）或 global（全部走节点）；Rules 是按规则分流时用的小火箭（Shadowrocket）规则配置的地址，
+// 留空用内置的大陆直连（国内的网站和 IP 直连，其余走节点）。
 type Profile struct {
 	Id           string   `json:"id"`
 	Name         string   `json:"name"`
@@ -58,6 +59,7 @@ type Profile struct {
 	Subscription string   `json:"subscription,omitempty"`
 	Node         string   `json:"node,omitempty"`
 	Mode         string   `json:"mode,omitempty"`
+	Rules        string   `json:"rules,omitempty"`
 }
 
 type NetRule struct {
@@ -201,8 +203,10 @@ const defaultConfigText = `// ProxySwitch 配置文件。推荐在托盘菜单�
     //   "subscription": "https://example.com/api/v1/client/subscribe?token=...",
     //   // 选中的节点，留空自动选择延迟最低的
     //   "node": "",
-    //   // rule 大陆直连、其余走节点 / global 全部走节点
+    //   // rule 按规则分流 / global 全部走节点
     //   "mode": "rule",
+    //   // 分流规则：小火箭（Shadowrocket）规则配置的地址，留空用内置的大陆直连（国内的网站和 IP 直连，其余走节点）
+    //   "rules": "",
     //   "apply_to": ["system"]
     // }
   ]
@@ -369,8 +373,9 @@ func normalizeConfig(config *Config) {
 			profile.Server = coreServer(config.Core.Port)
 			profile.Pac = ""
 			profile.Mode = lowerTrim(profile.Mode, "rule")
+			profile.Rules = strings.TrimSpace(profile.Rules)
 		} else {
-			profile.Node, profile.Mode = "", ""
+			profile.Node, profile.Mode, profile.Rules = "", "", ""
 		}
 		profile.Id = strings.TrimSpace(profile.Id)
 		if profile.Id == "" || usedIds[profile.Id] {
@@ -520,6 +525,11 @@ func validateProfile(profile *Profile) error {
 		if profile.Mode != "rule" && profile.Mode != "global" {
 			return fmt.Errorf("配置「%s」的 mode %q 不认识，可用：rule / global", profile.Name, profile.Mode)
 		}
+		if profile.Rules != "" {
+			if err := validateRulesUrl(profile.Rules); err != nil {
+				return fmt.Errorf("配置「%s」的%v", profile.Name, err)
+			}
+		}
 	}
 	if profile.Server == "" && profile.Pac == "" {
 		return fmt.Errorf("配置「%s」需要填写代理服务器地址或 PAC 脚本地址", profile.Name)
@@ -662,7 +672,7 @@ func writeConfigFile(path string, config *Config) error {
 // State 是运行状态，与用户手写的配置文件分开存放。
 // Original 是开启代理前的系统代理设置，关闭时据此恢复；NextUpdateCheck 是下次自动检查更新的时间，
 // UpdateNotified 是已经提示过的新版本号，同一个版本只提示一次；Version 是上次运行的版本，用来发现程序已经更新。
-// Subscriptions 按配置 id 记录订阅的下载情况；GeoAttempted 是上次下载地理数据的时间；
+// Subscriptions 和 Rules 按配置 id 记录订阅和分流规则的下载情况；GeoAttempted 是上次下载地理数据的时间；
 // Resume 是退出时因内核随之停止而关闭的订阅配置，下次启动后重新开启。
 type State struct {
 	Profile         string                       `json:"profile"`
@@ -673,6 +683,7 @@ type State struct {
 	UpdateNotified  string                       `json:"update_notified,omitempty"`
 	Version         string                       `json:"version,omitempty"`
 	Subscriptions   map[string]*SubscriptionInfo `json:"subscriptions,omitempty"`
+	Rules           map[string]*RulesInfo        `json:"rules,omitempty"`
 	GeoAttempted    string                       `json:"geo_attempted,omitempty"`
 	Resume          string                       `json:"resume,omitempty"`
 }
