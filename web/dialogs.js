@@ -14,11 +14,11 @@ const kindHints = {
 
 const editorKinds = ["http", "socks", "pac", "subscription", "custom"];
 
-const modeOptions = [["rule", "大陆直连"], ["global", "全部走代理"]];
+const modeOptions = [["rule", "按规则分流"], ["global", "全局代理"]];
 
 const modeHints = {
-  rule: "国内的网站直接访问，其余经过节点。推荐",
-  global: "所有网站都经过节点",
+  rule: "按下面选的分流规则决定哪些网站经过节点。推荐",
+  global: "所有网站都经过节点（本机和局域网地址除外）",
 };
 
 // splitServer 把 “协议://主机:端口” 拆开，支持 [IPv6]:端口。
@@ -122,8 +122,18 @@ function draftFromProfile(profile) {
     subscription: profile.subscription || "",
     mode: profile.mode || "rule",
     node: profile.node || "",
+    // rulesChoice 是选中的分流规则：空（内置的大陆直连）、预设的地址或 custom；rules 是自定义规则的地址。
+    rulesChoice: "",
+    rules: "",
+    rulesCheck: null,
     savingText: "",
   };
+  if (profile.rules && rulePresetFor(profile.rules)) {
+    draft.rulesChoice = profile.rules;
+  } else if (profile.rules) {
+    draft.rulesChoice = "custom";
+    draft.rules = profile.rules;
+  }
   const server = (profile.server || "").trim();
   if (draft.subscription) {
     draft.kind = "subscription";
@@ -188,6 +198,9 @@ function profileFromDraft(draft) {
     profile.subscription = draft.subscription.trim();
     profile.mode = draft.mode;
     profile.node = draft.node;
+    // 全局代理时规则输入框是隐藏的，没填好的自定义地址按留空处理。
+    const customRules = draft.rules.trim();
+    profile.rules = draft.rulesChoice !== "custom" ? draft.rulesChoice : /^https?:\/\/\S+$/i.test(customRules) ? customRules : "";
   }
   return profile;
 }
@@ -263,6 +276,13 @@ function validateDraft(draft) {
         errors.subscription = "请填写订阅地址";
       } else if (!/^https?:\/\/\S+$/i.test(draft.subscription.trim())) {
         errors.subscription = "订阅地址应以 http:// 或 https:// 开头";
+      }
+      if (draft.mode === "rule" && draft.rulesChoice === "custom") {
+        if (!draft.rules.trim()) {
+          errors.rules = "请填写规则配置的地址";
+        } else if (!/^https?:\/\/\S+$/i.test(draft.rules.trim())) {
+          errors.rules = "规则地址应以 http:// 或 https:// 开头";
+        }
       }
       break;
     case "pac":
@@ -353,7 +373,10 @@ function openProfileEditor(profile = {}, options = {}) {
           absorbPastedAddress(event.target);
         }
         draft.test = null;
-        for (const result of element.querySelectorAll("[data-test-result], [data-check-result]")) {
+        if (field === "rules" || field === "rulesChoice") {
+          draft.rulesCheck = null;
+        }
+        for (const result of element.querySelectorAll("[data-test-result], [data-check-result], [data-rules-result]")) {
           result.textContent = "";
         }
         updateFeedback();
@@ -373,6 +396,13 @@ function openProfileEditor(profile = {}, options = {}) {
           refreshPreview();
         } else if (target.dataset.field === "useAfterSave") {
           draft.useAfterSave = target.checked;
+        } else if (target.dataset.field === "rulesChoice") {
+          draft.rulesChoice = target.value;
+          dialogInstance.render();
+          const rulesInput = element.querySelector('[data-field="rules"]');
+          if (rulesInput && !rulesInput.value) {
+            rulesInput.focus();
+          }
         } else if (target.dataset.customColor !== undefined) {
           draft.color = target.value.toLowerCase();
           dialogInstance.render();
@@ -417,6 +447,9 @@ function openProfileEditor(profile = {}, options = {}) {
             break;
           case "dialog-test":
             testDraft();
+            break;
+          case "check-rules":
+            checkRules();
             break;
           case "install-core":
             installCore(() => {
@@ -533,6 +566,25 @@ function openProfileEditor(profile = {}, options = {}) {
     }
   }
 
+  // checkRules 下载规则配置检查地址是否可用，显示规则数和引用的规则列表数。
+  async function checkRules() {
+    if (validateDraft(draft).rules) {
+      draft.touched.rules = true;
+      updateFeedback();
+      return;
+    }
+    draft.rulesCheck = { running: true };
+    dialog.render();
+    try {
+      draft.rulesCheck = { ok: true, result: await api("POST", "/api/rules/check", { url: draft.rules.trim() }) };
+    } catch (error) {
+      draft.rulesCheck = { ok: false, message: error.message };
+    }
+    if (!dialog.closed) {
+      dialog.render();
+    }
+  }
+
   async function saveDraft() {
     draft.submitted = true;
     const errors = validateDraft(draft);
@@ -575,12 +627,29 @@ function openProfileEditor(profile = {}, options = {}) {
           return;
         }
       }
+      // 新选的分流规则也立即下载。没下载成功时配置照样能用，暂时按大陆直连分流，后台稍后重试。
+      let rulesError = "";
+      if (saved && saved.subscription && saved.rules && (!editing || profile.rules !== saved.rules)) {
+        draft.savingText = "正在下载分流规则…";
+        dialog.render();
+        try {
+          receiveState(await api("POST", `/api/subscriptions/${saved.id}/rules`), { force: true });
+        } catch (error) {
+          if (error.state) {
+            receiveState(error.state, { force: true });
+          }
+          rulesError = error.message;
+        }
+      }
       dialog.close(true);
       if (draft.useAfterSave) {
         await runOperation("/api/use", { name: profileValue.name }, `已开启「${profileValue.name}」`);
-      } else {
+      } else if (!rulesError) {
         const active = app.state.status.state === "on" && app.state.status.profile === profileValue.name;
         toast(active ? "修改已立即生效" : "可以在列表里点「使用」开启", "success", `已保存「${profileValue.name}」`);
+      }
+      if (rulesError) {
+        toast(`${rulesError}。暂时按大陆直连分流，稍后会自动重试`, "warning", "分流规则没有下载成功");
       }
     } catch (error) {
       draft.saving = false;
@@ -640,6 +709,61 @@ function renderCheckResult(test) {
   return html`<div class="infobar success">${icon("success")}<div class="infobar-body"><div class="infobar-title">找到 ${test.check.nodes} 个节点</div>${usage || "机场没有提供流量和到期时间"}</div></div>`;
 }
 
+// renderRulesField 是编辑订阅配置时选择分流规则的部分：内置的大陆直连、小火箭规则的预设，或自定义规则配置的地址。
+function renderRulesField(draft, errors) {
+  const presets = app.state.rule_presets || [];
+  const custom = draft.rulesChoice === "custom";
+  const preset = rulePresetFor(draft.rulesChoice);
+  const hint = custom
+    ? "小火箭（Shadowrocket）或 Surge 的规则配置（.conf）地址，网上分享的规则配置一般都能用。可以先点「检查规则」看看"
+    : preset
+      ? `${preset.description}。来自 Shadowrocket-ADBlock-Rules-Forever，每天自动更新`
+      : "国内的网站和 IP 直连，其余走节点";
+  const checking = draft.rulesCheck && draft.rulesCheck.running;
+  return html`
+    <div class="field">
+      <label class="field-label" for="field-rulesChoice">分流规则</label>
+      <select class="select" id="field-rulesChoice" data-field="rulesChoice" data-focus="rulesChoice">
+        <option value="" ${draft.rulesChoice === "" ? raw("selected") : ""}>大陆直连（内置）</option>
+        <optgroup label="小火箭规则">
+          ${presets.map((item) => html`<option value="${item.url}" ${draft.rulesChoice === item.url ? raw("selected") : ""}>${item.name}</option>`)}
+        </optgroup>
+        <option value="custom" ${custom ? raw("selected") : ""}>自定义规则地址…</option>
+      </select>
+      ${custom ? "" : html`<div class="field-hint">${hint}</div>`}
+    </div>
+    ${custom ? html`
+      <div class="field">
+        <label class="field-label" for="field-rules">规则配置的地址</label>
+        <div class="field-inline">
+          <input class="input mono ${errors.rules ? "invalid" : ""}" id="field-rules" type="text" data-field="rules" data-focus="rules" value="${draft.rules}" placeholder="https://…/rules.conf" spellcheck="false" autocomplete="off">
+          <button class="button" type="button" data-action="check-rules" ${checking ? raw("disabled") : ""}>${checking ? html`<span class="spinner"></span>` : icon("refresh")}检查规则</button>
+        </div>
+        <div class="field-error" data-error="rules">${errors.rules}</div>
+        <div class="field-hint">${hint}</div>
+      </div>
+      <div data-rules-result>${renderRulesCheck(draft.rulesCheck)}</div>` : ""}`;
+}
+
+function renderRulesCheck(check) {
+  if (!check || check.running) {
+    return html``;
+  }
+  if (!check.ok) {
+    return html`<div class="infobar danger">${icon("error")}<div class="infobar-body"><div class="infobar-title">这个规则地址不能用</div>${check.message}</div></div>`;
+  }
+  const result = check.result;
+  const notes = [];
+  if (result.sets) {
+    notes.push(`另外引用了 ${result.sets} 个规则列表，保存后一起下载`);
+  }
+  if (result.skipped) {
+    notes.push(`${result.skipped} 条内核不支持（例如 USER-AGENT），会跳过`);
+  }
+  notes.push(finalTexts[result.final]);
+  return html`<div class="infobar success">${icon("success")}<div class="infobar-body"><div class="infobar-title">找到 ${result.rules.toLocaleString()} 条规则</div>${notes.join("；")}</div></div>`;
+}
+
 function field({ label, name, value, placeholder = "", error = "", hint = "", className = "", type = "text", mono = false, focus = name }) {
   return html`
     <div class="field ${className}">
@@ -675,7 +799,8 @@ function renderProfileEditor(draft, editing, errors) {
             ${modeOptions.map(([value, label]) => html`<button type="button" data-mode="${value}" aria-pressed="${draft.mode === value}">${label}</button>`)}
           </div>
           <div class="field-hint">${modeHints[draft.mode]}</div>
-        </div>`;
+        </div>
+        ${draft.mode === "rule" ? renderRulesField(draft, errors) : ""}`;
       break;
     default:
       kindFields = html`
@@ -926,6 +1051,9 @@ function openNodesDialog(profileId) {
           case "nodes-update":
             update();
             break;
+          case "nodes-mode":
+            setMode(button.dataset.value);
+            break;
           case "nodes-use": {
             const profile = profileById(profileId);
             dialogInstance.close(true);
@@ -976,6 +1104,23 @@ function openNodesDialog(profileId) {
       view.error = error.message;
     }
     view.loading = false;
+    if (!dialog.closed) {
+      dialog.render();
+    }
+  }
+
+  async function setMode(mode) {
+    view.busy = "mode";
+    dialog.render();
+    try {
+      receiveState(await api("POST", `/api/subscriptions/${profileId}/mode`, { mode }), { force: true });
+    } catch (error) {
+      if (error.state) {
+        receiveState(error.state, { force: true });
+      }
+      toast(error.message, "danger", "没有切换成功");
+    }
+    view.busy = "";
     if (!dialog.closed) {
       dialog.render();
     }
@@ -1049,6 +1194,12 @@ function renderNodes(profile, view) {
     <div class="dialog-body">
       <h2 class="dialog-title">选择节点 · ${profile.name}</h2>
       <p class="caption muted" style="margin:-8px 0 14px">${view.list ? `${view.list.nodes.length} 个节点` : ""}${usage ? ` · ${usage}` : ""}${info.updated ? ` · ${relativeTime(info.updated)}更新` : ""}</p>
+      <div class="nodes-mode">
+        <div class="segmented" role="group" aria-label="分流方式">
+          ${modeOptions.map(([value, label]) => html`<button type="button" data-action="nodes-mode" data-value="${value}" aria-pressed="${profile.mode === value}" ${busy}>${label}</button>`)}
+        </div>
+        <span class="caption muted">${profile.mode === "global" ? "所有网站都经过节点" : `分流规则：${rulesName(profile.rules)}`}</span>
+      </div>
       ${content}
     </div>
     <div class="dialog-footer">

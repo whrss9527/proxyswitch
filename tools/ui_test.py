@@ -129,6 +129,34 @@ def start_subscription_server(http_proxy):
     return f"http://127.0.0.1:{server.server_port}/api/v1/client/subscribe?token=test"
 
 
+def start_rules_server():
+    """小火箭格式的分流规则：两条直接写的规则、一个引用的规则列表、一条内核不支持的规则。"""
+    listing = "".join(f"DOMAIN-SUFFIX,site{index}.example\n" for index in range(20)).encode()
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == "/rules.conf":
+                body = (f"[General]\nipv6 = false\n\n[Rule]\nDOMAIN-SUFFIX,google.com,Proxy\nDOMAIN-SUFFIX,ads.example.com,Reject\n"
+                        f"RULE-SET,http://127.0.0.1:{self.server.server_port}/proxy.list,PROXY\nUSER-AGENT,Instagram*,PROXY\nFINAL,DIRECT\n").encode()
+            elif self.path == "/proxy.list":
+                body = listing
+            else:
+                self.send_response(404)
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return f"http://127.0.0.1:{server.server_port}/rules.conf"
+
+
 def wait_until(predicate, timeout=8.0, interval=0.2):
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -150,8 +178,8 @@ def main():
             context = browser.new_context(viewport={"width": 1120, "height": 800}, device_scale_factor=1, locale="zh-CN", permissions=["clipboard-read", "clipboard-write"])
             page = context.new_page()
             page.on("pageerror", lambda error: errors.append(f"pageerror: {error}"))
-            # 接口拒绝非法输入时返回 400 / 409，浏览器会把它记成控制台错误，这是预期行为。
-            expected = ("status of 400", "status of 409")
+            # 接口拒绝非法输入时返回 400 / 409，检查的订阅或规则地址不能用时返回 502，浏览器会把它们记成控制台错误，这是预期行为。
+            expected = ("status of 400", "status of 409", "status of 502")
             page.on("console", lambda message: errors.append(f"console: {message.text}") if message.type == "error" and not any(text in message.text for text in expected) else None)
             run_flows(page, api, info, config_path)
             check(not errors, "没有脚本错误" + ("" if not errors else f"：{errors[:3]}"))
@@ -468,14 +496,36 @@ def run_flows(page, api, info, config_path):
     check(wait_until(lambda: "5 个节点" in page.inner_text(".dialog [data-check-result]"), timeout=10), "检查订阅显示节点数")
     check("已用 8.0 GB / 100 GB" in page.inner_text(".dialog [data-check-result]"), "检查订阅显示流量和到期时间")
     check(page.input_value(".dialog [data-field=name]") == "测试机场", "没填名字时用机场给的名字")
+    # 分流：默认按规则分流、用内置的大陆直连；可以选小火箭规则的预设或填自定义规则的地址。
+    check(page.get_attribute(".dialog [data-mode=rule]", "aria-pressed") == "true" and page.input_value(".dialog [data-field=rulesChoice]") == "", "默认按规则分流，用内置的大陆直连")
     page.click(".dialog [data-mode=global]")
-    check(page.get_attribute(".dialog [data-mode=global]", "aria-pressed") == "true", "可以选择全部走代理")
+    check(page.get_attribute(".dialog [data-mode=global]", "aria-pressed") == "true" and page.locator(".dialog [data-field=rulesChoice]").count() == 0, "选择全局代理时不用选规则")
     page.click(".dialog [data-mode=rule]")
+    presets = api.call("GET", "/api/state")["rule_presets"]
+    page.select_option(".dialog [data-field=rulesChoice]", presets[0]["url"])
+    check(presets[0]["description"] in page.inner_text(".dialog"), "选择预设时说明它怎么分流")
+    page.select_option(".dialog [data-field=rulesChoice]", "custom")
+    page.click(".dialog [data-action=check-rules]")
+    check("规则配置的地址" in page.inner_text(".dialog [data-error=rules]"), "自定义规则地址为空时提示")
+    rules_url = start_rules_server()
+    page.fill(".dialog [data-field=rules]", rules_url.replace("rules.conf", "missing.conf"))
+    page.click(".dialog [data-action=check-rules]")
+    check(wait_until(lambda: "404" in page.inner_text(".dialog [data-rules-result]"), timeout=10), "规则地址不对时说明原因")
+    page.fill(".dialog [data-field=rules]", rules_url)
+    page.click(".dialog [data-action=check-rules]")
+    check(wait_until(lambda: "找到 2 条规则" in page.inner_text(".dialog [data-rules-result]"), timeout=10), "检查规则显示规则数")
+    check("1 个规则列表" in page.inner_text(".dialog [data-rules-result]") and "1 条内核不支持" in page.inner_text(".dialog [data-rules-result]"), "检查规则说明引用的规则列表和跳过的规则")
+    page.select_option(".dialog [data-field=rulesChoice]", "")
+    page.select_option(".dialog [data-field=rulesChoice]", "custom")
+    check(page.input_value(".dialog [data-field=rules]") == rules_url, "切换规则后自定义的地址还在")
+    page.mouse.move(0, 0)
+    shot(page, "11_rules_editor")
     page.click(".dialog [data-action=dialog-save]")
-    page.wait_for_selector(".dialog", state="detached", timeout=15000)
+    page.wait_for_selector(".dialog", state="detached", timeout=20000)
     saved = next(profile for profile in read_config(config_path)["profiles"] if profile["name"] == "测试机场")
-    check(saved["subscription"] == subscription_url and saved["mode"] == "rule", "订阅配置写入配置文件")
+    check(saved["subscription"] == subscription_url and saved["mode"] == "rule" and saved.get("rules") == rules_url, "订阅配置和分流规则写入配置文件")
     card = ".profile:has-text('测试机场')"
+    check(wait_until(lambda: "自定义规则 · 22 条" in page.inner_text(card), timeout=15), "保存后下载分流规则，列表显示规则数")
     if CORE:
         check(wait_until(lambda: "5 个节点" in page.inner_text(card), timeout=10), "保存后下载订阅，列表显示节点数和流量")
         page.click(f"{card} [data-action=nodes]")
@@ -500,8 +550,17 @@ def run_flows(page, api, info, config_path):
         page.wait_for_selector(".dialog .node")
         page.click(".dialog .node[data-node='']")
         check(wait_until(lambda: page.locator(".dialog .node[data-node=''][aria-pressed=true]").count() == 1), "改为自动选择")
+        page.click(".dialog [data-action=nodes-mode][data-value=global]")
+        check(wait_until(lambda: next(p for p in read_config(config_path)["profiles"] if p["name"] == "测试机场")["mode"] == "global"), "在节点对话框里切换到全局代理")
+        check(wait_until(lambda: page.get_attribute(".dialog [data-action=nodes-mode][data-value=global]", "aria-pressed") == "true"), "节点对话框显示当前的分流方式")
         page.click(".dialog [data-action=dialog-cancel]")
-        check(wait_until(lambda: "（自动选择）" in page.inner_text(".hero"), timeout=10), "自动选择时显示它选中的节点")
+        check(wait_until(lambda: "（自动选择）" in page.inner_text(".hero") and "全局代理" in page.inner_text(".hero"), timeout=10), "自动选择时显示它选中的节点和分流方式")
+        page.click(f"{card} [data-action=profile-menu]")
+        page.click(".menu-item:has-text('切换到按规则分流')")
+        check(wait_until(lambda: "按规则分流 · 自定义规则" in page.inner_text(".hero"), timeout=10), "从菜单切回按规则分流")
+        page.click(f"{card} [data-action=profile-menu]")
+        page.click(".menu-item:has-text('更新分流规则')")
+        check(wait_until(lambda: "分流规则已更新" in page.inner_text("body"), timeout=10), "从菜单更新分流规则")
         page.click("[data-page=general]")
         page.wait_for_selector("#core-port")
         check("运行中" in page.inner_text(".card:has(#core-port)"), "常规页显示内核在运行")
