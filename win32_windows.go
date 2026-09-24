@@ -3,8 +3,10 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -32,6 +34,9 @@ var (
 	procOpenProcess                = kernel32.NewProc("OpenProcess")
 	procCloseHandle                = kernel32.NewProc("CloseHandle")
 	procQueryFullProcessImageNameW = kernel32.NewProc("QueryFullProcessImageNameW")
+	procGlobalAlloc                = kernel32.NewProc("GlobalAlloc")
+	procGlobalLock                 = kernel32.NewProc("GlobalLock")
+	procGlobalUnlock               = kernel32.NewProc("GlobalUnlock")
 	procGlobalFree                 = kernel32.NewProc("GlobalFree")
 	procLoadLibraryExW             = kernel32.NewProc("LoadLibraryExW")
 	procGetProcAddress             = kernel32.NewProc("GetProcAddress")
@@ -73,6 +78,10 @@ var (
 	procIsWindowVisible          = user32.NewProc("IsWindowVisible")
 	procIsIconic                 = user32.NewProc("IsIconic")
 	procShowWindow               = user32.NewProc("ShowWindow")
+	procOpenClipboard            = user32.NewProc("OpenClipboard")
+	procCloseClipboard           = user32.NewProc("CloseClipboard")
+	procEmptyClipboard           = user32.NewProc("EmptyClipboard")
+	procSetClipboardData         = user32.NewProc("SetClipboardData")
 
 	procCreateDIBSection = gdi32.NewProc("CreateDIBSection")
 	procCreateBitmap     = gdi32.NewProc("CreateBitmap")
@@ -156,6 +165,7 @@ const (
 	mfString    = 0x0000
 	mfGrayed    = 0x0001
 	mfChecked   = 0x0008
+	mfPopup     = 0x0010
 	mfSeparator = 0x0800
 	mftRadio    = 0x0200
 
@@ -204,6 +214,9 @@ const (
 	regDword    = 4
 
 	processQueryLimitedInformation = 0x1000
+
+	gmemMoveable  = 0x0002
+	cfUnicodeText = 13
 
 	loadLibrarySearchSystem32 = 0x00000800
 
@@ -403,6 +416,41 @@ func shellOpen(target string) error {
 		0, 0, 1)
 	if result <= 32 {
 		return fmt.Errorf("无法打开 %s（错误码 %d）", target, result)
+	}
+	return nil
+}
+
+// setClipboardText 把文本放进剪贴板。剪贴板可能正被其他程序占用，打开失败时稍等重试。
+func setClipboardText(window uintptr, text string) error {
+	opened := false
+	for attempt := 0; attempt < 10 && !opened; attempt++ {
+		if result, _, _ := procOpenClipboard.Call(window); result != 0 {
+			opened = true
+		} else {
+			time.Sleep(30 * time.Millisecond)
+		}
+	}
+	if !opened {
+		return errors.New("剪贴板正被其他程序占用，请稍后再试")
+	}
+	defer procCloseClipboard.Call()
+	procEmptyClipboard.Call()
+	encoded := syscall.StringToUTF16(replaceNul(text))
+	memory, _, err := procGlobalAlloc.Call(gmemMoveable, uintptr(len(encoded)*2))
+	if memory == 0 {
+		return fmt.Errorf("GlobalAlloc：%v", err)
+	}
+	locked, _, err := procGlobalLock.Call(memory)
+	if locked == 0 {
+		procGlobalFree.Call(memory)
+		return fmt.Errorf("GlobalLock：%v", err)
+	}
+	copy(unsafe.Slice((*uint16)(pointerFromParameter(&locked)), len(encoded)), encoded)
+	procGlobalUnlock.Call(memory)
+	// 成功后内存归剪贴板所有，失败时才需要自己释放。
+	if result, _, err := procSetClipboardData.Call(cfUnicodeText, memory); result == 0 {
+		procGlobalFree.Call(memory)
+		return fmt.Errorf("SetClipboardData：%v", err)
 	}
 	return nil
 }

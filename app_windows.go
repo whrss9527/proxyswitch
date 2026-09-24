@@ -23,7 +23,8 @@ const (
 	menuTest
 	menuEditConfig
 	menuExit
-	menuProfileBase = 100
+	menuTerminalBase = 50
+	menuProfileBase  = 100
 )
 
 const (
@@ -389,6 +390,11 @@ func (app *App) menuItems() []MenuItem {
 	items = append(items, separator)
 	if status.State == statusOn && status.Profile.Server != "" {
 		items = append(items, MenuItem{Id: menuTest, Text: "测试代理连接"})
+		var commands []MenuItem
+		for index, command := range terminalCommands(serverToUrl(status.Profile.Server), status.Profile.NoProxy) {
+			commands = append(commands, MenuItem{Id: uint32(menuTerminalBase + index), Text: command.Label})
+		}
+		items = append(items, MenuItem{Text: "复制终端代理命令", Children: commands})
 	}
 	if len(config.AutoSwitch.Rules) > 0 {
 		items = append(items, MenuItem{Id: menuAutoSwitch, Text: "按网络自动切换", Checked: config.AutoSwitch.Enabled})
@@ -442,6 +448,8 @@ func (app *App) handleMenu(command uint32) {
 		}
 	case command == menuTest:
 		app.testActiveProxy()
+	case command >= menuTerminalBase && command < menuProfileBase:
+		app.copyTerminalCommand(int(command - menuTerminalBase))
 	case command == menuEditConfig:
 		if err := openWithEditor("", app.paths.Config); err != nil {
 			app.notify(Notice{Level: noticeError, Title: "无法打开配置文件", Text: err.Error()})
@@ -456,6 +464,23 @@ func (app *App) handleMenu(command uint32) {
 		}
 	}
 	app.refresh()
+}
+
+// copyTerminalCommand 把当前代理的终端命令复制到剪贴板，index 对应 terminalCommands 的顺序。
+func (app *App) copyTerminalCommand(index int) {
+	status := app.engine.Status()
+	if status.State != statusOn || status.Profile.Server == "" {
+		return
+	}
+	commands := terminalCommands(serverToUrl(status.Profile.Server), status.Profile.NoProxy)
+	if index >= len(commands) {
+		return
+	}
+	if err := setClipboardText(app.tray.window, commands[index].Command); err != nil {
+		app.notify(Notice{Level: noticeError, Title: "复制失败", Text: err.Error()})
+		return
+	}
+	app.notify(Notice{Level: noticeInfo, Title: "已复制 " + commands[index].Label + " 命令", Text: "粘贴到终端里回车，这个终端窗口就会使用代理", Icon: iconStateOn, Color: status.Profile.Color})
 }
 
 // testActiveProxy 在后台测试当前代理，结果用通知显示。

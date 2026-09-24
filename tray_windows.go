@@ -45,6 +45,7 @@ type MenuItem struct {
 	Default   bool
 	Separator bool
 	Bitmap    uintptr
+	Children  []MenuItem
 }
 
 type Tray struct {
@@ -174,12 +175,28 @@ func (tray *Tray) StartTimer(id uintptr, interval time.Duration) {
 
 // ShowMenu 在 anchor 处弹出菜单，返回选中项的 Id，没有选择时返回 0。
 func (tray *Tray) ShowMenu(items []MenuItem, anchor point) uint32 {
+	var texts []*uint16
+	menu := buildMenu(items, &texts)
+	if menu == 0 {
+		return 0
+	}
+	// 销毁菜单时子菜单一起销毁。
+	defer procDestroyMenu.Call(menu)
+	// 先把窗口设为前台，否则点击菜单外部时菜单不会消失。
+	procSetForegroundWindow.Call(tray.window)
+	command, _, _ := procTrackPopupMenu.Call(menu, tpmRightButton|tpmBottomAlign|tpmReturnCmd|tpmNoNotify,
+		uintptr(anchor.x), uintptr(anchor.y), 0, tray.window, 0)
+	procPostMessageW.Call(tray.window, wmNull, 0, 0)
+	runtime.KeepAlive(texts)
+	return uint32(command)
+}
+
+// buildMenu 创建弹出菜单，带 Children 的项作为子菜单。texts 保存菜单文字，菜单关闭前不能释放。
+func buildMenu(items []MenuItem, texts *[]*uint16) uintptr {
 	menu, _, _ := procCreatePopupMenu.Call()
 	if menu == 0 {
 		return 0
 	}
-	defer procDestroyMenu.Call(menu)
-	var texts []*uint16
 	for _, item := range items {
 		if item.Separator {
 			procAppendMenuW.Call(menu, mfSeparator, 0, 0)
@@ -193,7 +210,15 @@ func (tray *Tray) ShowMenu(items []MenuItem, anchor point) uint32 {
 			flags |= mfChecked
 		}
 		text := utf16Pointer(item.Text)
-		texts = append(texts, text)
+		*texts = append(*texts, text)
+		if len(item.Children) > 0 {
+			subMenu := buildMenu(item.Children, texts)
+			if subMenu == 0 {
+				continue
+			}
+			procAppendMenuW.Call(menu, flags|mfPopup, subMenu, uintptr(unsafe.Pointer(text)))
+			continue
+		}
 		procAppendMenuW.Call(menu, flags, uintptr(item.Id), uintptr(unsafe.Pointer(text)))
 		if item.Radio || item.Bitmap != 0 {
 			info := menuItemInfoW{}
@@ -212,13 +237,7 @@ func (tray *Tray) ShowMenu(items []MenuItem, anchor point) uint32 {
 			procSetMenuDefaultItem.Call(menu, uintptr(item.Id), 0)
 		}
 	}
-	// 先把窗口设为前台，否则点击菜单外部时菜单不会消失。
-	procSetForegroundWindow.Call(tray.window)
-	command, _, _ := procTrackPopupMenu.Call(menu, tpmRightButton|tpmBottomAlign|tpmReturnCmd|tpmNoNotify,
-		uintptr(anchor.x), uintptr(anchor.y), 0, tray.window, 0)
-	procPostMessageW.Call(tray.window, wmNull, 0, 0)
-	runtime.KeepAlive(texts)
-	return uint32(command)
+	return menu
 }
 
 func cursorPosition() point {

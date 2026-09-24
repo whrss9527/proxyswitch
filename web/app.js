@@ -490,6 +490,16 @@ const actions = {
     }
   },
   "test-all": () => testAllProfiles(),
+  "terminal-menu": (element) => openMenu(element, (app.state.status.terminal || []).map((command) => ({
+    label: command.label,
+    icon: "copy",
+    title: command.command,
+    action: async () => {
+      if (await copyText(command.command)) {
+        toast("粘贴到终端里回车，这个终端窗口就会使用代理", "success", `已复制 ${command.label} 命令`);
+      }
+    },
+  }))),
   autostart: () => runOperation("/api/autostart", { enabled: !app.state.autostart }),
   "record-hotkey": (element) => {
     if (recordingHotkey) {

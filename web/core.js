@@ -341,7 +341,7 @@ function closeMenu() {
   }
 }
 
-// openMenu 在 anchor 下方弹出菜单，items: { label, icon, action, danger, disabled } 或 { separator: true }。
+// openMenu 在 anchor 下方弹出菜单，items: { label, icon, action, danger, disabled, title } 或 { separator: true }。
 function openMenu(anchor, items) {
   closeMenu();
   const menu = document.createElement("div");
@@ -349,7 +349,7 @@ function openMenu(anchor, items) {
   menu.setAttribute("role", "menu");
   setHtml(menu, html`${items.map((item, index) => item.separator
     ? html`<div class="menu-separator"></div>`
-    : html`<button class="menu-item ${item.danger ? "danger" : ""}" role="menuitem" data-menu-index="${index}" ${item.disabled ? raw("disabled") : ""}>${item.icon ? icon(item.icon) : ""}<span>${item.label}</span></button>`)}`);
+    : html`<button class="menu-item ${item.danger ? "danger" : ""}" role="menuitem" data-menu-index="${index}" ${item.title ? html`title="${item.title}"` : ""} ${item.disabled ? raw("disabled") : ""}>${item.icon ? icon(item.icon) : ""}<span>${item.label}</span></button>`)}`);
   document.body.appendChild(menu);
   const rect = anchor.getBoundingClientRect();
   const width = menu.offsetWidth;

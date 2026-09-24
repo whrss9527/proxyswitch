@@ -1138,6 +1138,11 @@ kbd.compact {
   gap: 8px;
 }
 
+.hero-buttons {
+  display: flex;
+  gap: 8px;
+}
+
 /* ---------- 代理配置列表 ---------- */
 
 .profile {

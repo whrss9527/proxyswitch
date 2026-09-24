@@ -68,7 +68,7 @@ def main():
     try:
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch()
-            context = browser.new_context(viewport={"width": 1120, "height": 800}, device_scale_factor=1, locale="zh-CN")
+            context = browser.new_context(viewport={"width": 1120, "height": 800}, device_scale_factor=1, locale="zh-CN", permissions=["clipboard-read", "clipboard-write"])
             page = context.new_page()
             page.on("pageerror", lambda error: errors.append(f"pageerror: {error}"))
             # 接口拒绝非法输入时返回 400 / 409，浏览器会把它记成控制台错误，这是预期行为。
@@ -276,6 +276,14 @@ def run_flows(page, api, info, config_path):
     # ---------- 健康检查 ----------
     page.click(".profile:has-text('手改的名字') [data-action=use]")
     check(wait_until(lambda: api.call("GET", "/api/state")["status"]["state"] == "on"), "开启检测到的本机代理")
+
+    # ---------- 终端命令 ----------
+    page.click("[data-action=terminal-menu]")
+    check(page.locator(".menu .menu-item").count() == 3, "终端命令菜单有 PowerShell、命令提示符、Bash 三项")
+    page.click(".menu-item:has-text('PowerShell')")
+    page.wait_for_selector(".toast:has-text('PowerShell')")
+    copied = page.evaluate("navigator.clipboard.readText()")
+    check(copied.startswith("$env:HTTP_PROXY='http://" + info["http_proxy"] + "'"), "复制的 PowerShell 命令包含代理地址")
     api.call("POST", "/api/dev/proxy", {"running": False})
     check(wait_until(lambda: page.locator(".hero-switch.warn").count() == 1, timeout=8), "代理软件退出后提示连不上")
     api.call("POST", "/api/dev/proxy", {"running": True})

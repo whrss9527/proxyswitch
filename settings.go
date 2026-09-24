@@ -75,12 +75,13 @@ type PathsInfo struct {
 
 // StatusInfo.State：off 已关闭 / on 由本程序开启 / external 系统代理被其他程序开启。
 type StatusInfo struct {
-	State         string   `json:"state"`
-	Profile       string   `json:"profile"`
-	External      string   `json:"external,omitempty"`
-	Applied       []string `json:"applied"`
-	Health        string   `json:"health"`
-	HealthMessage string   `json:"health_message,omitempty"`
+	State         string            `json:"state"`
+	Profile       string            `json:"profile"`
+	External      string            `json:"external,omitempty"`
+	Applied       []string          `json:"applied"`
+	Health        string            `json:"health"`
+	HealthMessage string            `json:"health_message,omitempty"`
+	Terminal      []TerminalCommand `json:"terminal,omitempty"`
 }
 
 type HotkeyStatus struct {

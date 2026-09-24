@@ -115,6 +115,7 @@ function heroView() {
   }
   const hotkey = app.state.hotkeys.toggle && !app.state.hotkeys.toggle_error ? app.state.hotkeys.toggle : "";
   const canTest = status.state === "on" && profile && profile.server;
+  const terminal = status.state === "on" && status.terminal && status.terminal.length > 0;
   return html`
     <div class="card hero" style="--tint:${track === grayTrack ? "transparent" : track}">
       <button class="hero-switch ${busy} ${warn}" role="switch" aria-checked="${checked}" aria-label="开关代理" data-action="toggle" style="--track:${track}"></button>
@@ -124,7 +125,10 @@ function heroView() {
         ${health.text ? html`<div class="hero-health">${health}</div>` : ""}
       </div>
       <div class="hero-actions">
-        ${canTest ? html`<button class="button" data-action="test-profile" data-id="${profile.id}">${icon("gauge")}测速</button>` : ""}
+        ${canTest || terminal ? html`<div class="hero-buttons">
+          ${canTest ? html`<button class="button" data-action="test-profile" data-id="${profile.id}">${icon("gauge")}测速</button>` : ""}
+          ${terminal ? html`<button class="button" data-action="terminal-menu" title="复制在当前终端里使用代理的命令" aria-haspopup="menu">${icon("terminal")}终端命令</button>` : ""}
+        </div>` : ""}
         ${hotkey ? html`<span class="caption faint" style="display:flex;gap:6px;align-items:center">快捷键 ${hotkeyKeys(hotkey)}</span>` : ""}
       </div>
     </div>`;

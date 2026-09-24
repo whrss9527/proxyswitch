@@ -785,6 +785,7 @@ func (engine *Engine) settingsState() SettingsState {
 			for _, target := range status.Profile.ApplyTo {
 				info.Applied = append(info.Applied, targetLabels[target])
 			}
+			info.Terminal = terminalCommands(serverToUrl(status.Profile.Server), status.Profile.NoProxy)
 		}
 	}
 	info.Health, info.HealthMessage = engine.HealthInfo()
