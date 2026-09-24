@@ -496,6 +496,76 @@ func TestEngineClearAll(t *testing.T) {
 	fixture.expectStatus(t, statusOff, "本机")
 }
 
+func TestEngineUpdateCheck(t *testing.T) {
+	fixture := newEngineFixture(t, engineTestConfig)
+	engine := fixture.engine
+	now := time.Date(2026, 9, 24, 9, 0, 0, 0, time.Local)
+	engine.now = func() time.Time { return now }
+	if !engine.UpdateCheckDue() {
+		t.Fatal("从没检查过时应检查")
+	}
+	newer := UpdateInfo{Latest: "2.1.0", Newer: true}
+	if !engine.RecordUpdateCheck(newer, nil) {
+		t.Error("第一次发现新版本应提示")
+	}
+	if engine.UpdateCheckDue() {
+		t.Error("刚检查过不应再检查")
+	}
+	now = now.Add(25 * time.Hour)
+	if !engine.UpdateCheckDue() {
+		t.Error("超过一天应再检查")
+	}
+	if engine.RecordUpdateCheck(newer, nil) {
+		t.Error("同一个版本只提示一次")
+	}
+	if engine.RecordUpdateCheck(UpdateInfo{Latest: "2.2.0", Newer: true}, errors.New("网络错误")) {
+		t.Error("检查失败时不提示")
+	}
+	now = now.Add(2 * time.Hour)
+	if engine.UpdateCheckDue() {
+		t.Error("检查失败后不应马上重试")
+	}
+	now = now.Add(2 * time.Hour)
+	if !engine.UpdateCheckDue() {
+		t.Error("检查失败几小时后应重试")
+	}
+	if loadState(engine.paths.State).UpdateNotified != "2.1.0" {
+		t.Error("提示过的版本应保存下来")
+	}
+	now = now.Add(-48 * time.Hour)
+	if !engine.UpdateCheckDue() {
+		t.Error("系统时间被往回调时应重新检查")
+	}
+	config := *engine.Config()
+	config.CheckUpdates = false
+	if err := engine.SaveConfig(&config); err != nil {
+		t.Fatal(err)
+	}
+	if engine.UpdateCheckDue() {
+		t.Error("关闭自动检查后不应检查")
+	}
+}
+
+func TestEngineRecordVersion(t *testing.T) {
+	fixture := newEngineFixture(t, engineTestConfig)
+	engine := fixture.engine
+	if previous := engine.RecordVersion("2.0.0"); previous != "" {
+		t.Errorf("第一次运行不算更新：%q", previous)
+	}
+	if previous := engine.RecordVersion("2.0.0"); previous != "" {
+		t.Errorf("版本没变不算更新：%q", previous)
+	}
+	if previous := engine.RecordVersion("2.1.0"); previous != "2.0.0" {
+		t.Errorf("升级后应返回原来的版本：%q", previous)
+	}
+	if previous := engine.RecordVersion("2.0.5"); previous != "" {
+		t.Errorf("换成旧版本不算更新：%q", previous)
+	}
+	if loadState(engine.paths.State).Version != "2.0.5" {
+		t.Error("运行的版本应保存下来")
+	}
+}
+
 func TestEngineSettingsState(t *testing.T) {
 	fixture := newEngineFixture(t, engineTestConfig)
 	if err := fixture.engine.UseProfile("公司"); err != nil {

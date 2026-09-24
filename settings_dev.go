@@ -157,6 +157,12 @@ func (backend *devBackend) ActiveProxyUrl() string {
 	return ""
 }
 
+// InstallUpdate 在开发模式下只下载并校验新版本（保存到配置目录），不替换程序。
+func (backend *devBackend) InstallUpdate(progress func(received, total int64)) error {
+	_, err := downloadLatestRelease("", filepath.Join(backend.engine.paths.Dir, "update.download"), progress)
+	return err
+}
+
 // healthLoop 与 Windows 版一样定期检查代理服务器能否连上。
 func (backend *devBackend) healthLoop(interval time.Duration) {
 	for range time.Tick(interval) {
@@ -246,6 +252,10 @@ func runDevSettings(args []string) int {
 		}
 		if value, found := strings.CutPrefix(argument, "--web="); found {
 			webDir = value
+		}
+		// 自动化测试用本地模拟的 GitHub 发布接口。
+		if value, found := strings.CutPrefix(argument, "--release-api="); found {
+			releaseApiUrl = value
 		}
 	}
 	if directory == "" {

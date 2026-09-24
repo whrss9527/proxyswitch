@@ -7,11 +7,14 @@
 用法：python3 tools/ui_test.py [截图目录]
 截图目录里的 docs_light.png / docs_dark.png 可以直接用作 README 的截图。
 """
+import hashlib
+import http.server
 import json
 import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.request
 
@@ -30,10 +33,46 @@ def check(condition, message):
         failures.append(message)
 
 
+# 模拟 GitHub 的最新发布接口：版本 99.0.0，附件是一段假的程序内容和它的 SHA256SUMS.txt。
+FAKE_PROGRAM = b"fake new version " * 4096
+
+
+def start_release_server():
+    checksum = hashlib.sha256(FAKE_PROGRAM).hexdigest()
+    sums = "".join(f"{checksum}  {name}\n" for name in ("ProxySwitch.exe", "ProxySwitch-arm64.exe")).encode()
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            base = f"http://127.0.0.1:{self.server.server_port}"
+            if self.path == "/releases/latest":
+                assets = [{"name": name, "browser_download_url": f"{base}/download/program", "size": len(FAKE_PROGRAM)} for name in ("ProxySwitch.exe", "ProxySwitch-arm64.exe")]
+                assets.append({"name": "SHA256SUMS.txt", "browser_download_url": f"{base}/download/sums", "size": len(sums)})
+                body = json.dumps({"tag_name": "v99.0.0", "html_url": f"{base}/release", "published_at": "2026-10-01T00:00:00Z", "body": "- 新功能一\n- 修复二", "assets": assets}).encode()
+            elif self.path == "/download/program":
+                time.sleep(0.8)
+                body = FAKE_PROGRAM
+            elif self.path == "/download/sums":
+                body = sums
+            else:
+                self.send_error(404)
+                return
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return f"http://127.0.0.1:{server.server_port}/releases/latest"
+
+
 def start_server(directory):
     binary = os.path.join(directory, "proxyswitch-dev")
     subprocess.run(["go", "build", "-o", binary, "."], cwd=ROOT, check=True)
-    process = subprocess.Popen([binary, "--dev-settings", f"--dir={directory}"], stdout=subprocess.PIPE, text=True)
+    process = subprocess.Popen([binary, "--dev-settings", f"--dir={directory}", f"--release-api={start_release_server()}"], stdout=subprocess.PIPE, text=True)
     info = json.loads(process.stdout.readline())
     return process, info
 
@@ -305,6 +344,10 @@ def run_flows(page, api, info, config_path):
     page.click("[data-page=about]")
     page.wait_for_selector(".about-hero")
     check(state["version"] in page.inner_text(".about-hero"), "关于页显示版本号")
+    page.click("button.switch[data-setting=check_updates]")
+    check(wait_until(lambda: read_config(config_path)["check_updates"] is False), "关闭自动检查更新")
+    page.click("button.switch[data-setting=check_updates]")
+    check(wait_until(lambda: read_config(config_path)["check_updates"] is True), "重新开启自动检查更新")
 
     # ---------- 程序请求切换页面、地址里带页面 ----------
     page.click("[data-page=proxies]")
@@ -364,6 +407,28 @@ def run_flows(page, api, info, config_path):
     wait_until(lambda: page.locator(".profile .badge.success").count() == 3, timeout=12)
     page.mouse.move(0, 0)
     shot(page, "docs_dark")
+
+    # ---------- 程序内更新（模拟的发布，开发模式只下载校验、不替换程序） ----------
+    # 用 window.open 打开：与独立设置窗口一样，页面可以自己关闭窗口。
+    with page.expect_popup() as popup:
+        page.evaluate(f"window.open({json.dumps(info['url'] + '#about')})")
+    updater = popup.value
+    updater.wait_for_selector(".about-hero")
+    updater.click("[data-action=check-update]")
+    updater.wait_for_selector("[data-action=install-update]", timeout=10000)
+    check("99.0.0" in updater.inner_text(".infobar") and "新功能一" in updater.inner_text(".infobar"), "检查更新显示新版本和更新内容")
+    check(updater.locator(".nav-item[data-page=about] .nav-badge").count() == 1, "有新版本时导航的「关于」带提示点")
+    updater.click("[data-action=install-update]")
+    check(wait_until(lambda: updater.locator(".progress").count() == 1, timeout=3), "下载时显示进度")
+    check(wait_until(lambda: updater.is_closed() or "正在重新启动" in updater.inner_text("#page"), timeout=10), "下载校验完成后提示正在重新启动")
+    downloaded = os.path.join(info["dir"], "update.download")
+    check(os.path.exists(downloaded) and open(downloaded, "rb").read() == FAKE_PROGRAM, "下载的新版本通过校验")
+    try:
+        if not updater.is_closed():
+            updater.wait_for_event("close", timeout=6000)
+    except Exception:
+        pass
+    check(updater.is_closed(), "更新完成后自动关闭旧的设置窗口")
 
     # ---------- 窄窗口与页面失效 ----------
     page.set_viewport_size({"width": 760, "height": 640})

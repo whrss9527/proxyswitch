@@ -33,6 +33,7 @@ var (
 	procCreateMutexW               = kernel32.NewProc("CreateMutexW")
 	procGetSystemDirectoryW        = kernel32.NewProc("GetSystemDirectoryW")
 	procOpenProcess                = kernel32.NewProc("OpenProcess")
+	procWaitForSingleObject        = kernel32.NewProc("WaitForSingleObject")
 	procCloseHandle                = kernel32.NewProc("CloseHandle")
 	procQueryFullProcessImageNameW = kernel32.NewProc("QueryFullProcessImageNameW")
 	procGlobalAlloc                = kernel32.NewProc("GlobalAlloc")
@@ -221,6 +222,7 @@ const (
 	regDword    = 4
 
 	processQueryLimitedInformation = 0x1000
+	synchronize                    = 0x00100000
 
 	gmemMoveable  = 0x0002
 	cfUnicodeText = 13

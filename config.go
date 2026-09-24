@@ -83,6 +83,7 @@ type Config struct {
 	SettingsWindow  string     `json:"settings_window"`
 	TestUrl         string     `json:"test_url"`
 	Editor          string     `json:"editor"`
+	CheckUpdates    bool       `json:"check_updates"`
 	AutoSwitch      AutoSwitch `json:"auto_switch"`
 	Profiles        []Profile  `json:"profiles"`
 	// 旧版配置的通知开关：读入时换算成 notify_level，保存时不再写出。
@@ -101,6 +102,7 @@ func defaultConfig() *Config {
 		Theme:           "system",
 		SettingsWindow:  "app",
 		TestUrl:         defaultTestUrl,
+		CheckUpdates:    true,
 		AutoSwitch:      AutoSwitch{Rules: []NetRule{}, DefaultAction: "keep"},
 		Profiles:        []Profile{},
 	}
@@ -144,6 +146,8 @@ const defaultConfigText = `// ProxySwitch 配置文件。推荐在托盘菜单�
   "test_url": "https://cp.cloudflare.com/generate_204",
   // 「编辑配置文件」使用的编辑器，留空用记事本，也可以填 code 等命令
   "editor": "",
+  // 自动检查更新：每天最多访问一次 GitHub，发现新版本时在托盘提示
+  "check_updates": true,
 
   // 按所在网络自动切换
   "auto_switch": {
@@ -582,12 +586,16 @@ func writeConfigFile(path string, config *Config) error {
 }
 
 // State 是运行状态，与用户手写的配置文件分开存放。
-// Original 是开启代理前的系统代理设置，关闭时据此恢复。
+// Original 是开启代理前的系统代理设置，关闭时据此恢复；NextUpdateCheck 是下次自动检查更新的时间，
+// UpdateNotified 是已经提示过的新版本号，同一个版本只提示一次；Version 是上次运行的版本，用来发现程序已经更新。
 type State struct {
-	Profile   string            `json:"profile"`
-	ProfileId string            `json:"profile_id,omitempty"`
-	Enabled   bool              `json:"enabled"`
-	Original  *SystemProxyState `json:"original,omitempty"`
+	Profile         string            `json:"profile"`
+	ProfileId       string            `json:"profile_id,omitempty"`
+	Enabled         bool              `json:"enabled"`
+	Original        *SystemProxyState `json:"original,omitempty"`
+	NextUpdateCheck string            `json:"next_update_check,omitempty"`
+	UpdateNotified  string            `json:"update_notified,omitempty"`
+	Version         string            `json:"version,omitempty"`
 }
 
 func loadState(path string) *State {

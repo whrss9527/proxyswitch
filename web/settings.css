@@ -1433,6 +1433,70 @@ kbd.compact {
   font: 600 24px/32px var(--font-display);
 }
 
+.release-notes {
+  margin-top: 6px;
+  max-height: 200px;
+  overflow: auto;
+}
+
+.release-notes p,
+.release-notes ul {
+  margin: 0 0 4px;
+}
+
+.release-notes ul {
+  padding-left: 18px;
+}
+
+.notes-heading {
+  margin: 6px 0 2px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.notes-heading:first-child {
+  margin-top: 0;
+}
+
+.release-notes code {
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--subtle-hover);
+  font: 12px/18px var(--font-mono);
+}
+
+.progress {
+  position: relative;
+  height: 4px;
+  margin: 10px 0 6px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--divider);
+}
+
+.progress > span {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
+
+/* 不知道总大小时显示来回移动的进度条 */
+.progress.indeterminate > span {
+  width: 30% !important;
+  animation: progress-slide 1.2s ease-in-out infinite;
+}
+
+@keyframes progress-slide {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(340%);
+  }
+}
+
 .code {
   margin: 0;
   padding: 14px 16px;

@@ -56,6 +56,10 @@ type App struct {
 	quiet bool
 	// 最近一条通知对应的设置页，点击通知时打开。
 	noticePage string
+	// 这次是程序内更新后重新启动，保持原来的代理状态。
+	restartedForUpdate bool
+	// 自动检查更新发现的新版本，设置页据此提示。
+	latestUpdate *UpdateInfo
 }
 
 func newApp(paths Paths) *App {
@@ -67,8 +71,8 @@ func newApp(paths Paths) *App {
 	return app
 }
 
-// run 创建托盘并进入消息循环，直到退出。
-func (app *App) run(autostarted, openSettings bool) error {
+// run 创建托盘并进入消息循环，直到退出。settingsPage 不为空时启动后打开设置页的这一页。
+func (app *App) run(autostarted bool, settingsPage string) error {
 	coInitialize()
 	enableDarkMenus()
 	created, loadErr := app.engine.LoadConfig()
@@ -88,18 +92,27 @@ func (app *App) run(autostarted, openSettings bool) error {
 	if loadErr != nil && !created {
 		app.notify(Notice{Level: noticeError, Title: "配置文件有错误", Text: loadErr.Error()})
 	}
-	app.engine.RunStartupAction()
+	if !app.restartedForUpdate {
+		app.engine.RunStartupAction()
+	}
 	app.refresh()
 	tray.StartTimer(statusTimerId, statusInterval)
 	go app.watchNetwork()
 	go app.watchHealth()
+	go app.watchUpdates()
 
 	if created {
 		app.notify(Notice{Level: noticeInfo, Title: "ProxySwitch 已在托盘运行", Text: "单击托盘图标开关代理，右键打开菜单", Icon: iconStateOff})
 	}
+	if previous := app.engine.RecordVersion(appVersion); previous != "" {
+		app.notify(Notice{Level: noticeInfo, Title: "ProxySwitch 已更新到 " + appVersion, Text: "原来的版本是 " + previous + "，设置和代理配置都已保留", Icon: iconStateOn, Color: profilePalette[1], Page: "about"})
+	}
 	// 首次运行、或还没有任何代理配置时直接打开设置页引导添加；开机自启时不打扰。
 	config := app.engine.Config()
-	if openSettings || created || (config != nil && len(config.Profiles) == 0 && !autostarted) {
+	switch {
+	case settingsPage != "":
+		app.openSettingsAt(settingsPage)
+	case created || (config != nil && len(config.Profiles) == 0 && !autostarted):
 		app.openSettings()
 	}
 	tray.Run()
@@ -713,6 +726,7 @@ func (app *App) settingsState() SettingsState {
 	state.Hotkeys = app.hotkeys
 	state.Accent = systemAccentColor()
 	state.Targets = targetInfos(app.gitAvailable.Load())
+	state.Update = app.latestUpdate
 	return state
 }
 

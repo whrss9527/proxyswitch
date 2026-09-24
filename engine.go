@@ -779,6 +779,49 @@ func (engine *Engine) recordAutoSwitch(where, result string) {
 	engine.autoSwitchTime = engine.now()
 }
 
+// ---------- 自动检查更新 ----------
+
+// UpdateCheckDue 判断现在是否该自动检查更新：开启了自动检查，并且到了记录的下次检查时间。
+func (engine *Engine) UpdateCheckDue() bool {
+	if engine.config == nil || !engine.config.CheckUpdates {
+		return false
+	}
+	next, err := time.Parse(time.RFC3339, engine.state.NextUpdateCheck)
+	now := engine.now()
+	// 下次检查时间离现在超过一天，说明系统时间被往回调过，也立即检查。
+	return err != nil || !now.Before(next) || next.Sub(now) > updateCheckInterval
+}
+
+// RecordUpdateCheck 记录一次自动检查并安排下次检查：成功后一天，失败（例如开机时网络还没连上）几小时后重试。
+// 发现的新版本还没提示过时返回 true，同一个版本只提示一次。
+func (engine *Engine) RecordUpdateCheck(info UpdateInfo, err error) bool {
+	wait := updateCheckInterval
+	if err != nil {
+		wait = updateRetryInterval
+	}
+	engine.state.NextUpdateCheck = engine.now().Add(wait).Format(time.RFC3339)
+	notify := err == nil && info.Newer && info.Latest != engine.state.UpdateNotified
+	if notify {
+		engine.state.UpdateNotified = info.Latest
+	}
+	engine.saveState()
+	return notify
+}
+
+// RecordVersion 记录这次运行的版本号；比上次运行的版本新时返回上次的版本，否则返回空字符串。
+func (engine *Engine) RecordVersion(version string) string {
+	previous := engine.state.Version
+	if previous == version {
+		return ""
+	}
+	engine.state.Version = version
+	engine.saveState()
+	if previous == "" || compareVersions(version, previous) <= 0 {
+		return ""
+	}
+	return previous
+}
+
 // ---------- 设置页 ----------
 
 // settingsState 填好设置页状态里与平台无关的部分。

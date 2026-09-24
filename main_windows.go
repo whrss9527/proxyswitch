@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 	"unsafe"
@@ -40,6 +41,7 @@ func main() {
 	paths := resolvePaths()
 	setupLogger(paths.Log)
 	autostarted := false
+	updatedFrom := 0
 	command := ""
 	var arguments []string
 	for index, argument := range os.Args[1:] {
@@ -48,11 +50,24 @@ func main() {
 			autostarted = true
 			continue
 		}
+		if value, found := strings.CutPrefix(argument, updatedFromArgument); found {
+			updatedFrom, _ = strconv.Atoi(value)
+			continue
+		}
 		command, arguments = normalized, os.Args[index+2:]
 		break
 	}
 	if command != "" && command != "settings" {
 		os.Exit(runCommand(paths, command, arguments))
+	}
+	settingsPage := ""
+	if command == "settings" {
+		settingsPage = "proxies"
+	}
+	// 程序内更新后由旧版本启动：先等旧版本退出，再按正常流程启动，并打开「关于」页。
+	if updatedFrom > 0 {
+		finishUpdate(updatedFrom)
+		settingsPage = "about"
 	}
 
 	first, err := createSingleInstanceMutex(singleInstanceMutex)
@@ -74,7 +89,8 @@ func main() {
 	}
 
 	app := newApp(paths)
-	if err := app.run(autostarted, command == "settings"); err != nil {
+	app.restartedForUpdate = updatedFrom > 0
+	if err := app.run(autostarted, settingsPage); err != nil {
 		slog.Error("启动失败", "err", err)
 		messageBox(0, "启动失败："+err.Error()+"\n\n日志："+paths.Log, appName, mbOk|mbIconError|mbSetForeground|mbTopmost)
 		os.Exit(exitFailure)

@@ -13,7 +13,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"net/url"
 	"path"
 	"strconv"
 	"strings"
@@ -47,6 +46,7 @@ type SettingsBackend interface {
 	OpenLogFile() error
 	OpenUrl(address string) error
 	ActiveProxyUrl() string
+	InstallUpdate(progress func(received, total int64)) error
 }
 
 type SettingsState struct {
@@ -65,6 +65,8 @@ type SettingsState struct {
 	Targets     []TargetInfo     `json:"targets"`
 	Palette     []string         `json:"palette"`
 	Navigate    NavigateInfo     `json:"navigate"`
+	Update      *UpdateInfo      `json:"update,omitempty"`
+	Installing  *InstallProgress `json:"installing,omitempty"`
 }
 
 // NavigateInfo 是让已打开的设置页切换页面的请求，Serial 每次加一，页面发现变化时切到 Page。
@@ -164,12 +166,13 @@ type SettingsServer struct {
 	// 页面文件，默认是编译进程序的 web 目录；开发时可以换成磁盘上的目录，改完刷新即可看到。
 	files fs.FS
 
-	mutex    sync.Mutex
-	token    string
-	listener net.Listener
-	server   *http.Server
-	address  string
-	navigate NavigateInfo
+	mutex      sync.Mutex
+	token      string
+	listener   net.Listener
+	server     *http.Server
+	address    string
+	navigate   NavigateInfo
+	installing *InstallProgress
 }
 
 func newSettingsServer(backend SettingsBackend) *SettingsServer {
@@ -220,6 +223,7 @@ func (settings *SettingsServer) Start() (string, error) {
 	mux.HandleFunc("POST /api/open/log", settings.handleOpenLog)
 	mux.HandleFunc("POST /api/open-url", settings.handleOpenUrl)
 	mux.HandleFunc("GET /api/update", settings.handleUpdate)
+	mux.HandleFunc("POST /api/update/install", settings.handleInstallUpdate)
 	if settings.extra != nil {
 		settings.extra(mux)
 	}
@@ -244,8 +248,15 @@ func (settings *SettingsServer) state() SettingsState {
 	state := settings.backend.State()
 	settings.mutex.Lock()
 	state.Navigate = settings.navigate
+	state.Installing = settings.installing
 	settings.mutex.Unlock()
 	return state
+}
+
+func (settings *SettingsServer) setInstalling(progress *InstallProgress) {
+	settings.mutex.Lock()
+	settings.installing = progress
+	settings.mutex.Unlock()
 }
 
 func (settings *SettingsServer) Stop() {
@@ -522,15 +533,6 @@ func (settings *SettingsServer) handleOpenUrl(writer http.ResponseWriter, reques
 	settings.respondOpened(writer, settings.backend.OpenUrl(body.Url))
 }
 
-type UpdateInfo struct {
-	Current   string `json:"current"`
-	Latest    string `json:"latest"`
-	Newer     bool   `json:"newer"`
-	Url       string `json:"url"`
-	Published string `json:"published"`
-	Notes     string `json:"notes"`
-}
-
 func (settings *SettingsServer) handleUpdate(writer http.ResponseWriter, request *http.Request) {
 	info, err := checkLatestRelease(settings.backend.ActiveProxyUrl())
 	if err != nil {
@@ -541,77 +543,29 @@ func (settings *SettingsServer) handleUpdate(writer http.ResponseWriter, request
 	writeJson(writer, http.StatusOK, info)
 }
 
-const releaseApiUrl = "https://api.github.com/repos/whrss9527/proxyswitch/releases/latest"
-
-func checkLatestRelease(proxyUrl string) (UpdateInfo, error) {
-	transport := &http.Transport{Proxy: nil, DisableKeepAlives: true}
-	if proxyUrl != "" {
-		if parsed, err := url.Parse(proxyUrl); err == nil {
-			transport.Proxy = http.ProxyURL(parsed)
-		}
+// handleInstallUpdate 下载并安装新版本，下载进度经 /api/state 的 installing 提供。
+// 成功后程序会在片刻后退出，由新版本重新打开设置页。
+func (settings *SettingsServer) handleInstallUpdate(writer http.ResponseWriter, request *http.Request) {
+	settings.mutex.Lock()
+	busy := settings.installing != nil
+	if !busy {
+		settings.installing = &InstallProgress{}
 	}
-	client := &http.Client{Transport: transport, Timeout: 10 * time.Second}
-	request, err := http.NewRequest(http.MethodGet, releaseApiUrl, nil)
+	settings.mutex.Unlock()
+	if busy {
+		writeError(writer, http.StatusConflict, "正在下载更新")
+		return
+	}
+	err := settings.backend.InstallUpdate(func(received, total int64) {
+		settings.setInstalling(&InstallProgress{Received: received, Total: total})
+	})
+	settings.setInstalling(nil)
 	if err != nil {
-		return UpdateInfo{}, err
+		slog.WarnContext(request.Context(), "安装更新失败", "err", err)
+		writeError(writer, http.StatusBadGateway, err.Error())
+		return
 	}
-	request.Header.Set("Accept", "application/vnd.github+json")
-	request.Header.Set("User-Agent", appName+"/"+appVersion)
-	response, err := client.Do(request)
-	if err != nil {
-		return UpdateInfo{}, errors.New(friendlyRequestError(err, 10*time.Second))
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return UpdateInfo{}, fmt.Errorf("GitHub 返回 HTTP %d", response.StatusCode)
-	}
-	var release struct {
-		TagName     string `json:"tag_name"`
-		HtmlUrl     string `json:"html_url"`
-		PublishedAt string `json:"published_at"`
-		Body        string `json:"body"`
-	}
-	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&release); err != nil {
-		return UpdateInfo{}, err
-	}
-	latest := strings.TrimPrefix(release.TagName, "v")
-	notes := release.Body
-	if runes := []rune(notes); len(runes) > 1200 {
-		notes = string(runes[:1200]) + "…"
-	}
-	return UpdateInfo{
-		Current:   appVersion,
-		Latest:    latest,
-		Newer:     compareVersions(latest, appVersion) > 0,
-		Url:       release.HtmlUrl,
-		Published: release.PublishedAt,
-		Notes:     notes,
-	}, nil
-}
-
-// compareVersions 比较 x.y.z 形式的版本号，非数字部分按 0 处理。
-func compareVersions(first, second string) int {
-	firstParts := strings.Split(strings.TrimPrefix(first, "v"), ".")
-	secondParts := strings.Split(strings.TrimPrefix(second, "v"), ".")
-	for index := 0; index < len(firstParts) || index < len(secondParts); index++ {
-		firstNumber, secondNumber := versionPart(firstParts, index), versionPart(secondParts, index)
-		if firstNumber != secondNumber {
-			if firstNumber > secondNumber {
-				return 1
-			}
-			return -1
-		}
-	}
-	return 0
-}
-
-func versionPart(parts []string, index int) int {
-	if index >= len(parts) {
-		return 0
-	}
-	digits := strings.TrimRightFunc(parts[index], func(char rune) bool { return char < '0' || char > '9' })
-	number, _ := strconv.Atoi(digits)
-	return number
+	writeJson(writer, http.StatusOK, map[string]bool{"restarting": true})
 }
 
 // previewChanges 描述开启这套配置后会改动哪些设置，给编辑页的“将会进行的更改”用。

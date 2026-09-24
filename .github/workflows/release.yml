@@ -2,6 +2,7 @@ name: release
 
 # 推送 v* 标签时：先在 Windows 上跑全部测试，再编译 amd64 和 arm64 两个 exe（版本号取自标签），
 # 用 CHANGELOG.md 里对应版本的内容创建 GitHub Release 并上传附件。
+# Release 先以草稿创建，附件上传完才发布：程序内更新读取最新发布，不能读到还没有附件的发布。
 # 也可以在 Actions 页面手动运行，填一个已有的标签重新上传附件。
 on:
   push:
@@ -62,7 +63,8 @@ jobs:
           VERSION="${TAG#v}"
           awk -v version="$VERSION" '/^## /{ if (printing) exit; if (index($0, version)) { printing = 1; next } } printing' CHANGELOG.md > notes.md
           if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" --title "ProxySwitch $TAG" --notes-file notes.md
+            gh release create "$TAG" --draft --title "ProxySwitch $TAG" --notes-file notes.md
           fi
           gh release upload "$TAG" dist/ProxySwitch.exe dist/ProxySwitch-arm64.exe "dist/proxyswitch-$VERSION-src.zip" dist/SHA256SUMS.txt --clobber
+          gh release edit "$TAG" --draft=false --latest
           echo "已发布到 https://github.com/${GITHUB_REPOSITORY}/releases/tag/$TAG"

@@ -478,23 +478,95 @@ function diagnosticsPage() {
 
 // ---------- 关于 ----------
 
+function megabytes(bytes) {
+  return `${(bytes / 1048576).toFixed(1)} MB`;
+}
+
+// renderNotes 把发布说明里常用的 Markdown（标题、列表、行内代码、加粗）转成简单的排版，其余按原文显示。
+function renderNotes(text) {
+  const inline = (line) => raw(escapeHtml(line)
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>"));
+  const blocks = [];
+  let items = [];
+  const flushList = () => {
+    if (items.length) {
+      blocks.push(html`<ul>${items.map((item) => html`<li>${inline(item)}</li>`)}</ul>`);
+      items = [];
+    }
+  };
+  for (const line of String(text || "").split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (/^[-*]\s+/.test(trimmed)) {
+      items.push(trimmed.replace(/^[-*]\s+/, ""));
+      continue;
+    }
+    flushList();
+    const heading = /^#{1,6}\s+(.*)$/.exec(trimmed);
+    if (heading) {
+      blocks.push(html`<div class="notes-heading">${inline(heading[1])}</div>`);
+    } else if (trimmed) {
+      blocks.push(html`<p>${inline(trimmed)}</p>`);
+    }
+  }
+  flushList();
+  return html`${blocks}`;
+}
+
+// knownUpdate 是手动检查的结果，没有手动检查时用程序自动检查发现的新版本。
+function knownUpdate() {
+  return app.update || app.state.update || null;
+}
+
+function updateView() {
+  const update = knownUpdate();
+  if (app.restarting) {
+    return html`
+      <div class="infobar success"><span class="spinner"></span><div class="infobar-body">
+        <div class="infobar-title">更新已安装，正在重新启动</div>
+        新版本启动后会打开新的设置窗口，这个窗口会自动关闭。
+      </div></div>`;
+  }
+  if (app.installing) {
+    const progress = app.state.installing || { received: 0, total: 0 };
+    const percent = progress.total > 0 ? Math.min(100, Math.round((progress.received * 100) / progress.total)) : 0;
+    return html`
+      <div class="infobar info">${icon("download")}<div class="infobar-body">
+        <div class="infobar-title">正在下载 ProxySwitch ${update ? update.latest : ""}</div>
+        <div class="progress ${progress.total > 0 ? "" : "indeterminate"}" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percent}"><span style="width:${percent}%"></span></div>
+        <div class="caption muted numeric">${progress.total > 0 ? `${megabytes(progress.received)} / ${megabytes(progress.total)}` : progress.received > 0 ? megabytes(progress.received) : "正在连接…"}</div>
+      </div></div>`;
+  }
+  if (!update) {
+    return html``;
+  }
+  if (update.checking) {
+    return html`<div class="infobar"><span class="spinner"></span><div class="infobar-body">正在检查更新…</div></div>`;
+  }
+  if (update.error) {
+    return html`<div class="infobar warning">${icon("warning")}<div class="infobar-body">${update.error}</div></div>`;
+  }
+  if (!update.newer) {
+    return html`<div class="infobar success">${icon("success")}<div class="infobar-body">已经是最新版本（${update.latest}）</div></div>`;
+  }
+  return html`
+    <div class="infobar info">${icon("download")}<div class="infobar-body">
+      <div class="infobar-title">发现新版本 ${update.latest}${update.published ? html`<span class="caption muted">（${update.published.slice(0, 10)} 发布）</span>` : ""}</div>
+      ${update.notes ? html`<div class="caption release-notes">${renderNotes(update.notes)}</div>` : ""}
+      ${app.installError ? html`<div class="caption" style="color:var(--danger);margin-top:6px">没有更新成功：${app.installError}</div>` : ""}
+      <div class="infobar-actions">
+        ${update.can_install
+          ? html`<button class="button accent" data-action="install-update">${icon("download")}${update.asset_size ? `立即更新（${megabytes(update.asset_size)}）` : "立即更新"}</button>
+            <button class="button" data-action="open-url" data-url="${update.url}">${icon("external")}查看发布页</button>`
+          : html`<button class="button accent" data-action="open-url" data-url="${update.url}">${icon("external")}前往下载</button>`}
+      </div>
+      ${update.can_install ? html`<div class="caption faint" style="margin-top:8px">下载后自动校验并重新启动，设置和代理配置都会保留。</div>` : ""}
+    </div></div>`;
+}
+
 function aboutPage() {
   const update = app.update;
-  let updateView = html``;
-  if (update && update.checking) {
-    updateView = html`<div class="infobar">${raw('<span class="spinner"></span>')}<div class="infobar-body">正在检查更新…</div></div>`;
-  } else if (update && update.error) {
-    updateView = html`<div class="infobar warning">${icon("warning")}<div class="infobar-body">${update.error}</div></div>`;
-  } else if (update && update.newer) {
-    updateView = html`
-      <div class="infobar info">${icon("download")}<div class="infobar-body">
-        <div class="infobar-title">发现新版本 ${update.latest}${update.published ? html`<span class="caption muted">（${update.published.slice(0, 10)} 发布）</span>` : ""}</div>
-        ${update.notes ? html`<div class="caption" style="white-space:pre-line;margin-top:6px;max-height:180px;overflow:auto">${update.notes}</div>` : ""}
-        <div class="infobar-actions"><button class="button accent" data-action="open-url" data-url="${update.url}">${icon("external")}前往下载</button></div>
-      </div></div>`;
-  } else if (update) {
-    updateView = html`<div class="infobar success">${icon("success")}<div class="infobar-body">已经是最新版本（${update.latest}）</div></div>`;
-  }
+  const busy = (update && update.checking) || app.installing || app.restarting;
   const repository = "https://github.com/whrss9527/proxyswitch";
   return html`
     ${pageHeader("关于")}
@@ -504,9 +576,14 @@ function aboutPage() {
         <div class="about-name">ProxySwitch</div>
         <div class="muted">快捷切换 Windows 代理 · 版本 <span class="numeric">${app.state.version}</span>${app.state.platform === "dev" ? html` <span class="badge warning">开发模式</span>` : ""}</div>
       </div>
-      <button class="button" data-action="check-update" ${update && update.checking ? raw("disabled") : ""}>${icon("refresh")}检查更新</button>
+      <button class="button" data-action="check-update" ${busy ? raw("disabled") : ""}>${icon("refresh")}检查更新</button>
     </div>
-    <div style="margin-top:12px">${updateView}</div>
+    <div style="margin-top:12px">${updateView()}</div>
+    ${app.config ? html`
+      <div class="section-title">更新</div>
+      <div class="card">
+        ${settingCard({ iconName: "download", title: "自动检查更新", description: "每天检查一次 GitHub 上的新版本，发现时在托盘提示，不会自动安装", control: html`<span class="switch-label">${app.config.check_updates ? "开" : "关"}</span>${switchButton({ checked: app.config.check_updates, setting: "check_updates", label: "自动检查更新" })}` })}
+      </div>` : ""}
     <div class="section-title">链接</div>
     <div class="card card-group">
       ${settingCard({ iconName: "link", title: "项目主页", description: "源代码、使用说明", control: html`<button class="button" data-action="open-url" data-url="${repository}">${icon("external")}打开</button>` })}
@@ -526,7 +603,7 @@ ProxySwitch.exe settings        打开设置</pre></div>
       <dt>日志</dt><dd class="mono">${app.state.paths.log}</dd>
       <dt>模式</dt><dd>${app.state.paths.portable ? "便携模式：配置和 exe 放在同一个文件夹" : "安装模式：配置保存在用户目录"}</dd>
     </dl>
-    <p class="caption faint" style="margin-top:16px">MIT 许可证 · 不收集任何数据，只在你点「检查更新」时访问 GitHub</p>`;
+    <p class="caption faint" style="margin-top:16px">MIT 许可证 · 不收集任何数据，只在检查更新时访问 GitHub</p>`;
 }
 
 const pageRenderers = {

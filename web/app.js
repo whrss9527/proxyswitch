@@ -12,6 +12,9 @@ const app = {
   diagnostics: null,
   log: "",
   update: null,
+  installing: false,
+  installError: "",
+  restarting: false,
   navigateSerial: 0,
 };
 
@@ -133,9 +136,10 @@ function renderNav() {
   if (!nav) {
     return;
   }
+  const update = knownUpdate();
   const badges = {
     proxies: Boolean(app.state.config_error),
-    about: Boolean(app.update && app.update.newer),
+    about: Boolean(update && update.newer),
   };
   setHtml(nav, html`
     <div class="brand">
@@ -596,6 +600,7 @@ const actions = {
   },
   "check-update": async () => {
     app.update = { checking: true };
+    app.installError = "";
     renderPage();
     try {
       app.update = await api("GET", "/api/update");
@@ -603,6 +608,31 @@ const actions = {
       app.update = { error: error.message };
     }
     renderNav();
+    renderPage();
+  },
+  "install-update": async () => {
+    const update = knownUpdate();
+    if (!update || !update.can_install || app.installing) {
+      return;
+    }
+    app.update = update;
+    app.installing = true;
+    app.installError = "";
+    renderPage();
+    // 下载期间更频繁地同步状态，显示进度。
+    const progressTimer = setInterval(() => refreshState(true).catch(() => {}), 500);
+    try {
+      await api("POST", "/api/update/install");
+      app.restarting = true;
+      // 马上改掉窗口标题：新版本启动时按标题查找已打开的设置窗口，不能找到这个即将关闭的窗口。
+      document.title = "正在重新启动 · ProxySwitch";
+      setTimeout(() => window.close(), 2500);
+    } catch (error) {
+      app.installError = error.message;
+    } finally {
+      clearInterval(progressTimer);
+      app.installing = false;
+    }
     renderPage();
   },
 };
@@ -698,10 +728,14 @@ connectionLost = (reason) => {
   const blocker = document.createElement("div");
   blocker.className = "blocker";
   blocker.id = "blocker";
-  const title = reason === "expired" ? "这个设置页面已经失效" : "ProxySwitch 已经退出";
-  const message = reason === "expired"
+  let title = reason === "expired" ? "这个设置页面已经失效" : "ProxySwitch 已经退出";
+  let message = reason === "expired"
     ? "ProxySwitch 重新启动过。请关闭这个窗口，再从托盘菜单打开「设置」。"
     : "托盘程序没有在运行。重新打开 ProxySwitch 后，从托盘菜单打开「设置」。";
+  if (app.restarting) {
+    title = "正在重新启动";
+    message = "新版本启动后会打开新的设置窗口，可以关闭这个窗口。";
+  }
   setHtml(blocker, html`<div class="card">${logoSvg(grayTrack, false, "empty-logo")}<h2>${title}</h2><p class="muted">${message}</p><button class="button accent" data-close-window>关闭窗口</button></div>`);
   blocker.querySelector("[data-close-window]").addEventListener("click", () => window.close());
   document.body.appendChild(blocker);
