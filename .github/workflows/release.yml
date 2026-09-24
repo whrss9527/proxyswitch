@@ -2,6 +2,7 @@ name: release
 
 # 推送 v* 标签时：先在 Windows 上跑全部测试，再编译 amd64 和 arm64 两个 exe（版本号取自标签），
 # 用 CHANGELOG.md 里对应版本的内容创建 GitHub Release 并上传附件。
+# 编译前下载 core_config.go 里固定版本的官方 mihomo 内核，把它的 SHA-256 写进程序，Windows 版在程序里下载内核时据此校验。
 # Release 先以草稿创建，附件上传完才发布：程序内更新读取最新发布，不能读到还没有附件的发布。
 # 也可以在 Actions 页面手动运行，填一个已有的标签重新上传附件。
 on:
@@ -31,6 +32,14 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24"
+      - name: 下载代理内核（订阅相关的测试用）
+        shell: bash
+        run: |
+          VERSION=$(sed -n 's/^const coreVersion = "\(.*\)"$/\1/p' core_config.go)
+          curl -fsSL -o "$RUNNER_TEMP/mihomo.zip" "https://github.com/MetaCubeX/mihomo/releases/download/$VERSION/mihomo-windows-amd64-v1-$VERSION.zip"
+          unzip -o "$RUNNER_TEMP/mihomo.zip" -d "$RUNNER_TEMP/mihomo"
+          mv "$RUNNER_TEMP/mihomo/mihomo-windows-amd64-v1.exe" "$RUNNER_TEMP/mihomo/mihomo.exe"
+          echo "PROXYSWITCH_CORE=$(cygpath -w "$RUNNER_TEMP/mihomo/mihomo.exe")" >> "$GITHUB_ENV"
       - name: go vet
         run: go vet ./...
       - name: go test
@@ -49,11 +58,15 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24"
+      - name: 下载固定版本的内核并计算校验值
+        # 显式用 bash（带 pipefail）：下载失败时让发布中止，而不是发布一个不能在程序里下载内核的版本。
+        shell: bash
+        run: make -s core-sha256 | tee -a "$GITHUB_ENV"
       - name: 编译 amd64 和 arm64
         run: |
           VERSION="${TAG#v}"
           go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0
-          make resources windows VERSION="$VERSION"
+          make resources windows VERSION="$VERSION" CORE_SHA256_AMD64="$CORE_SHA256_AMD64" CORE_SHA256_ARM64="$CORE_SHA256_ARM64"
           git archive --format=zip --prefix="proxyswitch-$VERSION/" -o "dist/proxyswitch-$VERSION-src.zip" HEAD
           cd dist && sha256sum ProxySwitch.exe ProxySwitch-arm64.exe "proxyswitch-$VERSION-src.zip" > SHA256SUMS.txt && cat SHA256SUMS.txt
       - name: 发布
@@ -62,6 +75,8 @@ jobs:
         run: |
           VERSION="${TAG#v}"
           awk -v version="$VERSION" '/^## /{ if (printing) exit; if (index($0, version)) { printing = 1; next } } printing' CHANGELOG.md > notes.md
+          CORE_VERSION=$(sed -n 's/^const coreVersion = "\(.*\)"$/\1/p' core_config.go)
+          printf '\n---\n\n订阅使用的代理内核：[mihomo %s](https://github.com/MetaCubeX/mihomo/releases/tag/%s)。在程序里下载时按下面的 SHA-256 校验：\n\n- x64：`%s`\n- ARM64：`%s`\n' "$CORE_VERSION" "$CORE_VERSION" "$CORE_SHA256_AMD64" "$CORE_SHA256_ARM64" >> notes.md
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             gh release create "$TAG" --draft --title "ProxySwitch $TAG" --notes-file notes.md
           fi

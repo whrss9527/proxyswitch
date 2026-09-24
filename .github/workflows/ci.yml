@@ -1,6 +1,7 @@
 name: ci
 
 # 推送代码和合并请求时运行：Linux 上跑单元测试和设置页的浏览器测试，Windows 上跑包括修改系统设置在内的全部测试。
+# 两边都下载 core_config.go 里固定版本的官方 mihomo 内核，测试订阅和内核管理。
 on:
   push:
     branches: ["**"]
@@ -15,6 +16,14 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24"
+      - name: 下载代理内核
+        shell: bash
+        run: |
+          VERSION=$(sed -n 's/^const coreVersion = "\(.*\)"$/\1/p' core_config.go)
+          curl -fsSL "https://github.com/MetaCubeX/mihomo/releases/download/$VERSION/mihomo-linux-amd64-v1-$VERSION.gz" | gunzip > "$RUNNER_TEMP/mihomo"
+          chmod +x "$RUNNER_TEMP/mihomo"
+          "$RUNNER_TEMP/mihomo" -v
+          echo "PROXYSWITCH_CORE=$RUNNER_TEMP/mihomo" >> "$GITHUB_ENV"
       - name: 静态检查（Linux 和 Windows 两个平台）
         run: make vet
       - name: 单元测试
@@ -44,6 +53,15 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24"
+      - name: 下载代理内核
+        shell: bash
+        run: |
+          VERSION=$(sed -n 's/^const coreVersion = "\(.*\)"$/\1/p' core_config.go)
+          curl -fsSL -o "$RUNNER_TEMP/mihomo.zip" "https://github.com/MetaCubeX/mihomo/releases/download/$VERSION/mihomo-windows-amd64-v1-$VERSION.zip"
+          unzip -o "$RUNNER_TEMP/mihomo.zip" -d "$RUNNER_TEMP/mihomo"
+          mv "$RUNNER_TEMP/mihomo/mihomo-windows-amd64-v1.exe" "$RUNNER_TEMP/mihomo/mihomo.exe"
+          "$RUNNER_TEMP/mihomo/mihomo.exe" -v
+          echo "PROXYSWITCH_CORE=$(cygpath -w "$RUNNER_TEMP/mihomo/mihomo.exe")" >> "$GITHUB_ENV"
       - name: go vet
         run: go vet ./...
       - name: go test（包括修改系统代理和环境变量的测试，结束后恢复）
