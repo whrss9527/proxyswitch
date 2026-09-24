@@ -64,6 +64,13 @@ type SettingsState struct {
 	Defaults    DefaultsInfo     `json:"defaults"`
 	Targets     []TargetInfo     `json:"targets"`
 	Palette     []string         `json:"palette"`
+	Navigate    NavigateInfo     `json:"navigate"`
+}
+
+// NavigateInfo 是让已打开的设置页切换页面的请求，Serial 每次加一，页面发现变化时切到 Page。
+type NavigateInfo struct {
+	Page   string `json:"page"`
+	Serial int    `json:"serial"`
 }
 
 type PathsInfo struct {
@@ -162,6 +169,7 @@ type SettingsServer struct {
 	listener net.Listener
 	server   *http.Server
 	address  string
+	navigate NavigateInfo
 }
 
 func newSettingsServer(backend SettingsBackend) *SettingsServer {
@@ -223,6 +231,21 @@ func (settings *SettingsServer) Start() (string, error) {
 	}()
 	slog.Info("设置服务已启动", "port", port)
 	return settings.address, nil
+}
+
+// ShowPage 请求已经打开的设置页切到 page，页面下次同步状态时切换。
+func (settings *SettingsServer) ShowPage(page string) {
+	settings.mutex.Lock()
+	defer settings.mutex.Unlock()
+	settings.navigate = NavigateInfo{Page: page, Serial: settings.navigate.Serial + 1}
+}
+
+func (settings *SettingsServer) state() SettingsState {
+	state := settings.backend.State()
+	settings.mutex.Lock()
+	state.Navigate = settings.navigate
+	settings.mutex.Unlock()
+	return state
 }
 
 func (settings *SettingsServer) Stop() {
@@ -322,14 +345,14 @@ func decodeJsonBody(writer http.ResponseWriter, request *http.Request, target an
 func (settings *SettingsServer) respondState(writer http.ResponseWriter, request *http.Request, err error) {
 	if err != nil {
 		slog.WarnContext(request.Context(), "设置页操作失败", "path", request.URL.Path, "err", err)
-		writeJson(writer, http.StatusConflict, map[string]any{"error": err.Error(), "state": settings.backend.State()})
+		writeJson(writer, http.StatusConflict, map[string]any{"error": err.Error(), "state": settings.state()})
 		return
 	}
-	writeJson(writer, http.StatusOK, settings.backend.State())
+	writeJson(writer, http.StatusOK, settings.state())
 }
 
 func (settings *SettingsServer) handleState(writer http.ResponseWriter, request *http.Request) {
-	writeJson(writer, http.StatusOK, settings.backend.State())
+	writeJson(writer, http.StatusOK, settings.state())
 }
 
 func (settings *SettingsServer) handleConfig(writer http.ResponseWriter, request *http.Request) {

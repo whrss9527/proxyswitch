@@ -54,6 +54,8 @@ type App struct {
 	problemNotices int
 	// 设置页发起的操作由页面自己显示结果，这期间不弹托盘通知。
 	quiet bool
+	// 最近一条通知对应的设置页，点击通知时打开。
+	noticePage string
 }
 
 func newApp(paths Paths) *App {
@@ -148,7 +150,7 @@ func (app *App) registerHotkeys(config *Config) {
 		}
 	}
 	if len(problems) > 0 {
-		app.notify(Notice{Level: noticeWarning, Title: "快捷键被占用", Text: strings.Join(problems, "、") + " 已被其他程序占用，可以在设置里换一个"})
+		app.notify(Notice{Level: noticeWarning, Title: "快捷键被占用", Text: strings.Join(problems, "、") + " 已被其他程序占用，点这里换一个", Page: "general"})
 	}
 }
 
@@ -278,6 +280,7 @@ func (app *App) notify(notice Notice) {
 			}
 		}
 	}
+	app.noticePage = notice.Page
 	app.tray.Notify(notice.Title, notice.Text, flags, largeIcon, timeout)
 }
 
@@ -573,6 +576,14 @@ func (app *App) onActivateRequest() {
 	app.openSettings()
 }
 
+func (app *App) onNotificationClick() {
+	page := app.noticePage
+	if page == "" {
+		page = "proxies"
+	}
+	app.openSettingsAt(page)
+}
+
 func (app *App) onSettingChange(section string) {
 	switch section {
 	case "ImmersiveColorSet":
@@ -621,10 +632,19 @@ func (app *App) clearIcons() {
 
 // openSettings 打开设置页（已打开时切到前台）。
 func (app *App) openSettings() {
+	app.openSettingsAt("")
+}
+
+// openSettingsAt 打开设置页并切到 page；page 为空时保持设置页当前的页面。
+func (app *App) openSettingsAt(page string) {
 	address, err := app.settings.Start()
 	if err != nil {
 		app.notify(Notice{Level: noticeError, Title: "无法打开设置", Text: err.Error()})
 		return
+	}
+	if page != "" {
+		app.settings.ShowPage(page)
+		address += "#" + page
 	}
 	mode := "app"
 	if config := app.engine.Config(); config != nil {

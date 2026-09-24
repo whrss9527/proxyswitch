@@ -277,7 +277,18 @@ func runDevSettings(args []string) int {
 
 	backend := newDevBackend(paths, httpProxy, socks)
 	settings := newSettingsServer(backend)
-	settings.extra = backend.devRoutes
+	settings.extra = func(mux *http.ServeMux) {
+		backend.devRoutes(mux)
+		mux.HandleFunc("POST /api/dev/navigate", func(writer http.ResponseWriter, request *http.Request) {
+			var body struct {
+				Page string `json:"page"`
+			}
+			if decodeJsonBody(writer, request, &body) {
+				settings.ShowPage(body.Page)
+				writeJson(writer, http.StatusOK, map[string]bool{"ok": true})
+			}
+		})
+	}
 	if webDir != "" {
 		settings.files = os.DirFS(webDir)
 	}

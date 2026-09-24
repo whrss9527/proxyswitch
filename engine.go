@@ -38,13 +38,15 @@ const (
 	noticeError
 )
 
-// Notice 是一条托盘通知。Icon 和 Color 决定信息类通知的图标：开关状态和配置的颜色。
+// Notice 是一条托盘通知。Icon 和 Color 决定信息类通知的图标：开关状态和配置的颜色；
+// Page 是点击通知时打开的设置页，为空时打开「代理」页。
 type Notice struct {
 	Level NoticeLevel
 	Title string
 	Text  string
 	Icon  string
 	Color string
+	Page  string
 }
 
 // Status 是当前代理状态的判断结果。
@@ -750,7 +752,9 @@ func (engine *Engine) applyNetworkRules(info NetworkInfo) error {
 		}
 		engine.autoOffProfileId = ""
 		result := engine.activate(profile)
-		engine.notify(switchedNotice(profile, result, "已切换到「"+profile.Name+"」", "按网络自动切换 · "+where))
+		notice := switchedNotice(profile, result, "已切换到「"+profile.Name+"」", "按网络自动切换 · "+where)
+		notice.Page = "network"
+		engine.notify(notice)
 		engine.recordAutoSwitch(where, "切换到「"+profile.Name+"」")
 		return result.err()
 	case "off":
@@ -760,7 +764,9 @@ func (engine *Engine) applyNetworkRules(info NetworkInfo) error {
 		}
 		engine.autoOffProfileId = ""
 		_, result, _ := engine.deactivate()
-		engine.notify(turnedOffNotice(status.Profile, result, "按网络自动切换 · "+where))
+		notice := turnedOffNotice(status.Profile, result, "按网络自动切换 · "+where)
+		notice.Page = "network"
+		engine.notify(notice)
 		engine.recordAutoSwitch(where, "关闭代理")
 		return result.err()
 	}

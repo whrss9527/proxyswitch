@@ -145,8 +145,9 @@ const (
 	wmRunOnUi      = wmApp + 2
 	wmActivate     = wmApp + 3
 
-	ninSelect    = wmUser + 0
-	ninKeySelect = wmUser + 1
+	ninSelect           = wmUser + 0
+	ninKeySelect        = wmUser + 1
+	ninBalloonUserClick = wmUser + 5
 
 	nimAdd        = 0x0
 	nimModify     = 0x1

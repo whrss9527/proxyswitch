@@ -27,6 +27,7 @@ type trayHandler interface {
 	onTrayClick()
 	onTrayDoubleClick()
 	onTrayMenu(anchor point)
+	onNotificationClick()
 	onHotkey(id int)
 	onTimer(id uintptr)
 	onCopyData(data []byte) uintptr
@@ -412,5 +413,7 @@ func (tray *Tray) handleTrayEvent(event uint32, anchor uintptr) {
 		}
 	case wmContextMenu:
 		tray.handler.onTrayMenu(point{x: int32(int16(anchor & 0xFFFF)), y: int32(int16((anchor >> 16) & 0xFFFF))})
+	case ninBalloonUserClick:
+		tray.handler.onNotificationClick()
 	}
 }

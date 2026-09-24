@@ -405,7 +405,7 @@ func TestEngineAutoSwitch(t *testing.T) {
 	}
 	engine.UpdateNetwork(officeNetwork)
 	fixture.expectStatus(t, statusOn, "公司")
-	if notice := fixture.lastNotice(t); notice.Title != "已切换到「公司」" || !strings.Contains(notice.Text, "Wi-Fi「Office-5G」") {
+	if notice := fixture.lastNotice(t); notice.Title != "已切换到「公司」" || !strings.Contains(notice.Text, "Wi-Fi「Office-5G」") || notice.Page != "network" {
 		t.Errorf("自动切换通知不对：%+v", notice)
 	}
 

@@ -12,6 +12,7 @@ const app = {
   diagnostics: null,
   log: "",
   update: null,
+  navigateSerial: 0,
 };
 
 const pollInterval = 2000;
@@ -33,6 +34,14 @@ function receiveState(state, options = {}) {
     app.config = clone(state.config);
   }
   applyAppearance();
+  // 程序请求切换页面（例如点击了托盘通知）。序号只增不减：比这次请求更早发出的请求可能更晚返回，不能再切一次。
+  const navigate = state.navigate || { page: "", serial: 0 };
+  const requested = navigate.serial > app.navigateSerial && pageRenderers[navigate.page];
+  app.navigateSerial = Math.max(app.navigateSerial, navigate.serial);
+  if (requested) {
+    goto(navigate.page);
+    return;
+  }
   renderNav();
   const stateChanged = !previous || JSON.stringify(previous) !== JSON.stringify(state);
   if (options.force || stateChanged) {
@@ -713,6 +722,7 @@ async function start() {
     }
     app.state = state;
     app.config = clone(state.config);
+    app.navigateSerial = state.navigate ? state.navigate.serial : 0;
     applyAppearance();
     renderShell();
     renderNav();

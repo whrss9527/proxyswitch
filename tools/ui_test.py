@@ -306,6 +306,16 @@ def run_flows(page, api, info, config_path):
     page.wait_for_selector(".about-hero")
     check(state["version"] in page.inner_text(".about-hero"), "关于页显示版本号")
 
+    # ---------- 程序请求切换页面、地址里带页面 ----------
+    page.click("[data-page=proxies]")
+    api.call("POST", "/api/dev/navigate", {"page": "general"})
+    check(wait_until(lambda: page.evaluate("app.page") == "general", timeout=6), "点击托盘通知时设置页切到对应页面")
+    other = page.context.new_page()
+    other.goto(info["url"] + "#network")
+    other.wait_for_selector(".network")
+    check(other.evaluate("location.hash") == "#network" and "token" not in other.url, "带 #页面 打开时直接显示该页")
+    other.close()
+
     # ---------- 文档截图与深色模式 ----------
     test_base = info["test_url"].rsplit("/", 1)[0]
     docs_config = {

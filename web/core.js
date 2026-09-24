@@ -131,9 +131,9 @@ const pageToken = (() => {
   const query = new URLSearchParams(location.search);
   const token = query.get("token");
   if (token) {
-    // 把 token 从地址栏移走：刷新仍然可用，复制地址也不会带上它。
+    // 把 token 从地址栏移走：刷新仍然可用，复制地址也不会带上它。保留 #页面，程序可以直接打开某一页。
     sessionStorage.setItem(tokenKey, token);
-    history.replaceState(null, "", "/");
+    history.replaceState(null, "", "/" + location.hash);
     return token;
   }
   return sessionStorage.getItem(tokenKey) || "";
