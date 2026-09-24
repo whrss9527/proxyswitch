@@ -1,6 +1,7 @@
 name: ci
 
-# 推送代码和合并请求时运行：Linux 上跑单元测试和设置页的浏览器测试，Windows 上跑包括修改系统设置在内的全部测试。
+# 推送代码和合并请求时运行：Linux 上跑单元测试和设置页的浏览器测试，Windows 上跑包括修改系统设置在内的全部测试，
+# macOS 上编译、测试并打包 macOS 版（macos/ 目录，Swift）。
 on:
   push:
     branches: ["**"]
@@ -35,6 +36,42 @@ jobs:
         with:
           name: ui-screenshots
           path: ui-screenshots
+
+  macos:
+    name: macOS 版（Swift）
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: macos
+    steps:
+      - uses: actions/checkout@v4
+      - name: 选择最新的 Xcode
+        run: |
+          latest=$(ls -d /Applications/Xcode*.app | sort -V | tail -1)
+          sudo xcode-select -s "$latest"
+          xcodebuild -version
+          swift --version
+      - name: 编译
+        run: swift build
+      - name: 单元测试
+        run: swift test
+      - name: 打包 .app（本机架构）
+        run: VERSION=0.0.0 ARCHS="" Scripts/build-app.sh
+      - name: 冒烟启动
+        run: |
+          open dist/ProxySwitch.app
+          sleep 10
+          if ! pgrep -x ProxySwitch >/dev/null; then
+            echo "程序没有在运行"
+            cat "$HOME/Library/Application Support/ProxySwitch/proxyswitch.log" || true
+            exit 1
+          fi
+          cat "$HOME/Library/Application Support/ProxySwitch/proxyswitch.log" || true
+          pkill -x ProxySwitch || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ProxySwitch-macos
+          path: macos/dist/ProxySwitch-macos.zip
 
   windows:
     name: 全部测试（Windows）
