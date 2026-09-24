@@ -360,6 +360,31 @@ async function updateSubscription(profile) {
   }
 }
 
+async function updateRules(profile) {
+  try {
+    receiveState(await api("POST", `/api/subscriptions/${profile.id}/rules`), { force: true });
+    const info = (app.state.rules || {})[profile.id] || {};
+    toast(`共 ${(info.rules || 0).toLocaleString()} 条规则`, "success", `「${profile.name}」的分流规则已更新`);
+  } catch (error) {
+    if (error.state) {
+      receiveState(error.state, { force: true });
+    }
+    toast(error.message, "danger", "分流规则没有更新成功");
+  }
+}
+
+async function setMode(profile, mode) {
+  try {
+    receiveState(await api("POST", `/api/subscriptions/${profile.id}/mode`, { mode }), { force: true });
+    toast(mode === "global" ? "所有网站都经过节点" : `分流规则：${rulesName(profile.rules)}`, "success", mode === "global" ? "已切换到全局代理" : "已切换到按规则分流");
+  } catch (error) {
+    if (error.state) {
+      receiveState(error.state, { force: true });
+    }
+    toast(error.message, "danger", "没有切换成功");
+  }
+}
+
 async function loadDiagnostics() {
   try {
     const [diagnostics, log] = await Promise.all([api("GET", "/api/diagnostics"), api("GET", "/api/log?lines=300")]);
@@ -417,7 +442,11 @@ function openProfileMenu(anchor, profile) {
   const active = app.state.status.state === "on" && app.state.status.profile === profile.name;
   const subscriptionItems = profile.subscription ? [
     { label: "选择节点", icon: "list", action: () => openNodesDialog(profile.id) },
+    profile.mode === "global"
+      ? { label: "切换到按规则分流", icon: "swap", action: () => setMode(profile, "rule") }
+      : { label: "切换到全局代理", icon: "swap", action: () => setMode(profile, "global") },
     { label: "更新订阅", icon: "refresh", action: () => updateSubscription(profile) },
+    ...(profile.rules ? [{ label: "更新分流规则", icon: "refresh", action: () => updateRules(profile) }] : []),
   ] : [];
   openMenu(anchor, [
     ...subscriptionItems,

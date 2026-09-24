@@ -625,7 +625,8 @@ a:hover {
   outline: 2px solid var(--focus);
 }
 
-.select option {
+.select option,
+.select optgroup {
   background: var(--flyout);
   color: var(--text);
 }
@@ -657,6 +658,16 @@ a:hover {
 .field-row {
   display: flex;
   gap: 12px;
+}
+
+/* 输入框右边跟一个按钮，例如自定义规则地址旁的「检查规则」。 */
+.field-inline {
+  display: flex;
+  gap: 8px;
+}
+
+.field-inline > .input {
+  flex: 1;
 }
 
 .field-row > .field {
@@ -1611,6 +1622,15 @@ kbd.compact {
 /* ---------- 订阅的节点 ---------- */
 
 /* 滚动节点列表时搜索栏停在对话框顶部。 */
+/* 节点对话框顶部切换按规则分流和全局代理。 */
+.nodes-mode {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-bottom: 12px;
+}
+
 .nodes-toolbar {
   position: sticky;
   top: 0;

@@ -172,7 +172,51 @@ function coreNotice() {
   return html``;
 }
 
-// subscriptionMeta 是订阅配置在列表里的说明：节点数、选中的节点、流量和到期时间，或下载状态。
+// rulePresetFor 返回规则地址对应的预设（设置页里可以直接选的规则），不是预设时返回 null。
+function rulePresetFor(url) {
+  return (app.state.rule_presets || []).find((preset) => preset.url === url) || null;
+}
+
+// rulesName 是分流规则的简短说明：内置的大陆直连、预设的名字或「自定义规则」。
+function rulesName(rules) {
+  if (!rules) {
+    return "大陆直连";
+  }
+  const preset = rulePresetFor(rules);
+  return preset ? preset.name : "自定义规则";
+}
+
+// modeText 是订阅配置的分流方式，例如「按规则分流 · 黑名单 + 去广告」或「全局代理」。
+function modeText(profile) {
+  return profile.mode === "global" ? "全局代理" : `按规则分流 · ${rulesName(profile.rules)}`;
+}
+
+const finalTexts = { proxy: "其余网站走节点", direct: "其余网站直连", reject: "其余网站被拦截" };
+
+// rulesMeta 是订阅配置的分流方式在列表里的说明，带上规则的下载状态：下载中、没下载成功时暂时按大陆直连分流。
+function rulesMeta(profile) {
+  if (profile.mode === "global" || !profile.rules) {
+    return html`<span>${modeText(profile)}</span>`;
+  }
+  const info = (app.state.rules || {})[profile.id] || {};
+  const name = rulesName(profile.rules);
+  if (!info.updated) {
+    if (info.error) {
+      return html`<span style="color:var(--danger)" title="${info.error}">分流规则「${name}」没有下载成功，暂时按大陆直连分流</span>`;
+    }
+    return html`<span><span class="spinner" style="width:10px;height:10px;border-width:1.5px;vertical-align:-1px"></span> 正在下载分流规则「${name}」…</span>`;
+  }
+  const details = [`${(info.rules || 0).toLocaleString()} 条规则`, finalTexts[info.final]];
+  if (info.skipped) {
+    details.push(`${info.skipped} 条内核不支持，已跳过`);
+  }
+  return html`
+    <span title="${details.join("，")}">${modeText(profile)} · ${(info.rules || 0).toLocaleString()} 条</span>
+    ${info.failed_sets ? html`<span class="badge warning" title="下次更新时再试">${info.failed_sets} 个规则列表没下载到</span>` : ""}
+    ${info.error ? html`<span class="badge warning" title="${info.error}">规则更新失败，仍在使用上次的规则</span>` : ""}`;
+}
+
+// subscriptionMeta 是订阅配置在列表里的说明：节点数、选中的节点、流量和到期时间、分流方式，或下载状态。
 function subscriptionMeta(profile) {
   const info = app.state.subscriptions[profile.id] || {};
   if (!info.updated) {
@@ -186,6 +230,7 @@ function subscriptionMeta(profile) {
   return html`
     <span>${describeServer(profile)}</span>
     <span>${info.nodes} 个节点</span>
+    ${rulesMeta(profile)}
     ${usage ? html`<span>${usage}</span>` : ""}
     ${warning ? html`<span class="badge warning">${warning}</span>` : ""}
     ${info.error ? html`<span class="badge warning" title="${info.error}">更新失败，仍在使用上次的节点</span>` : ""}`;
@@ -208,9 +253,9 @@ function heroView() {
     checked = true;
     warn = status.health === "down" ? "warn" : "";
     title = "代理已开启";
-    // 订阅配置显示实际在用的节点，自动选择时注明。
+    // 订阅配置显示实际在用的节点（自动选择时注明）和分流方式。
     const server = profile.subscription
-      ? html`<span>${status.node ? `订阅 · ${status.node}${profile.node ? "" : "（自动选择）"}` : describeServer(profile)}</span>`
+      ? html`<span>${status.node ? `订阅 · ${status.node}${profile.node ? "" : "（自动选择）"}` : describeServer(profile)}</span><span>${modeText(profile)}</span>`
       : html`<span class="mono">${describeServer(profile)}</span>`;
     subtitle = html`<strong style="color:var(--text)">${profile.name}</strong>${server}<span class="chips">${status.applied.map((label) => html`<span class="chip">${label}</span>`)}</span>`;
     const latency = app.latency[profile.id];
