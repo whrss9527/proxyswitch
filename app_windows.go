@@ -755,6 +755,10 @@ func (app *App) State() SettingsState {
 	if err := app.tray.RunOnUi(func() { state = app.settingsState() }); err != nil {
 		return SettingsState{Version: appVersion, Platform: "windows", ConfigError: err.Error(), Palette: profilePalette}
 	}
+	// 内核的情况要调用内核的接口，放在 UI 线程之外：内核没有响应时不会卡住托盘。
+	if app.subscriptionService != nil {
+		app.fillState(&state)
+	}
 	return state
 }
 
@@ -766,9 +770,6 @@ func (app *App) settingsState() SettingsState {
 	state.Accent = systemAccentColor()
 	state.Targets = targetInfos(app.gitAvailable.Load())
 	state.Update = app.latestUpdate
-	if app.subscriptionService != nil {
-		app.fillCoreInfo(&state.Core)
-	}
 	return state
 }
 

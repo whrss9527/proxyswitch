@@ -496,6 +496,20 @@ func (core *Core) Nodes(profileId string) (CoreNodes, error) {
 	return result, nil
 }
 
+// CurrentNode 返回订阅实际在用的节点（自动选择时是它选中的节点），内核没有运行时返回空字符串。
+func (core *Core) CurrentNode(profileId string) string {
+	var group struct {
+		Now string `json:"now"`
+	}
+	if core.request(http.MethodGet, "/proxies/"+url.PathEscape(profileId), nil, &group, time.Second) != nil {
+		return ""
+	}
+	if group.Now == coreAutoGroup(profileId) && core.request(http.MethodGet, "/proxies/"+url.PathEscape(group.Now), nil, &group, time.Second) != nil {
+		return ""
+	}
+	return group.Now
+}
+
 // Select 立即在内核里选中节点（空表示自动选择）。配置文件里的记录由引擎负责。
 func (core *Core) Select(profileId, node string) error {
 	target := node

@@ -2,13 +2,23 @@
 
 // 对话框：编辑代理配置、检测本机代理、添加自动切换规则。
 
-const kindLabels = { http: "HTTP", socks: "SOCKS5", pac: "PAC 脚本", custom: "按协议指定" };
+const kindLabels = { http: "HTTP", socks: "SOCKS5", pac: "PAC 脚本", subscription: "订阅", custom: "按协议指定" };
 
 const kindHints = {
   http: "最常见的类型。代理软件的设置里一般写着「HTTP 端口」或「混合端口」。",
   socks: "SOCKS5 端口。部分程序不支持 SOCKS5，如果代理软件有 HTTP 或混合端口，优先用那个。",
   pac: "由自动配置脚本决定哪些网站走代理，常见于公司和学校网络。",
+  subscription: "填机场提供的订阅地址，ProxySwitch 用内置的代理内核连接订阅里的节点，不需要另外安装代理软件。",
   custom: "给不同协议分别指定代理，写法：http=主机:端口;https=主机:端口;socks=主机:端口",
+};
+
+const editorKinds = ["http", "socks", "pac", "subscription", "custom"];
+
+const modeOptions = [["rule", "大陆直连"], ["global", "全部走代理"]];
+
+const modeHints = {
+  rule: "国内的网站直接访问，其余经过节点。推荐",
+  global: "所有网站都经过节点",
 };
 
 // splitServer 把 “协议://主机:端口” 拆开，支持 [IPv6]:端口。
@@ -41,6 +51,9 @@ function joinHostPort(host, port) {
 }
 
 function profileKind(profile) {
+  if (profile.subscription) {
+    return "subscription";
+  }
   if (profile.pac) {
     return "pac";
   }
@@ -55,6 +68,9 @@ function profileKind(profile) {
 // describeServer 是列表里显示的地址说明。
 function describeServer(profile) {
   const kind = profileKind(profile);
+  if (kind === "subscription") {
+    return `订阅 · ${profile.node || "自动选择"}`;
+  }
   if (kind === "pac") {
     return profile.server ? `PAC · ${profile.pac} · ${profile.server}` : `PAC · ${profile.pac}`;
   }
@@ -103,9 +119,15 @@ function draftFromProfile(profile) {
     preview: [],
     advancedOpen: false,
     useAfterSave: false,
+    subscription: profile.subscription || "",
+    mode: profile.mode || "rule",
+    node: profile.node || "",
+    savingText: "",
   };
   const server = (profile.server || "").trim();
-  if (draft.pac) {
+  if (draft.subscription) {
+    draft.kind = "subscription";
+  } else if (draft.pac) {
     draft.kind = "pac";
     draft.pacServer = server;
   } else if (server.includes("=")) {
@@ -147,8 +169,12 @@ function profileFromDraft(draft) {
       pac = draft.pac.trim();
       server = draft.pacServer.trim();
       break;
+    case "subscription":
+      // 订阅由内核代理，地址是内核的本地端口（保存时程序也会这样填），这里填上是为了预览将要做的修改。
+      server = `127.0.0.1:${app.config ? app.config.core.port : 17890}`;
+      break;
   }
-  return {
+  const profile = {
     id: draft.id,
     name: draft.name.trim(),
     color: draft.color,
@@ -158,6 +184,12 @@ function profileFromDraft(draft) {
     no_proxy: draft.noProxy.trim(),
     apply_to: draft.applyTo,
   };
+  if (draft.kind === "subscription") {
+    profile.subscription = draft.subscription.trim();
+    profile.mode = draft.mode;
+    profile.node = draft.node;
+  }
+  return profile;
 }
 
 const hostPattern = /^[^\s/?#@]+$/;
@@ -226,6 +258,13 @@ function validateDraft(draft) {
       }
       break;
     }
+    case "subscription":
+      if (!draft.subscription.trim()) {
+        errors.subscription = "请填写订阅地址";
+      } else if (!/^https?:\/\/\S+$/i.test(draft.subscription.trim())) {
+        errors.subscription = "订阅地址应以 http:// 或 https:// 开头";
+      }
+      break;
     case "pac":
       if (!draft.pac.trim()) {
         errors.pac = "请填写 PAC 脚本的地址";
@@ -314,9 +353,8 @@ function openProfileEditor(profile = {}, options = {}) {
           absorbPastedAddress(event.target);
         }
         draft.test = null;
-        const testResult = element.querySelector("[data-test-result]");
-        if (testResult) {
-          testResult.textContent = "";
+        for (const result of element.querySelectorAll("[data-test-result], [data-check-result]")) {
+          result.textContent = "";
         }
         updateFeedback();
       });
@@ -341,7 +379,7 @@ function openProfileEditor(profile = {}, options = {}) {
         }
       });
       element.addEventListener("click", (event) => {
-        const button = event.target.closest("[data-action], [data-kind], [data-color]");
+        const button = event.target.closest("[data-action], [data-kind], [data-color], [data-mode]");
         if (!button) {
           return;
         }
@@ -349,10 +387,16 @@ function openProfileEditor(profile = {}, options = {}) {
           switchKind(button.dataset.kind);
           dialogInstance.render();
           refreshPreview();
-          const first = element.querySelector(`[data-field="${draft.kind === "pac" ? "pac" : draft.kind === "custom" ? "raw" : "host"}"]`);
+          const firstField = { pac: "pac", custom: "raw", subscription: "subscription" }[draft.kind] || "host";
+          const first = element.querySelector(`[data-field="${firstField}"]`);
           if (first) {
             first.focus();
           }
+          return;
+        }
+        if (button.dataset.mode) {
+          draft.mode = button.dataset.mode;
+          dialogInstance.render();
           return;
         }
         if (button.dataset.color) {
@@ -373,6 +417,13 @@ function openProfileEditor(profile = {}, options = {}) {
             break;
           case "dialog-test":
             testDraft();
+            break;
+          case "install-core":
+            installCore(() => {
+              if (!dialog.closed) {
+                dialog.render();
+              }
+            });
             break;
           case "dialog-save":
             saveDraft();
@@ -436,6 +487,10 @@ function openProfileEditor(profile = {}, options = {}) {
   }
 
   async function testDraft() {
+    if (draft.kind === "subscription") {
+      checkSubscription();
+      return;
+    }
     const profileValue = profileFromDraft(draft);
     const body = profileValue.server ? { server: profileValue.server } : { pac: profileValue.pac };
     if (!profileValue.server && !profileValue.pac) {
@@ -447,6 +502,29 @@ function openProfileEditor(profile = {}, options = {}) {
     dialog.render();
     try {
       draft.test = await api("POST", "/api/test", body);
+    } catch (error) {
+      draft.test = { ok: false, message: error.message };
+    }
+    if (!dialog.closed) {
+      dialog.render();
+    }
+  }
+
+  // checkSubscription 下载订阅检查地址是否可用，显示节点数和流量；还没填名字时用机场给的名字。
+  async function checkSubscription() {
+    if (validateDraft(draft).subscription) {
+      draft.submitted = true;
+      updateFeedback();
+      return;
+    }
+    draft.test = { running: true };
+    dialog.render();
+    try {
+      const check = await api("POST", "/api/subscriptions/check", { url: draft.subscription.trim() });
+      draft.test = { ok: true, check };
+      if (!draft.name.trim() && check.name) {
+        draft.name = check.name;
+      }
     } catch (error) {
       draft.test = { ok: false, message: error.message };
     }
@@ -481,6 +559,22 @@ function openProfileEditor(profile = {}, options = {}) {
     try {
       const state = await api("PUT", "/api/config", config);
       receiveState(state, { force: true });
+      // 新的订阅（或改了地址的订阅）保存后立即下载，下载完才能开启。
+      const saved = app.config.profiles.find((item) => item.name === profileValue.name);
+      if (saved && saved.subscription && (!editing || profile.subscription !== saved.subscription)) {
+        draft.savingText = "正在下载订阅…";
+        dialog.render();
+        try {
+          receiveState(await api("POST", `/api/subscriptions/${saved.id}/update`), { force: true });
+        } catch (error) {
+          if (error.state) {
+            receiveState(error.state, { force: true });
+          }
+          dialog.close(true);
+          toast(error.message, "warning", `已保存「${profileValue.name}」，但订阅没有下载成功`);
+          return;
+        }
+      }
       dialog.close(true);
       if (draft.useAfterSave) {
         await runOperation("/api/use", { name: profileValue.name }, `已开启「${profileValue.name}」`);
@@ -531,6 +625,21 @@ function renderTestResult(test) {
   return html`${icon("warning")}<span style="color:var(--danger)">${test.message}</span>`;
 }
 
+// renderCheckResult 是「检查订阅」的结果：节点数、流量和到期时间，或下载失败的原因。
+function renderCheckResult(test) {
+  if (!test) {
+    return html``;
+  }
+  if (test.running) {
+    return html`<div class="preview" style="display:flex;gap:8px;align-items:center"><span class="spinner"></span>正在下载订阅…</div>`;
+  }
+  if (!test.ok) {
+    return html`<div class="infobar danger">${icon("error")}<div class="infobar-body"><div class="infobar-title">订阅不能用</div>${test.message}</div></div>`;
+  }
+  const usage = usageText(test.check);
+  return html`<div class="infobar success">${icon("success")}<div class="infobar-body"><div class="infobar-title">找到 ${test.check.nodes} 个节点</div>${usage || "机场没有提供流量和到期时间"}</div></div>`;
+}
+
 function field({ label, name, value, placeholder = "", error = "", hint = "", className = "", type = "text", mono = false, focus = name }) {
   return html`
     <div class="field ${className}">
@@ -554,6 +663,19 @@ function renderProfileEditor(draft, editing, errors) {
       break;
     case "custom":
       kindFields = field({ label: "代理设置", name: "raw", value: draft.raw, placeholder: "http=127.0.0.1:7890;https=127.0.0.1:7890", error: errors.raw, mono: true });
+      break;
+    case "subscription":
+      kindFields = html`
+        ${coreNotice()}
+        ${field({ label: "订阅地址", name: "subscription", value: draft.subscription, placeholder: "https://…", error: errors.subscription, mono: true, hint: "机场提供的订阅链接，Clash 和 V2Ray 格式都可以。点下面的「检查订阅」可以先看看有多少个节点" })}
+        <div data-check-result>${renderCheckResult(draft.test)}</div>
+        <div class="field">
+          <span class="field-label">分流</span>
+          <div class="segmented" role="group" aria-label="分流">
+            ${modeOptions.map(([value, label]) => html`<button type="button" data-mode="${value}" aria-pressed="${draft.mode === value}">${label}</button>`)}
+          </div>
+          <div class="field-hint">${modeHints[draft.mode]}</div>
+        </div>`;
       break;
     default:
       kindFields = html`
@@ -582,7 +704,7 @@ function renderProfileEditor(draft, editing, errors) {
       <div class="field">
         <span class="field-label">类型</span>
         <div class="segmented" role="group" aria-label="代理类型">
-          ${["http", "socks", "pac", "custom"].map((kind) => html`<button type="button" data-kind="${kind}" aria-pressed="${draft.kind === kind}">${kindLabels[kind]}</button>`)}
+          ${editorKinds.map((kind) => html`<button type="button" data-kind="${kind}" aria-pressed="${draft.kind === kind}">${kindLabels[kind]}</button>`)}
         </div>
         <div class="field-hint">${kindHints[draft.kind]}</div>
       </div>
@@ -611,10 +733,10 @@ function renderProfileEditor(draft, editing, errors) {
     </div>
     <div class="dialog-footer">
       <div class="left">
-        <button class="button" type="button" data-action="dialog-test" ${draft.test && draft.test.running ? raw("disabled") : ""}>${icon("gauge")}测试连接</button>
-        <span class="test-result" data-test-result>${renderTestResult(draft.test)}</span>
+        <button class="button" type="button" data-action="dialog-test" ${draft.test && draft.test.running ? raw("disabled") : ""}>${draft.kind === "subscription" ? html`${icon("refresh")}检查订阅` : html`${icon("gauge")}测试连接`}</button>
+        <span class="test-result" data-test-result>${draft.kind === "subscription" ? "" : renderTestResult(draft.test)}</span>
       </div>
-      <button class="button accent" type="button" data-action="dialog-save" ${draft.saving ? raw("disabled") : ""}>${draft.saving ? html`<span class="spinner"></span>` : ""}保存</button>
+      <button class="button accent" type="button" data-action="dialog-save" ${draft.saving ? raw("disabled") : ""}>${draft.saving ? html`<span class="spinner"></span>` : ""}${draft.savingText || "保存"}</button>
       <button class="button" type="button" data-action="dialog-cancel">取消</button>
     </div>`;
 }
@@ -739,6 +861,200 @@ function renderDetect(view) {
       <div class="left"><button class="button" data-action="detect-rescan" ${view.loading ? raw("disabled") : ""}>${icon("refresh")}重新检测</button></div>
       <button class="button" data-action="detect-manual">手动填写</button>
       <button class="button" data-action="dialog-cancel">关闭</button>
+    </div>`;
+}
+
+// ---------- 订阅的节点 ----------
+
+// delayBadge 是节点最近一次测得的延迟：没测过显示横线，测不通显示超时。
+function delayBadge(node) {
+  if (!node.tested) {
+    return html`<span class="badge">—</span>`;
+  }
+  if (!node.alive) {
+    return html`<span class="badge danger">超时</span>`;
+  }
+  const millis = Math.max(1, node.delay);
+  const level = millis < 300 ? "success" : millis < 1000 ? "warning" : "danger";
+  return html`<span class="badge ${level} numeric">${millis} ms</span>`;
+}
+
+// sortedNodes 按搜索词过滤；按延迟排序时能用的节点在前，测不通和没测过的在后。
+function sortedNodes(view) {
+  const query = view.query.trim().toLowerCase();
+  const nodes = view.list.nodes.filter((node) => !query || node.name.toLowerCase().includes(query));
+  if (!view.sortByDelay) {
+    return nodes;
+  }
+  const rank = (node) => (node.tested && node.alive ? node.delay : Number.MAX_SAFE_INTEGER);
+  return [...nodes].sort((first, second) => rank(first) - rank(second));
+}
+
+function openNodesDialog(profileId) {
+  const view = { loading: true, busy: "", list: null, error: "", query: "", sortByDelay: false };
+  const dialog = openDialog({
+    className: "wide",
+    render: () => renderNodes(profileById(profileId), view),
+    onMount: (dialogInstance) => {
+      const element = dialogInstance.element;
+      // 搜索时只重绘列表，不重建输入框，避免打断中文输入法。
+      element.addEventListener("input", (event) => {
+        if (event.target.dataset.focus === "node-search") {
+          view.query = event.target.value;
+          const container = element.querySelector("[data-node-list]");
+          if (container) {
+            setHtml(container, renderNodeList(profileById(profileId), view));
+          }
+        }
+      });
+      element.addEventListener("click", (event) => {
+        const button = event.target.closest("[data-action]");
+        if (!button || button.disabled) {
+          return;
+        }
+        switch (button.dataset.action) {
+          case "node-select":
+            run("select", () => api("POST", `/api/subscriptions/${profileId}/select`, { node: button.dataset.node }));
+            break;
+          case "nodes-test":
+            run("test", () => api("POST", `/api/subscriptions/${profileId}/test`));
+            break;
+          case "nodes-sort":
+            view.sortByDelay = !view.sortByDelay;
+            dialog.render();
+            break;
+          case "nodes-update":
+            update();
+            break;
+          case "nodes-use": {
+            const profile = profileById(profileId);
+            dialogInstance.close(true);
+            if (profile) {
+              runOperation("/api/use", { name: profile.name }, `已开启「${profile.name}」`);
+            }
+            break;
+          }
+          case "install-core":
+            installCore(() => {
+              if (!dialog.closed) {
+                dialog.render();
+              }
+            }).then(load);
+            break;
+          case "dialog-cancel":
+            dialogInstance.close(false);
+            break;
+        }
+      });
+    },
+  });
+
+  // run 执行一个返回节点列表的操作，期间禁用按钮。
+  async function run(busy, request) {
+    view.busy = busy;
+    dialog.render();
+    try {
+      view.list = await request();
+      view.error = "";
+    } catch (error) {
+      toast(error.message, "danger", busy === "test" ? "测速失败" : "没有切换成功");
+    }
+    view.busy = "";
+    if (!dialog.closed) {
+      dialog.render();
+    }
+    refreshState().catch(() => {});
+  }
+
+  async function load() {
+    view.loading = true;
+    dialog.render();
+    try {
+      view.list = await api("GET", `/api/subscriptions/${profileId}/nodes`);
+      view.error = "";
+    } catch (error) {
+      view.error = error.message;
+    }
+    view.loading = false;
+    if (!dialog.closed) {
+      dialog.render();
+    }
+  }
+
+  async function update() {
+    view.busy = "update";
+    dialog.render();
+    try {
+      receiveState(await api("POST", `/api/subscriptions/${profileId}/update`), { force: true });
+      toast(`共 ${(app.state.subscriptions[profileId] || {}).nodes || 0} 个节点`, "success", "订阅已更新");
+    } catch (error) {
+      if (error.state) {
+        receiveState(error.state, { force: true });
+      }
+      toast(error.message, "danger", "订阅没有更新成功");
+    }
+    view.busy = "";
+    await load();
+  }
+
+  load();
+  return dialog;
+}
+
+function renderNodeList(profile, view) {
+  const list = view.list;
+  const nodes = sortedNodes(view);
+  const auto = !list.selected;
+  const disabled = view.busy ? raw("disabled") : "";
+  const rows = nodes.map((node) => html`
+    <button class="node" data-action="node-select" data-node="${node.name}" aria-pressed="${list.selected === node.name}" ${disabled}>
+      <span class="node-check">${list.selected === node.name ? icon("check") : ""}</span>
+      <span class="node-name" title="${node.name}">${node.name}</span>
+      <span class="node-type">${node.type}</span>
+      ${delayBadge(node)}
+    </button>`);
+  return html`
+    ${view.query ? "" : html`
+      <button class="node" data-action="node-select" data-node="" aria-pressed="${auto}" ${disabled}>
+        <span class="node-check">${auto ? icon("check") : ""}</span>
+        <span class="node-name"><strong>自动选择</strong><small>${auto && list.current ? `延迟最低，当前：${list.current}` : "每隔一段时间测一次延迟，用延迟最低的节点"}</small></span>
+        <span></span><span></span>
+      </button>`}
+    ${rows.length ? rows : html`<p class="muted" style="margin:12px 10px">${view.query ? "没有名字里包含这些字的节点" : "订阅里没有节点"}</p>`}`;
+}
+
+function renderNodes(profile, view) {
+  if (!profile) {
+    return html`<div class="dialog-body"><h2 class="dialog-title">这个配置已被删除</h2></div><div class="dialog-footer"><button class="button" data-action="dialog-cancel">关闭</button></div>`;
+  }
+  const info = app.state.subscriptions[profile.id] || {};
+  const active = app.state.status.state === "on" && app.state.status.profile === profile.name;
+  const busy = view.busy ? raw("disabled") : "";
+  let content;
+  if (view.loading && !view.list) {
+    content = html`<div class="card" style="padding:28px;display:flex;align-items:center;gap:14px"><span class="spinner"></span><strong>正在读取节点…</strong></div>`;
+  } else if (view.error) {
+    content = html`${coreNotice()}<div class="infobar warning">${icon("warning")}<div class="infobar-body"><div class="infobar-title">读不到节点</div>${info.updated ? view.error : info.error ? `订阅没有下载成功：${info.error}` : "订阅还在下载，请稍后再试"}</div></div>`;
+  } else {
+    content = html`
+      <div class="nodes-toolbar">
+        <input class="input" type="search" data-focus="node-search" value="${view.query}" placeholder="搜索节点，例如 香港" aria-label="搜索节点" spellcheck="false" autocomplete="off">
+        <button class="button" data-action="nodes-sort" aria-pressed="${view.sortByDelay}" title="按延迟排序">${icon("swap")}${view.sortByDelay ? "按延迟" : "按顺序"}</button>
+        <button class="button" data-action="nodes-test" ${busy}>${view.busy === "test" ? html`<span class="spinner"></span>` : icon("gauge")}全部测速</button>
+      </div>
+      <div class="node-list" data-node-list>${renderNodeList(profile, view)}</div>`;
+  }
+  const usage = usageText(info);
+  return html`
+    <div class="dialog-body">
+      <h2 class="dialog-title">选择节点 · ${profile.name}</h2>
+      <p class="caption muted" style="margin:-8px 0 14px">${view.list ? `${view.list.nodes.length} 个节点` : ""}${usage ? ` · ${usage}` : ""}${info.updated ? ` · ${relativeTime(info.updated)}更新` : ""}</p>
+      ${content}
+    </div>
+    <div class="dialog-footer">
+      <div class="left"><button class="button" data-action="nodes-update" ${busy}>${view.busy === "update" ? html`<span class="spinner"></span>` : icon("refresh")}更新订阅</button></div>
+      ${active ? "" : html`<button class="button accent" data-action="nodes-use" ${busy}>使用这个配置</button>`}
+      <button class="button" data-action="dialog-cancel">${active ? "完成" : "关闭"}</button>
     </div>`;
 }
 

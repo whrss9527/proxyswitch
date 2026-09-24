@@ -15,6 +15,7 @@ const app = {
   installing: false,
   installError: "",
   restarting: false,
+  coreInstalling: false,
   navigateSerial: 0,
 };
 
@@ -315,6 +316,50 @@ async function testAllProfiles() {
   toast(`${passed} 个可用，${results.length - passed} 个失败`, passed === results.length ? "success" : "warning", "测速完成");
 }
 
+// installCore 下载代理内核，下载期间更频繁地同步状态显示进度；onProgress 给对话框重绘用。
+async function installCore(onProgress = () => {}) {
+  if (app.coreInstalling) {
+    return;
+  }
+  app.coreInstalling = true;
+  renderPage();
+  onProgress();
+  const timer = setInterval(async () => {
+    try {
+      await refreshState(true);
+    } catch (error) {
+      // 连接问题由 connectionLost 处理。
+    }
+    onProgress();
+  }, 500);
+  try {
+    receiveState(await api("POST", "/api/core/install"), { force: true });
+    toast("可以使用订阅了", "success", "代理内核已下载");
+  } catch (error) {
+    if (error.state) {
+      receiveState(error.state, { force: true });
+    }
+    toast(error.message, "danger", "内核没有下载成功");
+  } finally {
+    clearInterval(timer);
+    app.coreInstalling = false;
+    renderPage();
+    onProgress();
+  }
+}
+
+async function updateSubscription(profile) {
+  try {
+    receiveState(await api("POST", `/api/subscriptions/${profile.id}/update`), { force: true });
+    toast(`共 ${(app.state.subscriptions[profile.id] || {}).nodes || 0} 个节点`, "success", `「${profile.name}」的订阅已更新`);
+  } catch (error) {
+    if (error.state) {
+      receiveState(error.state, { force: true });
+    }
+    toast(error.message, "danger", "订阅没有更新成功");
+  }
+}
+
 async function loadDiagnostics() {
   try {
     const [diagnostics, log] = await Promise.all([api("GET", "/api/diagnostics"), api("GET", "/api/log?lines=300")]);
@@ -370,7 +415,12 @@ function moveItem(list, index, offset) {
 function openProfileMenu(anchor, profile) {
   const index = app.config.profiles.indexOf(profile);
   const active = app.state.status.state === "on" && app.state.status.profile === profile.name;
+  const subscriptionItems = profile.subscription ? [
+    { label: "选择节点", icon: "list", action: () => openNodesDialog(profile.id) },
+    { label: "更新订阅", icon: "refresh", action: () => updateSubscription(profile) },
+  ] : [];
   openMenu(anchor, [
+    ...subscriptionItems,
     { label: "测速", icon: "gauge", action: () => testProfile(profile) },
     { label: "复制一份", icon: "copy", action: () => openProfileEditor({ ...profile, id: "", name: `${profile.name} 副本`, color: nextColor() }) },
     { separator: true },
@@ -500,6 +550,9 @@ const actions = {
   use: (element) => runOperation("/api/use", { name: element.dataset.name }),
   add: () => openProfileEditor(),
   "add-pac": () => openProfileEditor({}, { kind: "pac" }),
+  "add-subscription": () => openProfileEditor({}, { kind: "subscription" }),
+  nodes: (element) => openNodesDialog(element.dataset.id),
+  "install-core": () => installCore(),
   "save-external": () => {
     const external = app.state.status.external_profile;
     if (!external) {
@@ -693,6 +746,19 @@ document.addEventListener("change", (event) => {
         setPath(config, path, value);
       }
     });
+    return;
+  }
+  if (element.matches("input[data-setting-number]")) {
+    const path = element.dataset.settingNumber;
+    const value = Number(element.value.trim());
+    if (!Number.isInteger(value) || value < 1 || value > 65535) {
+      toast("请填 1~65535 之间的数字", "warning", "端口不对");
+      element.value = getPath(app.config, path);
+      return;
+    }
+    if (value !== getPath(app.config, path)) {
+      saveConfig((config) => setPath(config, path, value));
+    }
     return;
   }
   if (element.matches("input[data-setting-text]")) {
