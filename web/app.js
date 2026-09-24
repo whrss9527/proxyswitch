@@ -548,6 +548,7 @@ const actions = {
   "open-log": () => api("POST", "/api/open/log").catch((error) => toast(error.message, "danger", "无法打开")),
   "open-url": (element) => api("POST", "/api/open-url", { url: element.dataset.url }).catch((error) => toast(error.message, "danger", "无法打开")),
   "open-location-settings": () => api("POST", "/api/open-url", { url: "ms-settings:privacy-location" }).catch((error) => toast(error.message, "danger", "无法打开")),
+  "open-proxy-settings": () => api("POST", "/api/open-url", { url: "ms-settings:network-proxy" }).catch((error) => toast(error.message, "danger", "无法打开")),
   "export-config": () => {
     downloadText("proxyswitch-config.json", JSON.stringify(app.config, null, 2) + "\n");
     toast("已导出，保存在浏览器的下载文件夹", "success", "导出完成");

@@ -517,8 +517,11 @@ func (settings *SettingsServer) respondOpened(writer http.ResponseWriter, err er
 	writeJson(writer, http.StatusOK, map[string]bool{"ok": true})
 }
 
-// 除了本项目的页面，设置页还会打开 Windows 的“位置”隐私设置（读取 Wi-Fi 名称需要）。
-const locationSettingsUrl = "ms-settings:privacy-location"
+// 除了本项目的页面，设置页还会打开 Windows 的“位置”隐私设置（读取 Wi-Fi 名称需要）和“代理”设置页。
+const (
+	locationSettingsUrl     = "ms-settings:privacy-location"
+	networkProxySettingsUrl = "ms-settings:network-proxy"
+)
 
 // handleOpenUrl 只允许打开固定的几个地址，避免被利用来启动任意程序。
 func (settings *SettingsServer) handleOpenUrl(writer http.ResponseWriter, request *http.Request) {
@@ -528,7 +531,7 @@ func (settings *SettingsServer) handleOpenUrl(writer http.ResponseWriter, reques
 	if !decodeJsonBody(writer, request, &body) {
 		return
 	}
-	if body.Url != repositoryUrl && !strings.HasPrefix(body.Url, repositoryUrl+"/") && body.Url != locationSettingsUrl {
+	if body.Url != repositoryUrl && !strings.HasPrefix(body.Url, repositoryUrl+"/") && body.Url != locationSettingsUrl && body.Url != networkProxySettingsUrl {
 		writeError(writer, http.StatusBadRequest, "不允许打开这个地址")
 		return
 	}

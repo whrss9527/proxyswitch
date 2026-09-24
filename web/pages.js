@@ -461,6 +461,7 @@ function diagnosticsPage() {
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:4px">
       <button class="button" data-action="refresh-diagnostics">${icon("refresh")}刷新</button>
       <button class="button" data-action="copy-diagnostics" ${diagnostics ? "" : raw("disabled")}>${icon("copy")}复制诊断信息</button>
+      <button class="button" data-action="open-proxy-settings">${icon("external")}打开 Windows 代理设置</button>
       <button class="button danger" data-action="clear-all">${icon("trash")}清除所有代理设置</button>
     </div>
     ${diagnostics && diagnostics.last_crash ? html`
