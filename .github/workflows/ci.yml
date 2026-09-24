@@ -90,6 +90,29 @@ jobs:
         with:
           name: macos-screenshots
           path: macos/screenshots
+      - name: 把截图以 base64 打进日志（产物下载受限的环境也能看）
+        if: always()
+        run: |
+          cd screenshots || exit 0
+          if [ -f panel.png ]; then
+            width=$(sips -g pixelWidth panel.png | awk '/pixelWidth/{print $2}')
+            height=$(sips -g pixelHeight panel.png | awk '/pixelHeight/{print $2}')
+            echo "panel.png: ${width}x${height}"
+            cropw=640; croph=760
+            if ! sips -c "$croph" "$cropw" --cropOffset 0 $((width - cropw)) panel.png --out panel-crop.png >/dev/null 2>&1; then
+              cp panel.png panel-crop.png
+            fi
+            sips -s format jpeg -s formatOptions 75 panel-crop.png --out panel.jpg >/dev/null
+          fi
+          if [ -f settings.png ]; then
+            sips -Z 1400 -s format jpeg -s formatOptions 70 settings.png --out settings.jpg >/dev/null
+          fi
+          for name in panel settings; do
+            [ -f "$name.jpg" ] || continue
+            echo "=====BEGIN $name.jpg====="
+            base64 -b 76 -i "$name.jpg"
+            echo "=====END $name.jpg====="
+          done
 
   windows:
     name: 全部测试（Windows）
