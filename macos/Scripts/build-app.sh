@@ -26,4 +26,4 @@ printf 'APPL????' > "$APP/Contents/PkgInfo"
 codesign --force --deep --sign "${CODESIGN_IDENTITY:--}" "$APP"
 
 (cd dist && rm -f ProxySwitch-macos.zip && ditto -c -k --keepParent ProxySwitch.app ProxySwitch-macos.zip)
-echo "已生成 $APP 和 dist/ProxySwitch-macos.zip（版本 $VERSION）"
+echo "已生成 ${APP} 和 dist/ProxySwitch-macos.zip（版本 ${VERSION}）"
