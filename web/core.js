@@ -109,6 +109,7 @@ const iconPaths = {
   play: "M6.5 4.5l9 5.5-9 5.5Z",
   layers: "M10 3l7 4-7 4-7-4Z M3 11l7 4 7-4",
   signpost: "M10 2.5v15 M4.5 4.5h9l2 2-2 2h-9Z M15.5 10.5h-9l-2 2 2 2h9Z",
+  list: "M7.5 5.5h9 M7.5 10h9 M7.5 14.5h9 M3 5.5a.5.5 0 1 0 1 0a.5.5 0 1 0-1 0 M3 10a.5.5 0 1 0 1 0a.5.5 0 1 0-1 0 M3 14.5a.5.5 0 1 0 1 0a.5.5 0 1 0-1 0",
 };
 
 const boldIcons = new Set(["more"]);

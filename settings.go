@@ -110,11 +110,12 @@ type PathsInfo struct {
 	Portable bool   `json:"portable"`
 }
 
-// StatusInfo.State：off 已关闭 / on 由本程序开启 / external 系统代理被其他程序开启。
+// StatusInfo.State：off 已关闭 / on 由本程序开启 / external 系统代理被其他程序开启。Node 是正在使用的订阅实际在用的节点。
 // Terminal 是开启时在当前终端使用代理的命令；ExternalProfile 是 external 时由系统代理转成的配置，页面可以一键保存。
 type StatusInfo struct {
 	State           string            `json:"state"`
 	Profile         string            `json:"profile"`
+	Node            string            `json:"node,omitempty"`
 	External        string            `json:"external,omitempty"`
 	Applied         []string          `json:"applied"`
 	Health          string            `json:"health"`

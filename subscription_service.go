@@ -230,12 +230,18 @@ func (service *subscriptionService) CoreInstalling() *InstallProgress {
 	return service.installing
 }
 
-// fillCoreInfo 补上设置页状态里内核的运行情况。
-func (service *subscriptionService) fillCoreInfo(info *CoreInfo) {
+// fillState 补上设置页状态里内核的运行情况，以及正在使用的订阅实际在用的节点。
+func (service *subscriptionService) fillState(state *SettingsState) {
 	status := service.core.Status()
-	info.Running, info.Error = status.Running, status.Error
-	info.Downloadable = coreDownloadable()
-	info.Installing = service.CoreInstalling()
+	state.Core.Running, state.Core.Error = status.Running, status.Error
+	state.Core.Downloadable = coreDownloadable()
+	state.Core.Installing = service.CoreInstalling()
+	if state.Status.State != statusOn || state.Config == nil || !status.Running {
+		return
+	}
+	if profile := state.Config.FindProfile(state.Status.Profile); profile != nil && profile.IsSubscription() {
+		state.Status.Node = service.core.CurrentNode(profile.Id)
+	}
 }
 
 // ---------- 地理数据 ----------

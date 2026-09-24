@@ -71,19 +71,20 @@ func (backend *devBackend) locked(action func() error) error {
 
 func (backend *devBackend) State() SettingsState {
 	backend.mutex.Lock()
-	defer backend.mutex.Unlock()
 	state := backend.engine.settingsState()
 	state.Platform = "dev"
 	state.Autostart = backend.autostart
 	state.Accent = "#0067c0"
 	state.Targets = targetInfos(true)
 	state.Update = backend.update
-	backend.fillCoreInfo(&state.Core)
 	if config := backend.engine.Config(); config != nil && config.Hotkey != "" {
 		if hotkey, err := parseHotkey(config.Hotkey); err == nil {
 			state.Hotkeys.Toggle = hotkey.Text
 		}
 	}
+	backend.mutex.Unlock()
+	// 与 Windows 版一样在锁外查询内核。
+	backend.fillState(&state)
 	return state
 }
 

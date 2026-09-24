@@ -11,6 +11,7 @@ import hashlib
 import http.server
 import json
 import os
+import socket
 import subprocess
 import sys
 import tempfile
@@ -32,6 +33,9 @@ def check(condition, message):
     if not condition:
         failures.append(message)
 
+
+# 订阅由真实的 mihomo 内核代理：PROXYSWITCH_CORE 指向内核程序时测完整的订阅流程，否则只检查没有内核时的提示。
+CORE = os.environ.get("PROXYSWITCH_CORE", "")
 
 # 模拟 GitHub 的最新发布接口：版本 99.0.0，附件是一段假的程序内容和它的 SHA256SUMS.txt。
 FAKE_PROGRAM = b"fake new version " * 4096
@@ -75,7 +79,10 @@ def start_release_server():
 def start_server(directory):
     binary = os.path.join(directory, "proxyswitch-dev")
     subprocess.run(["go", "build", "-o", binary, "."], cwd=ROOT, check=True)
-    process = subprocess.Popen([binary, "--dev-settings", f"--dir={directory}", f"--release-api={start_release_server()}"], stdout=subprocess.PIPE, text=True)
+    arguments = [binary, "--dev-settings", f"--dir={directory}", f"--release-api={start_release_server()}"]
+    if CORE:
+        arguments.append(f"--core={CORE}")
+    process = subprocess.Popen(arguments, stdout=subprocess.PIPE, text=True)
     info = json.loads(process.stdout.readline())
     return process, info
 
@@ -90,6 +97,36 @@ class Api:
         request = urllib.request.Request(self.base + path, data=data, method=method, headers={"X-Token": self.token, "Content-Type": "application/json"})
         with urllib.request.urlopen(request) as response:
             return json.loads(response.read() or b"null")
+
+
+def free_port():
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+# 模拟机场的订阅：3 个能用的节点（开发模式的假 HTTP 代理）和 2 个连不上的节点，带流量信息和机场名。
+def start_subscription_server(http_proxy):
+    host, port = http_proxy.rsplit(":", 1)
+    dead = free_port()
+    nodes = [("香港 01", port), ("香港 02", dead), ("日本 01", port), ("美国 01", dead), ("新加坡 01", port)]
+    body = ("proxies:\n" + "".join(f"  - {{name: {json.dumps(name, ensure_ascii=False)}, type: http, server: {host}, port: {node_port}}}\n" for name, node_port in nodes)).encode()
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("subscription-userinfo", "upload=2147483648; download=6442450944; total=107374182400; expire=1798761600")
+            self.send_header("Content-Disposition", "attachment; filename*=UTF-8''%E6%B5%8B%E8%AF%95%E6%9C%BA%E5%9C%BA")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return f"http://127.0.0.1:{server.server_port}/api/v1/client/subscribe?token=test"
 
 
 def wait_until(predicate, timeout=8.0, interval=0.2):
@@ -144,7 +181,7 @@ def run_flows(page, api, info, config_path):
     page.wait_for_selector(".empty")
     check("token" not in page.url, "token 从地址栏移除")
     check(page.title() == "ProxySwitch 设置", "窗口标题与程序查找设置窗口用的标题一致")
-    check(page.locator(".choice").count() == 3, "空状态提供三种添加方式")
+    check(page.locator(".choice").count() == 4, "空状态提供四种添加方式（含机场订阅）")
     shot(page, "01_empty")
 
     # ---------- 自动检测并添加 ----------
@@ -413,6 +450,65 @@ def run_flows(page, api, info, config_path):
     wait_until(lambda: page.locator(".profile .badge.success").count() == 3, timeout=12)
     page.mouse.move(0, 0)
     shot(page, "docs_dark")
+
+    # ---------- 机场订阅 ----------
+    config = api.call("GET", "/api/state")["config"]
+    config["core"]["port"] = free_port()
+    api.call("PUT", "/api/config", config)
+    # 等页面同步到新的端口：页面保存配置时发送的是它手里的整份配置。
+    check(wait_until(lambda: page.evaluate("app.config.core.port") == config["core"]["port"], timeout=6), "页面同步到内核端口的修改")
+    subscription_url = start_subscription_server(info["http_proxy"])
+    page.click("[data-page=proxies]")
+    page.click(".section-title [data-action=add]")
+    page.click(".dialog [data-kind=subscription]")
+    page.click(".dialog [data-action=dialog-save]")
+    check("订阅地址" in page.inner_text(".dialog [data-error=subscription]"), "订阅地址为空时提示")
+    page.fill(".dialog [data-field=subscription]", subscription_url)
+    page.click(".dialog [data-action=dialog-test]")
+    check(wait_until(lambda: "5 个节点" in page.inner_text(".dialog [data-check-result]"), timeout=10), "检查订阅显示节点数")
+    check("已用 8.0 GB / 100 GB" in page.inner_text(".dialog [data-check-result]"), "检查订阅显示流量和到期时间")
+    check(page.input_value(".dialog [data-field=name]") == "测试机场", "没填名字时用机场给的名字")
+    page.click(".dialog [data-mode=global]")
+    check(page.get_attribute(".dialog [data-mode=global]", "aria-pressed") == "true", "可以选择全部走代理")
+    page.click(".dialog [data-mode=rule]")
+    page.click(".dialog [data-action=dialog-save]")
+    page.wait_for_selector(".dialog", state="detached", timeout=15000)
+    saved = next(profile for profile in read_config(config_path)["profiles"] if profile["name"] == "测试机场")
+    check(saved["subscription"] == subscription_url and saved["mode"] == "rule", "订阅配置写入配置文件")
+    card = ".profile:has-text('测试机场')"
+    if CORE:
+        check(wait_until(lambda: "5 个节点" in page.inner_text(card), timeout=10), "保存后下载订阅，列表显示节点数和流量")
+        page.click(f"{card} [data-action=nodes]")
+        page.wait_for_selector(".dialog .node", timeout=10000)
+        check(page.locator(".dialog .node").count() == 6, "节点对话框列出自动选择和全部节点")
+        page.click(".dialog [data-action=nodes-test]")
+        check(wait_until(lambda: page.locator(".dialog .node .badge.success").count() == 3 and page.locator(".dialog .node .badge.danger").count() == 2, timeout=20), "测速后标出能用和超时的节点")
+        page.click(".dialog [data-action=nodes-sort]")
+        check(page.locator(".dialog .node").nth(4).locator(".badge").inner_text() == "超时", "按延迟排序时连不上的节点排在后面")
+        page.fill(".dialog [data-focus=node-search]", "日本")
+        check(page.locator(".dialog .node").count() == 1, "搜索节点")
+        page.click(".dialog .node:has-text('日本 01')")
+        check(wait_until(lambda: page.locator(".dialog .node[aria-pressed=true]:has-text('日本 01')").count() == 1), "选中节点")
+        check(wait_until(lambda: next(p for p in read_config(config_path)["profiles"] if p["name"] == "测试机场").get("node") == "日本 01"), "选中的节点写入配置文件")
+        page.click(".dialog [data-action=nodes-use]")
+        check(wait_until(lambda: "订阅 · 日本 01" in page.inner_text(".hero"), timeout=10), "开启后显示在用的节点")
+        system = api.call("GET", "/api/dev/system")
+        check(system["system"]["server"] == f"127.0.0.1:{config['core']['port']}", "系统代理指向内核的端口")
+        page.mouse.move(0, 0)
+        shot(page, "10_subscription")
+        page.click(".hero [data-action=nodes]")
+        page.wait_for_selector(".dialog .node")
+        page.click(".dialog .node[data-node='']")
+        check(wait_until(lambda: page.locator(".dialog .node[data-node=''][aria-pressed=true]").count() == 1), "改为自动选择")
+        page.click(".dialog [data-action=dialog-cancel]")
+        check(wait_until(lambda: "（自动选择）" in page.inner_text(".hero"), timeout=10), "自动选择时显示它选中的节点")
+        page.click("[data-page=general]")
+        page.wait_for_selector("#core-port")
+        check("运行中" in page.inner_text(".card:has(#core-port)"), "常规页显示内核在运行")
+        page.click("[data-page=proxies]")
+        api.call("POST", "/api/use", {"name": "本机代理"})
+    else:
+        check(wait_until(lambda: "mihomo 内核" in page.inner_text("#page")), "没有内核时提示需要内核")
 
     # ---------- 程序内更新（模拟的发布，开发模式只下载校验、不替换程序） ----------
     # 托盘菜单的「检查更新」：已经打开的设置窗口切到「关于」页并立即检查。

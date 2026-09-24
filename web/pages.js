@@ -69,6 +69,128 @@ function configErrorView() {
     </div>`;
 }
 
+// ---------- 订阅和代理内核 ----------
+
+function formatBytes(bytes) {
+  if (bytes >= 1 << 30) {
+    return `${(bytes / (1 << 30)).toFixed(bytes >= 100 * (1 << 30) ? 0 : 1)} GB`;
+  }
+  if (bytes >= 1 << 20) {
+    return `${(bytes / (1 << 20)).toFixed(0)} MB`;
+  }
+  return `${Math.max(0, Math.round(bytes / 1024))} KB`;
+}
+
+function formatDate(seconds) {
+  const date = new Date(seconds * 1000);
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+// usageText 是机场给的已用流量和到期时间，例如「已用 6.0 GB / 100 GB · 2027-01-01 到期」。
+function usageText(info) {
+  const parts = [];
+  if (info.total) {
+    parts.push(`已用 ${formatBytes((info.upload || 0) + (info.download || 0))} / ${formatBytes(info.total)}`);
+  }
+  if (info.expire) {
+    parts.push(`${formatDate(info.expire)} 到期`);
+  }
+  return parts.join(" · ");
+}
+
+// usageWarning 在流量快用完或快到期时返回提示。
+function usageWarning(info) {
+  const used = (info.upload || 0) + (info.download || 0);
+  if (info.total && used >= info.total) {
+    return "流量已用完";
+  }
+  if (info.expire && info.expire * 1000 < Date.now()) {
+    return "订阅已到期";
+  }
+  if (info.total && used >= info.total * 0.9) {
+    return "流量快用完了";
+  }
+  if (info.expire && info.expire * 1000 - Date.now() < 7 * 24 * 3600 * 1000) {
+    return "订阅快到期了";
+  }
+  return "";
+}
+
+function relativeTime(iso) {
+  const minutes = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+  if (!(minutes >= 1)) {
+    return "刚刚";
+  }
+  if (minutes < 60) {
+    return `${minutes} 分钟前`;
+  }
+  if (minutes < 24 * 60) {
+    return `${Math.floor(minutes / 60)} 小时前`;
+  }
+  return `${Math.floor(minutes / 1440)} 天前`;
+}
+
+function hasSubscriptions() {
+  return Boolean(app.config && app.config.profiles.some((profile) => profile.subscription));
+}
+
+// coreNotice 提示代理内核的问题：还没下载（可以一键下载）、正在下载、出错、可以更新。没有问题时为空。
+function coreNotice() {
+  const core = app.state.core;
+  if (core.installing || app.coreInstalling) {
+    const progress = core.installing || { received: 0, total: 0 };
+    const percent = progress.total > 0 ? Math.min(100, Math.round((progress.received * 100) / progress.total)) : 0;
+    return html`
+      <div class="infobar info">${icon("download")}<div class="infobar-body">
+        <div class="infobar-title">正在下载代理内核 ${core.version}</div>
+        <div class="progress ${progress.total > 0 ? "" : "indeterminate"}" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percent}"><span style="width:${percent}%"></span></div>
+        <div class="caption muted numeric">${progress.total > 0 ? `${megabytes(progress.received)} / ${megabytes(progress.total)}` : "正在连接…"}</div>
+      </div></div>`;
+  }
+  if (!core.installed) {
+    if (core.custom) {
+      return html`<div class="infobar danger">${icon("error")}<div class="infobar-body"><div class="infobar-title">找不到代理内核</div><span class="mono">${core.path}</span>
+        <div class="infobar-actions"><button class="button" data-action="goto" data-page="general">修改内核位置</button></div></div></div>`;
+    }
+    if (core.downloadable) {
+      return html`<div class="infobar info">${icon("download")}<div class="infobar-body"><div class="infobar-title">使用订阅需要先下载代理内核</div>
+        ProxySwitch 用 mihomo（Clash.Meta）内核连接订阅里的节点。只需下载一次，约 17 MB，下载后自动校验。
+        <div class="infobar-actions"><button class="button accent" data-action="install-core">${icon("download")}下载内核</button></div></div></div>`;
+    }
+    return html`<div class="infobar info">${icon("info")}<div class="infobar-body"><div class="infobar-title">使用订阅需要 mihomo 内核</div>
+      这个版本不能在程序里下载内核，请在「常规」里填写本机 mihomo 程序的位置。
+      <div class="infobar-actions"><button class="button" data-action="goto" data-page="general">填写内核位置</button></div></div></div>`;
+  }
+  if (core.error) {
+    return html`<div class="infobar warning">${icon("warning")}<div class="infobar-body"><div class="infobar-title">代理内核出错</div><div style="white-space:pre-wrap">${core.error}</div></div></div>`;
+  }
+  if (!core.custom && core.downloadable && core.installed_version && core.installed_version !== core.version) {
+    return html`<div class="infobar info">${icon("download")}<div class="infobar-body"><div class="infobar-title">代理内核可以更新到 ${core.version}</div>当前是 ${core.installed_version}
+      <div class="infobar-actions"><button class="button" data-action="install-core">${icon("download")}更新内核</button></div></div></div>`;
+  }
+  return html``;
+}
+
+// subscriptionMeta 是订阅配置在列表里的说明：节点数、选中的节点、流量和到期时间，或下载状态。
+function subscriptionMeta(profile) {
+  const info = app.state.subscriptions[profile.id] || {};
+  if (!info.updated) {
+    if (info.error) {
+      return html`<span style="color:var(--danger)">订阅没有下载成功：${info.error}</span>`;
+    }
+    return html`<span><span class="spinner" style="width:10px;height:10px;border-width:1.5px;vertical-align:-1px"></span> 正在下载订阅…</span>`;
+  }
+  const usage = usageText(info);
+  const warning = usageWarning(info);
+  return html`
+    <span>${describeServer(profile)}</span>
+    <span>${info.nodes} 个节点</span>
+    ${usage ? html`<span>${usage}</span>` : ""}
+    ${warning ? html`<span class="badge warning">${warning}</span>` : ""}
+    ${info.error ? html`<span class="badge warning" title="${info.error}">更新失败，仍在使用上次的节点</span>` : ""}`;
+}
+
 // ---------- 代理 ----------
 
 function heroView() {
@@ -86,7 +208,11 @@ function heroView() {
     checked = true;
     warn = status.health === "down" ? "warn" : "";
     title = "代理已开启";
-    subtitle = html`<strong style="color:var(--text)">${profile.name}</strong><span class="mono">${describeServer(profile)}</span><span class="chips">${status.applied.map((label) => html`<span class="chip">${label}</span>`)}</span>`;
+    // 订阅配置显示实际在用的节点，自动选择时注明。
+    const server = profile.subscription
+      ? html`<span>${status.node ? `订阅 · ${status.node}${profile.node ? "" : "（自动选择）"}` : describeServer(profile)}</span>`
+      : html`<span class="mono">${describeServer(profile)}</span>`;
+    subtitle = html`<strong style="color:var(--text)">${profile.name}</strong>${server}<span class="chips">${status.applied.map((label) => html`<span class="chip">${label}</span>`)}</span>`;
     const latency = app.latency[profile.id];
     if (status.health === "down") {
       health = html`<span class="dot" style="background:var(--danger)"></span><span style="color:var(--danger)">连不上代理服务器：${status.health_message}</span>`;
@@ -116,6 +242,7 @@ function heroView() {
     subtitle = html`<span>还没有代理配置</span>`;
   }
   const hotkey = app.state.hotkeys.toggle && !app.state.hotkeys.toggle_error ? app.state.hotkeys.toggle : "";
+  const nodes = status.state === "on" && profile && profile.subscription;
   const canTest = status.state === "on" && profile && (profile.server || profile.pac);
   const terminal = status.state === "on" && status.terminal && status.terminal.length > 0;
   const saveExternal = status.state === "external" && status.external_profile;
@@ -129,6 +256,7 @@ function heroView() {
       </div>
       <div class="hero-actions">
         ${canTest || terminal || saveExternal ? html`<div class="hero-buttons">
+          ${nodes ? html`<button class="button" data-action="nodes" data-id="${profile.id}">${icon("list")}节点</button>` : ""}
           ${canTest ? html`<button class="button" data-action="test-profile" data-id="${profile.id}">${icon("gauge")}测速</button>` : ""}
           ${terminal ? html`<button class="button" data-action="terminal-menu" title="复制在当前终端里使用代理的命令" aria-haspopup="menu">${icon("terminal")}终端命令</button>` : ""}
           ${saveExternal ? html`<button class="button" data-action="save-external">${icon("plus")}保存为配置</button>` : ""}
@@ -167,13 +295,14 @@ function profileRow(profile, index) {
       <div style="min-width:0">
         <div class="profile-name"><span>${profile.name}</span></div>
         <div class="profile-meta">
-          <span class="mono">${describeServer(profile)}</span>
+          ${profile.subscription ? subscriptionMeta(profile) : html`<span class="mono">${describeServer(profile)}</span>`}
           <span>${targetsText(profile)}</span>
           ${hotkey ? html`<kbd class="compact" title="快捷键">${hotkey}</kbd>` : ""}
         </div>
       </div>
       <div class="profile-actions">
         <span class="latency">${latencyBadge(profile)}</span>
+        ${profile.subscription ? html`<button class="button" data-action="nodes" data-id="${profile.id}" title="选择节点">${icon("list")}节点</button>` : ""}
         ${active
           ? html`<span class="using">${icon("check")}正在使用</span>`
           : html`<button class="button" data-action="use" data-name="${profile.name}" ${app.busy ? raw("disabled") : ""}>使用</button>`}
@@ -193,6 +322,7 @@ function emptyView() {
         <button class="choice" data-action="detect">${icon("search")}<strong>自动检测</strong><span>查找本机正在运行的代理软件，一键添加</span></button>
         <button class="choice" data-action="add">${icon("pencil")}<strong>手动填写</strong><span>填写代理服务器的地址和端口</span></button>
         <button class="choice" data-action="add-pac">${icon("document")}<strong>PAC 脚本</strong><span>公司或学校提供了自动配置脚本地址时使用</span></button>
+        <button class="choice" data-action="add-subscription">${icon("list")}<strong>机场订阅</strong><span>填订阅地址，用内置的代理内核连接节点，不需要另外安装代理软件</span></button>
       </div>
     </div>`;
 }
@@ -212,6 +342,12 @@ function proxiesPage() {
     warnings.push(html`
       <div class="infobar warning">${icon("keyboard")}<div class="infobar-body"><div class="infobar-title">快捷键被其他程序占用</div>${[app.state.hotkeys.toggle_error, app.state.hotkeys.profiles_error].filter(Boolean).join("；")}
       <div class="infobar-actions"><button class="button" data-action="goto" data-page="general">更换快捷键</button></div></div></div>`);
+  }
+  if (hasSubscriptions()) {
+    const notice = coreNotice();
+    if (notice.text) {
+      warnings.push(notice);
+    }
   }
   return html`
     ${pageHeader("代理")}
@@ -388,6 +524,8 @@ function generalPage() {
       ${settingCard({ iconName: "gauge", title: "测速地址", description: "测速时经代理访问这个地址，返回越快延迟越低", control: html`<input class="input mono" style="width:280px" id="test-url" data-setting-text="test_url" value="${config.test_url}" spellcheck="false">${config.test_url !== app.state.defaults.test_url ? html`<button class="button subtle icon-only" data-action="reset-test-url" title="恢复默认">${icon("refresh")}</button>` : ""}` })}
     </div>
 
+    ${hasSubscriptions() || config.core.path ? coreSettingsView(config) : ""}
+
     <div class="section-title">外观</div>
     <div class="card card-group">
       ${settingCard({ iconName: "palette", title: "设置界面的颜色", control: html`<div class="segmented" role="group" aria-label="主题">${[["system", "跟随系统"], ["light", "浅色"], ["dark", "深色"]].map(([value, label]) => html`<button type="button" data-action="set-theme" data-value="${value}" aria-pressed="${config.theme === value}">${label}</button>`)}</div>` })}
@@ -400,6 +538,28 @@ function generalPage() {
       ${settingCard({ iconName: "terminal", title: "编辑器", description: "「编辑」配置文件时使用的程序，留空用记事本，也可以填 code 等命令", control: html`<input class="input" style="width:200px" id="editor" data-setting-text="editor" value="${config.editor}" placeholder="记事本" spellcheck="false">` })}
       ${settingCard({ iconName: "download", title: "备份与恢复", description: "导出全部设置和代理配置，换电脑时导入", control: html`<button class="button" data-action="export-config">${icon("download")}导出</button><button class="button" data-action="import-config">${icon("upload")}导入</button>` })}
       ${settingCard({ iconName: "refresh", title: "恢复默认设置", description: "把本页的设置恢复为默认值，代理配置和自动切换规则会保留", control: html`<button class="button" data-action="reset-settings">恢复默认</button>` })}
+    </div>`;
+}
+
+// coreSettingsView 是常规页里订阅使用的代理内核的设置：状态、本地端口、程序位置。
+function coreSettingsView(config) {
+  const core = app.state.core;
+  let status = html`<span class="badge">没有运行</span>`;
+  if (core.running) {
+    status = html`<span class="badge success">运行中</span>`;
+  } else if (core.error) {
+    status = html`<span class="badge warning" title="${core.error}">出错</span>`;
+  } else if (!core.installed) {
+    status = html`<span class="badge">还没有下载</span>`;
+  }
+  const version = core.custom ? "本机的 mihomo" : core.installed_version || core.version;
+  return html`
+    <div class="section-title">代理内核</div>
+    ${coreNotice()}
+    <div class="card card-group">
+      ${settingCard({ iconName: "box", title: "mihomo 内核", description: html`${version} · <span class="mono">${core.path}</span>`, control: status })}
+      ${settingCard({ iconName: "link", title: "本地代理端口", description: "订阅配置开启后，系统代理和环境变量指向 127.0.0.1 的这个端口（HTTP 和 SOCKS5 共用）", control: html`<input class="input mono numeric" style="width:96px" id="core-port" data-setting-number="core.port" value="${config.core.port}" inputmode="numeric" spellcheck="false">` })}
+      ${settingCard({ iconName: "folder", title: "内核程序的位置", description: core.downloadable ? "留空使用 ProxySwitch 下载的内核；也可以填本机已有的 mihomo 程序" : "填本机 mihomo 程序的完整路径", control: html`<input class="input mono" style="width:280px" id="core-path" data-setting-text="core.path" value="${config.core.path}" placeholder="${core.downloadable ? "自动下载" : "例如 C:\\mihomo\\mihomo.exe"}" spellcheck="false">` })}
     </div>`;
 }
 

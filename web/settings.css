@@ -1608,6 +1608,94 @@ kbd.compact {
   min-width: 96px;
 }
 
+/* ---------- 订阅的节点 ---------- */
+
+/* 滚动节点列表时搜索栏停在对话框顶部。 */
+.nodes-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  gap: 8px;
+  margin-bottom: 4px;
+  padding: 8px 0;
+  background: var(--dialog);
+}
+
+.nodes-toolbar .input {
+  flex: 1;
+  min-width: 0;
+}
+
+.node-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 -8px 16px;
+}
+
+.node {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto 64px;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 40px;
+  padding: 6px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.node:hover:not(:disabled) {
+  background: var(--subtle-hover);
+}
+
+.node:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.node[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  background: var(--accent-soft);
+}
+
+.node-check {
+  display: flex;
+  color: var(--accent-text);
+}
+
+.node-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-name small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-2);
+}
+
+.node-type {
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--text-3);
+  text-transform: uppercase;
+}
+
+.node .badge {
+  justify-self: end;
+}
+
 .preview {
   margin: 4px 0 16px;
   padding: 10px 12px;
@@ -1907,7 +1995,8 @@ body:has(.overlay) .toasts {
   }
 
   .profile.active,
-  .rule.matched {
+  .rule.matched,
+  .node[aria-pressed="true"] {
     outline: 2px solid Highlight;
     outline-offset: -2px;
   }
