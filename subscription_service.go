@@ -244,6 +244,23 @@ func (service *subscriptionService) fillState(state *SettingsState) {
 	}
 }
 
+// delaysNotice 是托盘菜单里「全部测速」的结果：有几个节点能用，最快的是哪个。
+func delaysNotice(profile Profile, delays map[string]int, err error) Notice {
+	if err != nil {
+		return Notice{Level: noticeWarning, Title: "测速失败", Text: profile.Name + "\n" + err.Error()}
+	}
+	if len(delays) == 0 {
+		return Notice{Level: noticeWarning, Title: profile.Name + "：没有能用的节点", Text: "所有节点都连不上，订阅可能已经过期", Page: "proxies"}
+	}
+	fastest, best := "", 0
+	for name, delay := range delays {
+		if fastest == "" || delay < best || (delay == best && name < fastest) {
+			fastest, best = name, delay
+		}
+	}
+	return Notice{Level: noticeInfo, Title: fmt.Sprintf("%s：%d 个节点能用", profile.Name, len(delays)), Text: fmt.Sprintf("最快：%s %d ms", fastest, max(1, best)), Icon: iconStateOn, Color: profile.Color}
+}
+
 // ---------- 地理数据 ----------
 
 // downloadGeoData 下载大陆直连规则用到的地理数据到内核的工作目录：每个文件依次尝试各个下载地址和网络路径，

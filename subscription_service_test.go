@@ -110,3 +110,20 @@ func TestSettingsSubscriptionFlow(t *testing.T) {
 		t.Errorf("不存在的订阅应报错：%d", status)
 	}
 }
+
+func TestDelaysNotice(t *testing.T) {
+	profile := Profile{Name: "机场", Color: "#16a34a"}
+	notice := delaysNotice(profile, map[string]int{"香港 01": 80, "日本 01": 35, "美国 01": 35}, nil)
+	if notice.Level != noticeInfo || notice.Title != "机场：3 个节点能用" || notice.Text != "最快：日本 01 35 ms" {
+		t.Errorf("测速结果的通知不对：%+v", notice)
+	}
+	if notice := delaysNotice(profile, map[string]int{"本机": 0}, nil); notice.Text != "最快：本机 1 ms" {
+		t.Errorf("本机测得 0 ms 时应显示 1 ms：%+v", notice)
+	}
+	if notice := delaysNotice(profile, map[string]int{}, nil); notice.Level != noticeWarning || !strings.Contains(notice.Title, "没有能用的节点") {
+		t.Errorf("没有能用的节点时应提醒：%+v", notice)
+	}
+	if notice := delaysNotice(profile, nil, fmt.Errorf("代理内核没有运行")); notice.Level != noticeWarning || !strings.Contains(notice.Text, "代理内核没有运行") {
+		t.Errorf("测速失败时应说明原因：%+v", notice)
+	}
+}

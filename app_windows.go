@@ -26,7 +26,18 @@ const (
 	menuExit
 	menuTerminalBase = 50
 	menuProfileBase  = 100
+	// 订阅子菜单里的各项（节点、测速、更新订阅）从这里开始编号，含义记在 App.menuChoices。
+	menuChoiceBase = 1000
+	// 托盘菜单在 UI 线程上读取节点，内核没有及时响应时不再等。
+	menuNodesTimeout = 300 * time.Millisecond
 )
+
+// menuChoice 是订阅子菜单里的一项：action 为 select（node 为空表示自动选择）、use、test 或 update。
+type menuChoice struct {
+	profileId string
+	node      string
+	action    string
+}
 
 const (
 	toggleHotkeyId    = 1
@@ -65,6 +76,8 @@ type App struct {
 	latestUpdate *UpdateInfo
 	// 上次运行时程序崩溃过，启动后提示。
 	crashedLastTime bool
+	// 最近一次弹出的托盘菜单里订阅子菜单各项的含义，按编号减去 menuChoiceBase 查找。
+	menuChoices []menuChoice
 }
 
 func newApp(paths Paths) *App {
@@ -360,6 +373,7 @@ func escapeMenuText(text string) string {
 }
 
 func (app *App) menuItems() []MenuItem {
+	app.menuChoices = nil
 	separator := MenuItem{Separator: true}
 	config := app.engine.Config()
 	if config == nil {
@@ -412,7 +426,11 @@ func (app *App) menuItems() []MenuItem {
 				text += "\t" + modifiers.Text + "+" + strconv.Itoa(index+1)
 			}
 			active := status.State == statusOn && status.Profile.Id == profile.Id
-			items = append(items, MenuItem{Id: uint32(menuProfileBase + index), Text: text, Checked: active, Radio: true, Bitmap: app.menuDot(profile.Color)})
+			item := MenuItem{Id: uint32(menuProfileBase + index), Text: text, Checked: active, Radio: true, Bitmap: app.menuDot(profile.Color)}
+			if profile.IsSubscription() && app.subscriptionService != nil {
+				item.Children = app.subscriptionMenu(profile, active)
+			}
+			items = append(items, item)
 		}
 	}
 	items = append(items, separator)
@@ -437,6 +455,95 @@ func (app *App) menuItems() []MenuItem {
 		MenuItem{Id: menuExit, Text: "退出"},
 	)
 	return items
+}
+
+// subscriptionMenu 是订阅配置的子菜单：没开启时可以直接开启；选择节点（自动选择或某个节点，显示最近测得的延迟）；测速、更新订阅。
+func (app *App) subscriptionMenu(profile *Profile, active bool) []MenuItem {
+	var items []MenuItem
+	if !active {
+		items = append(items, app.menuChoice(MenuItem{Text: "使用这个配置"}, menuChoice{profile.Id, "", "use"}), MenuItem{Separator: true})
+	}
+	if err := app.engine.subscriptionProblem(profile); err != nil {
+		items = append(items, MenuItem{Text: escapeMenuText(truncateRunes(err.Error(), 40)), Disabled: true})
+	} else if nodes, err := app.core.NodesWithin(profile.Id, menuNodesTimeout); err != nil {
+		items = append(items, MenuItem{Text: "读不到节点：" + escapeMenuText(truncateRunes(err.Error(), 30)), Disabled: true})
+	} else {
+		auto := "自动选择（延迟最低）"
+		if nodes.Selected == "" && nodes.Current != "" {
+			auto = "自动选择：" + escapeMenuText(nodes.Current)
+		}
+		items = append(items, app.menuChoice(MenuItem{Text: auto, Radio: true, Checked: nodes.Selected == ""}, menuChoice{profile.Id, "", "select"}))
+		for _, node := range nodes.Nodes {
+			text := escapeMenuText(node.Name)
+			switch {
+			case node.Tested && !node.Alive:
+				text += "\t超时"
+			case node.Tested:
+				text += fmt.Sprintf("\t%d ms", max(1, node.Delay))
+			}
+			items = append(items, app.menuChoice(MenuItem{Text: text, Radio: true, Checked: nodes.Selected == node.Name}, menuChoice{profile.Id, node.Name, "select"}))
+		}
+	}
+	return append(items, MenuItem{Separator: true},
+		app.menuChoice(MenuItem{Text: "全部测速"}, menuChoice{profile.Id, "", "test"}),
+		app.menuChoice(MenuItem{Text: "更新订阅"}, menuChoice{profile.Id, "", "update"}))
+}
+
+// menuChoice 给订阅子菜单的一项分配编号并记下它的含义。
+func (app *App) menuChoice(item MenuItem, choice menuChoice) MenuItem {
+	item.Id = uint32(menuChoiceBase + len(app.menuChoices))
+	app.menuChoices = append(app.menuChoices, choice)
+	return item
+}
+
+// runMenuChoice 执行订阅子菜单里的一项。选择节点时配置还没开启就顺便开启；测速和更新订阅在后台进行，完成后通知。
+func (app *App) runMenuChoice(choice menuChoice) {
+	config := app.engine.Config()
+	if config == nil {
+		return
+	}
+	profile := config.FindProfileById(choice.profileId)
+	if profile == nil {
+		return
+	}
+	profileCopy := *profile
+	switch choice.action {
+	case "use":
+		_ = app.engine.UseProfile(profile.Name)
+	case "select":
+		if err := app.engine.SelectNode(profile.Id, choice.node); err != nil {
+			app.notify(Notice{Level: noticeError, Title: "没有切换成功", Text: err.Error()})
+			return
+		}
+		if status := app.engine.Status(); status.State == statusOn && status.Profile != nil && status.Profile.Id == profileCopy.Id {
+			label := choice.node
+			if label == "" {
+				label = "自动选择（延迟最低）"
+			}
+			app.notify(Notice{Level: noticeInfo, Title: "已切换节点", Text: profileCopy.Name + " · " + label, Icon: iconStateOn, Color: profileCopy.Color})
+		} else {
+			_ = app.engine.UseProfile(profileCopy.Name)
+		}
+	case "test":
+		testUrl := config.TestUrl
+		go func() {
+			delays, err := app.core.TestDelays(profileCopy.Id, testUrl)
+			notice := delaysNotice(profileCopy, delays, err)
+			_ = app.tray.RunOnUi(func() { app.notify(notice) })
+		}()
+	case "update":
+		go func() {
+			err := app.UpdateSubscription(profileCopy.Id)
+			_ = app.tray.RunOnUi(func() {
+				if err != nil {
+					app.notify(Notice{Level: noticeWarning, Title: "订阅没有更新成功", Text: profileCopy.Name + "\n" + err.Error(), Page: "proxies"})
+					return
+				}
+				nodes := app.engine.subscriptionInfos()[profileCopy.Id].Nodes
+				app.notify(Notice{Level: noticeInfo, Title: "订阅已更新", Text: fmt.Sprintf("%s · 共 %d 个节点", profileCopy.Name, nodes), Icon: iconStateOn, Color: profileCopy.Color})
+			})
+		}()
+	}
 }
 
 // updateMenuText 是托盘菜单里检查更新一项的文字，已经知道有新版本时直接显示版本号。
@@ -492,6 +599,10 @@ func (app *App) handleMenu(command uint32) {
 		app.openSettingsAt("about", "check-update")
 	case command >= menuTerminalBase && command < menuProfileBase:
 		app.copyTerminalCommand(int(command - menuTerminalBase))
+	case command >= menuChoiceBase:
+		if index := int(command - menuChoiceBase); index < len(app.menuChoices) {
+			app.runMenuChoice(app.menuChoices[index])
+		}
 	case command == menuEditConfig:
 		if err := openWithEditor("", app.paths.Config); err != nil {
 			app.notify(Notice{Level: noticeError, Title: "无法打开配置文件", Text: err.Error()})

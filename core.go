@@ -459,6 +459,11 @@ func (core *Core) stopProcess() {
 
 // Nodes 列出订阅里的节点和最近一次测得的延迟。
 func (core *Core) Nodes(profileId string) (CoreNodes, error) {
+	return core.NodesWithin(profileId, coreApiTimeout)
+}
+
+// NodesWithin 与 Nodes 相同，但每次请求最多等 timeout：托盘菜单在 UI 线程上读取，不能久等。
+func (core *Core) NodesWithin(profileId string, timeout time.Duration) (CoreNodes, error) {
 	var provider struct {
 		Proxies []struct {
 			Name    string `json:"name"`
@@ -469,7 +474,7 @@ func (core *Core) Nodes(profileId string) (CoreNodes, error) {
 			} `json:"history"`
 		} `json:"proxies"`
 	}
-	if err := core.request(http.MethodGet, "/providers/proxies/"+url.PathEscape(coreProviderName(profileId)), nil, &provider, coreApiTimeout); err != nil {
+	if err := core.request(http.MethodGet, "/providers/proxies/"+url.PathEscape(coreProviderName(profileId)), nil, &provider, timeout); err != nil {
 		return CoreNodes{}, err
 	}
 	result := CoreNodes{Nodes: []CoreNode{}}
@@ -483,13 +488,13 @@ func (core *Core) Nodes(profileId string) (CoreNodes, error) {
 	var group struct {
 		Now string `json:"now"`
 	}
-	if err := core.request(http.MethodGet, "/proxies/"+url.PathEscape(profileId), nil, &group, coreApiTimeout); err != nil {
+	if err := core.request(http.MethodGet, "/proxies/"+url.PathEscape(profileId), nil, &group, timeout); err != nil {
 		return CoreNodes{}, err
 	}
 	result.Selected, result.Current = group.Now, group.Now
 	if group.Now == coreAutoGroup(profileId) {
 		result.Selected = ""
-		if err := core.request(http.MethodGet, "/proxies/"+url.PathEscape(coreAutoGroup(profileId)), nil, &group, coreApiTimeout); err == nil {
+		if err := core.request(http.MethodGet, "/proxies/"+url.PathEscape(coreAutoGroup(profileId)), nil, &group, timeout); err == nil {
 			result.Current = group.Now
 		}
 	}
