@@ -53,7 +53,7 @@ struct PanelView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                    .truncationMode(.middle)
+                    .truncationMode(.tail)
             }
             Spacer(minLength: 4)
             if state.busy {
@@ -94,7 +94,7 @@ struct PanelView: View {
         case .external(let description):
             return description
         case .off(let next):
-            if let next { return "下次开启：\(next.name)（\(next.summary)）" }
+            if let next { return "下次开启 \(next.name) · \(next.summary)" }
             return "在设置里添加一个代理配置"
         }
     }
@@ -186,7 +186,7 @@ struct PanelView: View {
                 if testing {
                     ProgressView().controlSize(.mini)
                 } else {
-                    Image(systemName: "gauge.with.needle")
+                    Image(systemName: "speedometer")
                 }
             }
             .buttonStyle(IconButtonStyle())

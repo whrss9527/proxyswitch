@@ -236,6 +236,9 @@ struct ProfileEditor: View {
             .formStyle(.grouped)
             .scrollContentBackground(.hidden)
 
+            Divider()
+                .padding(.horizontal, 20)
+
             HStack(spacing: 10) {
                 Button(role: .destructive) {
                     onDelete()
@@ -248,7 +251,7 @@ struct ProfileEditor: View {
                     if testing {
                         ProgressView().controlSize(.small)
                     } else {
-                        Label("测试连接", systemImage: "gauge.with.needle")
+                        Label("测试连接", systemImage: "speedometer")
                     }
                 }
                 .disabled(testing)
@@ -268,7 +271,7 @@ struct ProfileEditor: View {
                     .disabled(!dirty)
             }
             .padding(.horizontal, 20)
-            .padding(.bottom, 16)
+            .padding(.vertical, 14)
         }
         .glassCard()
     }
