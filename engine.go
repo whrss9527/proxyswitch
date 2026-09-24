@@ -85,6 +85,10 @@ type Engine struct {
 	paths  Paths
 	notify func(Notice)
 	now    func() time.Time
+	// 订阅使用的代理内核；为空时不管理内核（部分测试）。downloadsNeeded 通知后台检查需要下载的订阅。
+	core            ProxyCore
+	coreGeneration  int
+	downloadsNeeded func()
 
 	config      *Config
 	configError string
@@ -153,6 +157,7 @@ func (engine *Engine) ReloadIfChanged() bool {
 
 // ReplaceConfig 换用新配置。正在使用的配置被修改时重新应用，被删除时关闭代理。
 func (engine *Engine) ReplaceConfig(config *Config) {
+	defer engine.afterConfigChange()
 	if engine.config == nil {
 		engine.config = config
 		engine.configError = ""
@@ -181,12 +186,28 @@ func (engine *Engine) ReplaceConfig(config *Config) {
 		engine.finishOff()
 		engine.notify(turnedOffNotice(&previous, result, "正在使用的配置已被删除"))
 	case profileSettingsChanged(&previous, updated):
+		if err := engine.subscriptionProblem(updated); err != nil {
+			// 改成了订阅但还不能用（订阅还在下载等），先关闭代理，免得系统代理指向没有节点的内核。
+			result, _ := engine.revert(&previous, status.System)
+			engine.finishOff()
+			engine.notify(turnedOffNotice(&previous, result, err.Error()))
+			return
+		}
 		result := engine.apply(updated, &previous, status.System)
 		engine.remember(updated, result.applied > 0)
 		engine.resetHealth()
 		engine.notify(switchedNotice(updated, result, "已应用修改", ""))
 	case previous.Name != updated.Name:
 		engine.remember(updated, true)
+	}
+}
+
+// afterConfigChange 在换用配置后清理已删除的订阅，把新的状态交给内核，并检查是否有需要下载的订阅。
+func (engine *Engine) afterConfigChange() {
+	engine.forgetSubscriptions()
+	engine.syncCore()
+	if len(engine.SubscriptionsDue()) > 0 || engine.GeoDue() {
+		engine.requestDownloads()
 	}
 }
 
@@ -385,8 +406,11 @@ func (engine *Engine) apply(profile, previous *Profile, current SystemProxyState
 	return result
 }
 
-// activate 开启 profile，不发通知。
+// activate 开启 profile，不发通知。订阅配置还不能用时（内核或订阅还没下载）不改动任何设置。
 func (engine *Engine) activate(profile *Profile) applyResult {
+	if err := engine.subscriptionProblem(profile); err != nil {
+		return applyResult{failures: []string{err.Error()}}
+	}
 	status := engine.Status()
 	var previous *Profile
 	switch {
@@ -442,6 +466,8 @@ func (engine *Engine) remember(profile *Profile, enabled bool) {
 	engine.state.ProfileId = profile.Id
 	engine.state.Enabled = enabled
 	engine.saveState()
+	// 最近使用的订阅决定内核把流量交给哪个订阅。
+	engine.syncCore()
 }
 
 func (engine *Engine) saveState() {
@@ -569,10 +595,16 @@ func turnedOffNotice(profile *Profile, result applyResult, detail string) Notice
 	return notice
 }
 
-// RunStartupAction 按 startup_action 处理启动时的代理状态。
+// RunStartupAction 按 startup_action 处理启动时的代理状态。上次退出时因内核停止而关闭的订阅配置，
+// 在 keep（保持现状）时重新开启。
 func (engine *Engine) RunStartupAction() {
 	if engine.config == nil {
 		return
+	}
+	resume := engine.state.Resume
+	if resume != "" {
+		engine.state.Resume = ""
+		engine.saveState()
 	}
 	status := engine.Status()
 	switch engine.config.StartupAction {
@@ -583,6 +615,10 @@ func (engine *Engine) RunStartupAction() {
 	case "off":
 		if status.State == statusOn {
 			_ = engine.TurnOff()
+		}
+	default:
+		if profile := engine.config.FindProfileById(resume); profile != nil && status.State == statusOff {
+			_ = engine.use(profile)
 		}
 	}
 }
@@ -861,15 +897,17 @@ func (engine *Engine) settingsState() SettingsState {
 		network.Adapters = []NetworkAdapter{}
 	}
 	return SettingsState{
-		Version:     appVersion,
-		Paths:       PathsInfo{Dir: engine.paths.Dir, Config: engine.paths.Config, Log: engine.paths.Log, Portable: engine.paths.Portable},
-		Config:      engine.config,
-		ConfigError: engine.configError,
-		Status:      info,
-		Network:     network,
-		AutoSwitch:  autoSwitch,
-		Defaults:    defaultsInfo(),
-		Palette:     profilePalette,
+		Version:       appVersion,
+		Paths:         PathsInfo{Dir: engine.paths.Dir, Config: engine.paths.Config, Log: engine.paths.Log, Portable: engine.paths.Portable},
+		Config:        engine.config,
+		ConfigError:   engine.configError,
+		Status:        info,
+		Network:       network,
+		AutoSwitch:    autoSwitch,
+		Defaults:      defaultsInfo(),
+		Palette:       profilePalette,
+		Subscriptions: engine.subscriptionInfos(),
+		Core:          engine.coreInfo(),
 	}
 }
 

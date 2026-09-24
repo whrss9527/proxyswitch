@@ -43,15 +43,21 @@ const (
 // 配置颜色：新建配置按顺序取色，托盘图标和设置页用它区分配置。
 var profilePalette = []string{"#16a34a", "#2563eb", "#7c3aed", "#db2777", "#ea580c", "#0891b2"}
 
+// Profile 是一套代理配置。填了 Subscription（订阅地址）的配置由内置的代理内核连接机场的节点，
+// Server 由程序填成内核的本地端口；Node 是选中的节点，留空表示自动选择延迟最低的；
+// Mode 是 rule（大陆直连，其余走节点）或 global（全部走节点）。
 type Profile struct {
-	Id      string   `json:"id"`
-	Name    string   `json:"name"`
-	Color   string   `json:"color"`
-	Server  string   `json:"server"`
-	Pac     string   `json:"pac"`
-	Bypass  string   `json:"bypass"`
-	NoProxy string   `json:"no_proxy"`
-	ApplyTo []string `json:"apply_to"`
+	Id           string   `json:"id"`
+	Name         string   `json:"name"`
+	Color        string   `json:"color"`
+	Server       string   `json:"server"`
+	Pac          string   `json:"pac"`
+	Bypass       string   `json:"bypass"`
+	NoProxy      string   `json:"no_proxy"`
+	ApplyTo      []string `json:"apply_to"`
+	Subscription string   `json:"subscription,omitempty"`
+	Node         string   `json:"node,omitempty"`
+	Mode         string   `json:"mode,omitempty"`
 }
 
 type NetRule struct {
@@ -66,6 +72,12 @@ type AutoSwitch struct {
 	Rules          []NetRule `json:"rules"`
 	DefaultAction  string    `json:"default_action"`
 	DefaultProfile string    `json:"default_profile"`
+}
+
+// CoreConfig 是订阅使用的代理内核（mihomo）的设置：Path 留空时使用 ProxySwitch 下载的内核，Port 是它的本地代理端口。
+type CoreConfig struct {
+	Path string `json:"path"`
+	Port int    `json:"port"`
 }
 
 type Config struct {
@@ -84,6 +96,7 @@ type Config struct {
 	TestUrl         string     `json:"test_url"`
 	Editor          string     `json:"editor"`
 	CheckUpdates    bool       `json:"check_updates"`
+	Core            CoreConfig `json:"core"`
 	AutoSwitch      AutoSwitch `json:"auto_switch"`
 	Profiles        []Profile  `json:"profiles"`
 	// 旧版配置的通知开关：读入时换算成 notify_level，保存时不再写出。
@@ -103,6 +116,7 @@ func defaultConfig() *Config {
 		SettingsWindow:  "app",
 		TestUrl:         defaultTestUrl,
 		CheckUpdates:    true,
+		Core:            CoreConfig{Port: defaultCorePort},
 		AutoSwitch:      AutoSwitch{Rules: []NetRule{}, DefaultAction: "keep"},
 		Profiles:        []Profile{},
 	}
@@ -149,6 +163,9 @@ const defaultConfigText = `// ProxySwitch 配置文件。推荐在托盘菜单�
   // 自动检查更新：每天最多访问一次 GitHub，发现新版本时在托盘提示
   "check_updates": true,
 
+  // 订阅使用的代理内核（mihomo）：path 留空使用 ProxySwitch 下载的内核，port 是它在本机提供代理的端口
+  "core": { "path": "", "port": 17890 },
+
   // 按所在网络自动切换
   "auto_switch": {
     "enabled": false,
@@ -177,6 +194,16 @@ const defaultConfigText = `// ProxySwitch 配置文件。推荐在托盘菜单�
     //   "no_proxy": "localhost,127.0.0.1,::1",
     //   // 生效范围：system 系统代理 / env 环境变量 / git / npm
     //   "apply_to": ["system"]
+    // },
+    // {
+    //   "name": "机场",
+    //   // 订阅地址：由内置的代理内核连接订阅里的节点，不需要填 server
+    //   "subscription": "https://example.com/api/v1/client/subscribe?token=...",
+    //   // 选中的节点，留空自动选择延迟最低的
+    //   "node": "",
+    //   // rule 大陆直连、其余走节点 / global 全部走节点
+    //   "mode": "rule",
+    //   "apply_to": ["system"]
     // }
   ]
 }
@@ -191,9 +218,18 @@ func (profile *Profile) Has(target string) bool {
 	return false
 }
 
+// IsSubscription 表示这套配置使用订阅，由内置的代理内核连接节点。
+func (profile *Profile) IsSubscription() bool {
+	return profile.Subscription != ""
+}
+
 // Summary 是菜单、通知里展示的简短地址。
 func (profile *Profile) Summary() string {
 	switch {
+	case profile.IsSubscription() && profile.Node != "":
+		return "订阅 · " + profile.Node
+	case profile.IsSubscription():
+		return "订阅 · 自动选择"
 	case profile.Pac != "" && profile.Server != "":
 		return "PAC + " + profile.Server
 	case profile.Pac != "":
@@ -203,9 +239,11 @@ func (profile *Profile) Summary() string {
 	}
 }
 
-// Kind 是配置的类型：pac / socks / custom（按协议分别指定）/ http。
+// Kind 是配置的类型：subscription / pac / socks / custom（按协议分别指定）/ http。
 func (profile *Profile) Kind() string {
 	switch {
+	case profile.IsSubscription():
+		return "subscription"
 	case profile.Pac != "":
 		return "pac"
 	case strings.Contains(profile.Server, "="):
@@ -241,6 +279,18 @@ func (config *Config) FindProfile(name string) *Profile {
 		}
 	}
 	return nil
+}
+
+// Clone 深拷贝配置，修改副本不影响正在使用的配置。
+func (config *Config) Clone() *Config {
+	copied := *config
+	copied.Profiles = make([]Profile, len(config.Profiles))
+	for index, profile := range config.Profiles {
+		profile.ApplyTo = append([]string(nil), profile.ApplyTo...)
+		copied.Profiles[index] = profile
+	}
+	copied.AutoSwitch.Rules = append([]NetRule{}, config.AutoSwitch.Rules...)
+	return &copied
 }
 
 func (config *Config) FindProfileById(id string) *Profile {
@@ -293,6 +343,10 @@ func normalizeConfig(config *Config) {
 		config.TestUrl = defaultTestUrl
 	}
 	config.Editor = strings.TrimSpace(config.Editor)
+	config.Core.Path = strings.TrimSpace(config.Core.Path)
+	if config.Core.Port == 0 {
+		config.Core.Port = defaultCorePort
+	}
 	if config.Profiles == nil {
 		config.Profiles = []Profile{}
 	}
@@ -308,6 +362,15 @@ func normalizeConfig(config *Config) {
 		profile.Color = strings.ToLower(strings.TrimSpace(profile.Color))
 		if profile.Color == "" {
 			profile.Color = profilePalette[index%len(profilePalette)]
+		}
+		profile.Subscription = strings.TrimSpace(profile.Subscription)
+		if profile.IsSubscription() {
+			// 订阅由内核代理：代理地址就是内核的本地端口，端口改了随之更新。
+			profile.Server = coreServer(config.Core.Port)
+			profile.Pac = ""
+			profile.Mode = lowerTrim(profile.Mode, "rule")
+		} else {
+			profile.Node, profile.Mode = "", ""
 		}
 		profile.Id = strings.TrimSpace(profile.Id)
 		if profile.Id == "" || usedIds[profile.Id] {
@@ -411,6 +474,9 @@ func validateConfig(config *Config) error {
 	if err := validateTestUrl(config.TestUrl); err != nil {
 		return err
 	}
+	if config.Core.Port < 1 || config.Core.Port > 65535 {
+		return fmt.Errorf("core.port 需要在 1~65535 之间")
+	}
 	if config.Hotkey != "" {
 		if _, err := parseHotkey(config.Hotkey); err != nil {
 			return fmt.Errorf("快捷键 %q 无法识别：%v", config.Hotkey, err)
@@ -446,6 +512,14 @@ func validateProfile(profile *Profile) error {
 	}
 	if !hexColorPattern.MatchString(profile.Color) {
 		return fmt.Errorf("配置「%s」的颜色 %q 格式不对，应为 #rrggbb", profile.Name, profile.Color)
+	}
+	if profile.IsSubscription() {
+		if err := validateSubscriptionUrl(profile.Subscription); err != nil {
+			return fmt.Errorf("配置「%s」的%v", profile.Name, err)
+		}
+		if profile.Mode != "rule" && profile.Mode != "global" {
+			return fmt.Errorf("配置「%s」的 mode %q 不认识，可用：rule / global", profile.Name, profile.Mode)
+		}
 	}
 	if profile.Server == "" && profile.Pac == "" {
 		return fmt.Errorf("配置「%s」需要填写代理服务器地址或 PAC 脚本地址", profile.Name)
@@ -588,14 +662,19 @@ func writeConfigFile(path string, config *Config) error {
 // State 是运行状态，与用户手写的配置文件分开存放。
 // Original 是开启代理前的系统代理设置，关闭时据此恢复；NextUpdateCheck 是下次自动检查更新的时间，
 // UpdateNotified 是已经提示过的新版本号，同一个版本只提示一次；Version 是上次运行的版本，用来发现程序已经更新。
+// Subscriptions 按配置 id 记录订阅的下载情况；GeoAttempted 是上次下载地理数据的时间；
+// Resume 是退出时因内核随之停止而关闭的订阅配置，下次启动后重新开启。
 type State struct {
-	Profile         string            `json:"profile"`
-	ProfileId       string            `json:"profile_id,omitempty"`
-	Enabled         bool              `json:"enabled"`
-	Original        *SystemProxyState `json:"original,omitempty"`
-	NextUpdateCheck string            `json:"next_update_check,omitempty"`
-	UpdateNotified  string            `json:"update_notified,omitempty"`
-	Version         string            `json:"version,omitempty"`
+	Profile         string                       `json:"profile"`
+	ProfileId       string                       `json:"profile_id,omitempty"`
+	Enabled         bool                         `json:"enabled"`
+	Original        *SystemProxyState            `json:"original,omitempty"`
+	NextUpdateCheck string                       `json:"next_update_check,omitempty"`
+	UpdateNotified  string                       `json:"update_notified,omitempty"`
+	Version         string                       `json:"version,omitempty"`
+	Subscriptions   map[string]*SubscriptionInfo `json:"subscriptions,omitempty"`
+	GeoAttempted    string                       `json:"geo_attempted,omitempty"`
+	Resume          string                       `json:"resume,omitempty"`
 }
 
 func loadState(path string) *State {

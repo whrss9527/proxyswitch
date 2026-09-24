@@ -14,7 +14,9 @@ import (
 
 // devBackend 是开发模式的后端：核心逻辑与 Windows 版相同（Engine），系统设置换成内存实现，
 // 网络环境可以通过 /api/dev/network 模拟。`go run . --dev-settings` 在任何平台上都能预览和测试设置页。
+// 订阅由真实的内核代理：用 --core 指定本机的 mihomo 程序。
 type devBackend struct {
+	*subscriptionService
 	mutex     sync.Mutex
 	engine    *Engine
 	system    *memorySystem
@@ -35,6 +37,18 @@ var devDefaultNetwork = NetworkInfo{
 func newDevBackend(paths Paths, httpProxy, socks *fakeProxy) *devBackend {
 	backend := &devBackend{system: newMemorySystem(), httpProxy: httpProxy, socks: socks}
 	backend.engine = newEngine(backend.system, paths, backend.addNotice)
+	core := newCore(func(message string) {
+		_ = backend.locked(func() error {
+			backend.addNotice(Notice{Level: noticeError, Title: "代理内核出错", Text: message})
+			return nil
+		})
+	})
+	backend.subscriptionService = newSubscriptionService(backend.engine, core, func(action func()) error {
+		return backend.locked(func() error {
+			action()
+			return nil
+		})
+	})
 	_, _ = backend.engine.LoadConfig()
 	backend.engine.UpdateNetwork(devDefaultNetwork)
 	backend.engine.UpdateNetwork(devDefaultNetwork)
@@ -64,6 +78,7 @@ func (backend *devBackend) State() SettingsState {
 	state.Accent = "#0067c0"
 	state.Targets = targetInfos(true)
 	state.Update = backend.update
+	backend.fillCoreInfo(&state.Core)
 	if config := backend.engine.Config(); config != nil && config.Hotkey != "" {
 		if hotkey, err := parseHotkey(config.Hotkey); err == nil {
 			state.Hotkeys.Toggle = hotkey.Text
@@ -173,6 +188,11 @@ func (backend *devBackend) RememberUpdate(info UpdateInfo) {
 	}
 }
 
+// Close 停止内核，测试结束时调用。
+func (backend *devBackend) Close() {
+	backend.core.Stop()
+}
+
 // InstallUpdate 在开发模式下只下载并校验新版本（保存到配置目录），不替换程序。
 func (backend *devBackend) InstallUpdate(progress func(received, total int64)) error {
 	_, err := downloadLatestRelease("", filepath.Join(backend.engine.paths.Dir, "update.download"), progress)
@@ -259,9 +279,34 @@ func (backend *devBackend) devRoutes(mux *http.ServeMux) {
 	})
 }
 
+// linkDevCore 让开发模式使用本机的 mihomo：在内核工作目录放一个指向它的链接（不支持链接时复制一份），
+// 引擎像正式版一样在工作目录里找到它。
+func linkDevCore(paths Paths, source string) error {
+	absolute, err := filepath.Abs(source)
+	if err != nil {
+		return err
+	}
+	if !fileExists(absolute) {
+		return fmt.Errorf("找不到内核程序：%s", absolute)
+	}
+	if err := os.MkdirAll(paths.Core, 0o755); err != nil {
+		return err
+	}
+	target := filepath.Join(paths.Core, coreBinaryName())
+	_ = os.Remove(target)
+	if os.Symlink(absolute, target) == nil {
+		return nil
+	}
+	data, err := os.ReadFile(absolute)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(target, data, 0o755)
+}
+
 // runDevSettings 在任意平台上启动设置页服务，输出一行 JSON：页面地址、假代理地址、测速地址。
 func runDevSettings(args []string) int {
-	directory, webDir := "", ""
+	directory, webDir, corePath := "", "", ""
 	for _, argument := range args {
 		if value, found := strings.CutPrefix(argument, "--dir="); found {
 			directory = value
@@ -272,6 +317,9 @@ func runDevSettings(args []string) int {
 		// 自动化测试用本地模拟的 GitHub 发布接口。
 		if value, found := strings.CutPrefix(argument, "--release-api="); found {
 			releaseApiUrl = value
+		}
+		if value, found := strings.CutPrefix(argument, "--core="); found {
+			corePath = value
 		}
 	}
 	if directory == "" {
@@ -284,6 +332,12 @@ func runDevSettings(args []string) int {
 	}
 	paths := pathsIn(directory, false)
 	setupLogger(paths.Log)
+	if corePath != "" {
+		if err := linkDevCore(paths, corePath); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+	}
 
 	httpProxy, err := startFakeProxy(serveFakeHttpProxy, 35*time.Millisecond)
 	if err != nil {
@@ -325,6 +379,7 @@ func runDevSettings(args []string) int {
 		return 1
 	}
 	go backend.healthLoop(time.Second)
+	go backend.Run()
 
 	info, _ := json.Marshal(map[string]string{
 		"url":         address,
