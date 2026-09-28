@@ -1619,6 +1619,150 @@ kbd.compact {
   min-width: 96px;
 }
 
+/* ---------- 局域网共享 ---------- */
+
+.share-banner {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  margin-top: 8px;
+  padding: 10px 18px;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.share-banner:hover {
+  background: var(--card-hover);
+  border-color: var(--control-stroke);
+}
+
+.share-banner-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.share-banner > .icon:last-child {
+  color: var(--text-3);
+}
+
+.badge .icon {
+  width: 12px;
+  height: 12px;
+}
+
+.share-address {
+  padding: 16px 18px;
+}
+
+.share-address-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.share-address-row > .icon {
+  width: 20px;
+  height: 20px;
+  color: var(--warning);
+}
+
+.share-address-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.share-address-value {
+  font-size: 26px;
+  line-height: 34px;
+  font-weight: 600;
+  user-select: text;
+}
+
+.share-guide {
+  margin: 10px 0 0;
+}
+
+.share-list {
+  padding: 12px 16px;
+}
+
+.share-client {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 0;
+}
+
+.share-client > .icon {
+  width: 20px;
+  height: 20px;
+  color: var(--accent-text);
+}
+
+.share-client-text {
+  min-width: 0;
+}
+
+.share-client-text .caption {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-connections {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.share-connection {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 28px;
+}
+
+.share-connection-host {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.share-connection-rule {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-connection-outbound {
+  min-width: 64px;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-text);
+}
+
+.share-connection-outbound.direct {
+  font-weight: 400;
+  color: var(--text-2);
+}
+
+.share-connection .button.icon-only {
+  height: 24px;
+  min-width: 24px;
+}
+
 /* ---------- 订阅的节点 ---------- */
 
 /* 滚动节点列表时搜索栏停在对话框顶部。 */

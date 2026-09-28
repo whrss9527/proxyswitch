@@ -17,6 +17,11 @@ const app = {
   restarting: false,
   coreInstalling: false,
   navigateSerial: 0,
+  // 局域网共享页：正在使用的设备和最近的连接、经共享端口测试的结果、填错的地址或端口。
+  shareActivity: null,
+  shareTest: null,
+  shareInputError: "",
+  shareFirewallBusy: false,
 };
 
 const pollInterval = 2000;
@@ -74,12 +79,25 @@ function schedulePoll() {
     if (!document.hidden) {
       try {
         await refreshState(true);
+        if (app.page === "share") {
+          await refreshShareActivity(true);
+        }
       } catch (error) {
         // 连接问题由 connectionLost 处理。
       }
     }
     schedulePoll();
   }, pollInterval);
+}
+
+// refreshShareActivity 读取经共享入口上网的设备和最近的连接，有变化时重绘共享页。
+async function refreshShareActivity(fromPoll = false) {
+  const activity = await api("GET", "/api/share/activity");
+  const changed = JSON.stringify(activity) !== JSON.stringify(app.shareActivity);
+  app.shareActivity = activity;
+  if (changed && app.page === "share") {
+    renderPage({ fromPoll });
+  }
 }
 
 function applyAppearance() {
@@ -221,6 +239,9 @@ function goto(pageId) {
   if (pageId === "diagnostics") {
     loadDiagnostics();
   }
+  if (pageId === "share") {
+    refreshShareActivity().catch(() => {});
+  }
   if (location.hash !== `#${pageId}`) {
     history.replaceState(null, "", `/#${pageId}`);
   }
@@ -228,8 +249,8 @@ function goto(pageId) {
 
 // ---------- 操作 ----------
 
-// runOperation 执行开关、切换等操作，完成后刷新状态；部分失败时程序返回 409 和最新状态。
-async function runOperation(path, body, successMessage) {
+// runOperation 执行开关、切换等操作，完成后刷新状态；部分失败时程序返回 409 和最新状态，failureTitle 是这时提示的标题。
+async function runOperation(path, body, successMessage, failureTitle = "部分设置没有成功") {
   app.busy = true;
   renderNav();
   renderPage();
@@ -245,7 +266,7 @@ async function runOperation(path, body, successMessage) {
     app.busy = false;
     if (error.state) {
       receiveState(error.state, { force: true });
-      toast(error.message, "warning", "部分设置没有成功");
+      toast(error.message, "warning", failureTitle);
     } else {
       renderNav();
       renderPage();
@@ -419,6 +440,83 @@ function submitCustomRule() {
   if (!problem) {
     input.value = "";
   }
+}
+
+// ---------- 局域网共享 ----------
+
+async function testShare() {
+  const port = app.config.share.port;
+  app.shareTest = { running: true };
+  renderPage();
+  try {
+    app.shareTest = { result: await api("POST", "/api/test", { server: `127.0.0.1:${port}` }) };
+  } catch (error) {
+    app.shareTest = { result: { ok: false, message: error.message } };
+  }
+  renderPage();
+}
+
+async function allowShareFirewall() {
+  app.shareFirewallBusy = true;
+  renderPage();
+  try {
+    await api("POST", "/api/share/firewall");
+    toast("局域网里的设备现在可以连到这台电脑的共享端口", "success", "已允许通过 Windows 防火墙");
+  } catch (error) {
+    if (error.status !== 0 && error.status !== 403) {
+      toast(error.message, "warning", "没有放行");
+    }
+  } finally {
+    app.shareFirewallBusy = false;
+    renderPage();
+  }
+}
+
+function openShareRuleMenu(anchor, connection) {
+  const host = connection.host;
+  openMenu(anchor, Object.entries(policyLabels).map(([policy, label]) => ({
+    label: `让 ${host} ${label}`,
+    icon: policy === "reject" ? "close" : policy === "direct" ? "link" : "globe",
+    action: () => {
+      const problem = addCustomRule(host, policy);
+      if (problem) {
+        toast(problem, "warning", "没有添加");
+      }
+    },
+  })));
+}
+
+// saveShareInput 保存共享页里改过的允许的设备或端口；填错时在输入框下面说明，不保存。
+function saveShareInput(element) {
+  const value = element.value.trim();
+  const isPort = element.matches("[data-share-port]");
+  const problem = isPort ? sharePortProblem(value) : shareClientsProblem(value);
+  const changed = problem !== app.shareInputError;
+  app.shareInputError = problem;
+  if (problem) {
+    if (changed) {
+      renderPage();
+    }
+    return;
+  }
+  const current = isPort ? app.config.share.port : app.config.share.allowed;
+  const next = isPort ? Number(value) : value;
+  if (next === current) {
+    if (changed) {
+      renderPage();
+    }
+    return;
+  }
+  if (isPort) {
+    app.shareTest = null;
+  }
+  saveConfig((config) => {
+    if (isPort) {
+      config.share.port = next;
+    } else {
+      config.share.allowed = next;
+    }
+  }, isPort ? `共享端口改为 ${next}，设备上也要跟着改` : "");
 }
 
 async function loadDiagnostics() {
@@ -717,6 +815,32 @@ const actions = {
   }),
   "custom-rule-delete": (element) => saveConfig((config) => config.custom_rules.splice(Number(element.dataset.index), 1), "已删除自定义规则"),
   "apply-auto-switch": () => runOperation("/api/auto-switch/apply", undefined, "已按当前网络应用规则"),
+  "share-toggle": () => {
+    const enabled = !app.state.config.share.enabled;
+    app.shareTest = null;
+    runOperation("/api/share", { enabled }, enabled ? "局域网共享已开启" : "局域网共享已关闭", enabled ? "局域网共享没有打开" : "局域网共享没有关闭");
+  },
+  "copy-share-address": async (element) => {
+    if (await copyText(element.dataset.address)) {
+      toast("在设备的代理服务器设置里填这个地址和端口", "success", `已复制 ${element.dataset.address}`);
+    }
+  },
+  "share-test": () => testShare(),
+  "share-firewall": () => allowShareFirewall(),
+  "share-clear": async () => {
+    try {
+      app.shareActivity = await api("POST", "/api/share/clear");
+      renderPage();
+    } catch (error) {
+      // 连接问题由 connectionLost 处理。
+    }
+  },
+  "share-rule-menu": (element) => {
+    const connection = app.shareActivity && app.shareActivity.recent[Number(element.dataset.index)];
+    if (connection) {
+      openShareRuleMenu(element, connection);
+    }
+  },
   "refresh-diagnostics": () => {
     app.diagnostics = null;
     renderPage();
@@ -832,6 +956,10 @@ document.addEventListener("change", (event) => {
     }
     return;
   }
+  if (element.matches("input[data-share-allowed], input[data-share-port]")) {
+    saveShareInput(element);
+    return;
+  }
   if (element.matches("input[data-setting-text]")) {
     const path = element.dataset.settingText;
     const value = element.value.trim();
@@ -942,6 +1070,9 @@ async function start() {
     renderPage({ animate: true });
     if (app.page === "diagnostics") {
       loadDiagnostics();
+    }
+    if (app.page === "share") {
+      refreshShareActivity().catch(() => {});
     }
     // 窗口是为程序的请求打开的（地址里就是请求的页面），例如托盘菜单的「检查更新」：执行请求的操作。
     if (state.navigate && state.navigate.page === initialPage) {
