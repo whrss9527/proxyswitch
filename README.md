@@ -208,6 +208,7 @@ ProxySwitch.exe share on        开启局域网共享（off 关闭，不写表�
 ProxySwitch.exe diagnose 网址    网址诊断（加 --device 从局域网设备的视角）
 ProxySwitch.exe status          查看状态（退出码 0 表示已开启，1 表示已关闭）
 ProxySwitch.exe settings        打开设置
+ProxySwitch.exe update          检查更新（打开「关于」页并立即检查）
 ```
 
 托盘程序在运行时，命令交给它执行；没有运行时直接修改设置后退出。可以用在脚本、计划任务或桌面快捷方式里。
