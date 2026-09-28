@@ -456,6 +456,7 @@ func (core *Core) waitProviders(settings CoreSettings, deadline time.Time) error
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+	core.resetAutoGroups(settings)
 	if settings.Mode == "global" || len(settings.Rules) == 0 {
 		return nil
 	}
@@ -470,6 +471,35 @@ func (core *Core) waitProviders(settings CoreSettings, deadline time.Time) error
 }
 
 // ruleProvidersLoaded 表示规则集都已读进内核。规则集文件不会是空的，读到的规则数为 0 就是还没加载完。
+// resetAutoGroups 等订阅里的节点读进来，再让各订阅的「自动选择」重新挑节点。自动选择会把挑中的节点缓存十秒，
+// 加载配置期间（订阅还没读进来）有人查询它时，挑中的是 COMPATIBLE——相当于直连，接下来十秒走节点的流量都会直连。
+// 内核认不出订阅里的节点时列表一直是空的，最多等两秒。
+func (core *Core) resetAutoGroups(settings CoreSettings) {
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		var result struct {
+			Providers map[string]struct {
+				Proxies []json.RawMessage `json:"proxies"`
+			} `json:"providers"`
+		}
+		loaded := core.request(http.MethodGet, "/providers/proxies", nil, &result, coreApiTimeout) == nil
+		for _, subscription := range settings.Subscriptions {
+			if len(result.Providers[coreProviderName(subscription.Id)].Proxies) == 0 {
+				loaded = false
+			}
+		}
+		if loaded || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	for _, subscription := range settings.Subscriptions {
+		if err := core.request(http.MethodDelete, "/proxies/"+url.PathEscape(coreAutoGroup(subscription.Id)), nil, nil, coreApiTimeout); err != nil {
+			slog.Warn("重置自动选择失败", "subscription", subscription.Id, "err", err)
+		}
+	}
+}
+
 func (core *Core) ruleProvidersLoaded(settings CoreSettings) bool {
 	var result struct {
 		Providers map[string]struct {

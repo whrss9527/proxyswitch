@@ -489,3 +489,47 @@ func TestCoreWithShare(t *testing.T) {
 		t.Errorf("关掉共享后状态应清空：%+v", status.Share)
 	}
 }
+
+// 重新加载配置期间有人查询「自动选择」（设置页每两秒查一次在用的节点）时，内核会把 COMPATIBLE（相当于直连）缓存十秒；
+// 加载完后要让它重新挑节点，否则走节点的流量会直连。
+func TestCoreAutoGroupAfterReload(t *testing.T) {
+	binary := requireCoreBinary(t)
+	website := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		_, _ = io.WriteString(writer, "hello")
+	}))
+	defer website.Close()
+	node := startCountingProxy(t, strings.TrimPrefix(website.URL, "http://"))
+	dir := t.TempDir()
+	if err := writeSubscriptionFile(dir, "pa", []byte(nodesYaml(map[string]*countingProxy{"节点 A": node}, "节点 A"))); err != nil {
+		t.Fatal(err)
+	}
+	core := newCore(nil)
+	defer core.Stop()
+	port, _ := freeLocalPort()
+	settings := CoreSettings{Binary: binary, Dir: dir, Port: port, TestUrl: "http://" + coreTestHost + "/", Active: "pa", Mode: "rule",
+		Subscriptions: []CoreSubscription{{Id: "pa", Revision: "1"}}}
+	if err := core.Wait(core.Sync(settings), 30*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	var stop atomic.Bool
+	polled := make(chan struct{})
+	go func() {
+		defer close(polled)
+		for !stop.Load() {
+			_ = core.request(http.MethodGet, "/proxies/"+url.PathEscape(coreAutoGroup("pa")), nil, nil, time.Second)
+		}
+	}()
+	defer func() {
+		stop.Store(true)
+		<-polled
+	}()
+	for round := 0; round < 10; round++ {
+		settings.CustomRules = []string{fmt.Sprintf("DOMAIN-SUFFIX,round%d.invalid,ProxySwitch", round)}
+		if err := core.Wait(core.Sync(settings), 30*time.Second); err != nil {
+			t.Fatal(err)
+		}
+		if status, body, err := requestThroughCore(port, "other.invalid"); status != http.StatusOK || body != "hello" {
+			t.Fatalf("第 %d 次重新加载后应仍经过节点：%d %q %v（自动选择：%s）", round+1, status, body, err, core.CurrentNode("pa"))
+		}
+	}
+}
