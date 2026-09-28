@@ -87,7 +87,7 @@
 
 - **大陆直连（内置，默认）**：国内的网站和 IP 直连，其余走节点。
 - **小火箭规则**：直接选 [Shadowrocket-ADBlock-Rules-Forever](https://github.com/Johnshall/Shadowrocket-ADBlock-Rules-Forever) 的黑名单（被墙的网站走节点，其余直连）、白名单（国内和能直连的网站直连，其余走节点）、国内外划分，以及它们带去广告的版本和懒人配置。
-- **自定义规则地址**：填网上分享的小火箭（Shadowrocket）或 Surge 规则配置（.conf）的地址，可以先点「检查规则」看看有多少条规则。
+- **自定义规则地址**：填网上分享的小火箭（Shadowrocket）、Surge 规则配置（.conf）或 Clash 配置（.yaml，用其中的 `rules`）的地址，可以先点「检查规则」看看有多少条规则。
 
 本机和局域网地址无论怎么选都直接连接。在托盘菜单的订阅子菜单、节点对话框或配置的「更多」菜单里都能切换按规则分流和全局代理。
 
@@ -105,6 +105,7 @@
 - `[Rule]` 里的 `DOMAIN`、`DOMAIN-SUFFIX`、`DOMAIN-KEYWORD`、`DOMAIN-WILDCARD`、`DOMAIN-REGEX`、`IP-CIDR`、`IP-CIDR6`、`GEOIP`、`DST-PORT`、`RULE-SET`、`DOMAIN-SET`、`FINAL`，规则列表里 QuantumultX 写法的 `HOST`、`HOST-SUFFIX`、`IP6-CIDR` 等也能识别。
 - 去向：`PROXY` 走选中的节点，`DIRECT` 直连，`REJECT`（包括 `REJECT-TINYGIF` 等）拦截。`[Proxy Group]` 里的策略组按它的默认选项（`policy-select-name`，没有写时是第一个选项）归为这三种之一，节点和自动测速的组都算走节点。
 - `USER-AGENT`、`URL-REGEX` 这类要解密 HTTPS 才能判断的规则，以及 `IP-ASN`、`PROCESS-NAME`、`AND` / `OR` 等内核做不到的规则会跳过，列表里能看到跳过了多少条；`[General]`、`[URL Rewrite]`、`[MITM]`、`[Host]` 等段落不使用。
+- Clash（mihomo）的配置用其中的 `rules`：`proxy-groups` 里的策略组按第一个选项归类，`RULE-SET` 引用的 `rule-providers`（domain、ipcidr、classical，yaml 或 text 格式，也支持 inline）一起下载，`GEOSITE` 规则原样交给内核；mrs 格式的规则集和 `PASS` 跳过。
 - 去广告的规则有几万条，ProxySwitch 会把去向相同的连续规则合并成内核的规则集，按域名前缀树匹配，不会拖慢上网。
 
 </details>
@@ -394,7 +395,8 @@ go build -trimpath -ldflags="-H windowsgui -s -w" -o ProxySwitch.exe .
 | `probe.go` | 本机代理检测和测速 |
 | `update.go` | 检查更新、下载并校验新版本 |
 | `subscription.go` `subscription_service.go` | 订阅的下载、格式识别和流量信息，后台定时更新；设置界面上的订阅操作 |
-| `rules.go` | 分流规则：解析小火箭 / Surge 的规则配置和引用的规则列表，转换成内核的规则和规则集 |
+| `rules.go` | 分流规则：解析小火箭 / Surge / Clash 的规则配置和引用的规则列表，转换成内核的规则和规则集 |
+| `yamllite.go` | 只读的 YAML 子集，解析 Clash 配置里的策略组、规则集和规则 |
 | `core.go` `core_config.go` `coreinstall.go` `engine_core.go` | 代理内核（mihomo）：生成配置、启动和监控进程、通过它的接口选节点和测速；下载并校验内核；与引擎的衔接 |
 | `terminal.go` | 在当前终端设置代理的命令 |
 | `settings.go` `web/` | 设置界面的本地服务和页面 |

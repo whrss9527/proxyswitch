@@ -20,12 +20,13 @@ import (
 	"time"
 )
 
-// 分流规则：把小火箭（Shadowrocket）或 Surge 格式的规则配置转换成内核（mihomo）的规则。
+// 分流规则：把小火箭（Shadowrocket）、Surge 或 Clash（mihomo）格式的规则配置转换成内核（mihomo）的规则。
 //
 // 规则配置的 [Rule] 段从上到下匹配，第一条匹配的规则决定连接走代理、直连还是被拦截，FINAL 是都不匹配时的去向。
 // RULE-SET 和 DOMAIN-SET 引用外部的规则列表（Surge 或 QuantumultX 格式），由 ProxySwitch 一起下载并展开；
 // [Proxy Group] 里的策略组按默认选项归为三种去向之一。内核做不到的规则（USER-AGENT、URL-REGEX 这类要解密 HTTPS
-// 才能判断的，以及 IP-ASN、PROCESS-NAME 等）跳过并计数。
+// 才能判断的，以及 IP-ASN、PROCESS-NAME 等）跳过并计数。Clash 配置用顶层的 rules 列表，策略组看 proxy-groups，
+// RULE-SET 引用 rule-providers 里的规则集。
 //
 // 带去广告的规则有几万条，逐条写进内核的配置会让每个连接逐条比对。去向相同的连续规则先后顺序不影响结果，
 // 所以把它们合并：域名写成 domain 规则集（内核用前缀树匹配），IP 段写成 ipcidr 规则集，其余规则保留原样；
@@ -87,10 +88,12 @@ type ruleEntry struct {
 }
 
 // ruleLine 是规则配置里的一条规则：普通规则（Entry），或者引用外部列表的 RULE-SET / DOMAIN-SET（Set）。
+// NoResolve 表示引用的列表里的 IP 段都不解析域名（RULE-SET 后面写了 no-resolve）。
 type ruleLine struct {
 	Entry     ruleEntry
 	Set       string
 	DomainSet bool
+	NoResolve bool
 	Policy    string
 }
 
@@ -128,6 +131,7 @@ var (
 	ruleKeywordPattern  = regexp.MustCompile(`^[a-z0-9_.-]+$`)
 	ruleWildcardPattern = regexp.MustCompile(`^[a-z0-9_.*?-]+$`)
 	ruleCountryPattern  = regexp.MustCompile(`^[A-Z]{2}$`)
+	ruleSitePattern     = regexp.MustCompile(`^[a-z0-9!@_.-]+$`)
 	rulePortPattern     = regexp.MustCompile(`^[0-9]{1,5}(-[0-9]{1,5})?(/[0-9]{1,5}(-[0-9]{1,5})?)*$`)
 )
 
@@ -151,6 +155,9 @@ func parseRuleConfig(content []byte) (ruleConfig, error) {
 		sections[current] = append(sections[current], line)
 	}
 	rules, found := sections["rule"]
+	if !found && clashConfigPattern.MatchString(text) {
+		return parseClashRuleConfig(text)
+	}
 	if !found {
 		rules = sections[""]
 	}
@@ -162,12 +169,101 @@ func parseRuleConfig(content []byte) (ruleConfig, error) {
 		}
 	}
 	if len(config.Lines) == 0 && config.Final == "" {
-		if strings.Contains(text, "\nrules:") || strings.HasPrefix(text, "rules:") {
-			return config, errors.New("这是 Clash 的配置，现在只支持小火箭（Shadowrocket）和 Surge 格式的规则配置")
-		}
-		return config, errors.New("没有找到分流规则，请确认是小火箭（Shadowrocket）或 Surge 格式的规则配置")
+		return config, errors.New("没有找到分流规则，请确认是小火箭（Shadowrocket）、Surge 或 Clash 格式的规则配置")
 	}
 	return config, nil
+}
+
+// clashConfigPattern 认出 Clash（mihomo）的配置：顶层有 rules 列表。
+var clashConfigPattern = regexp.MustCompile(`(?m)^rules:`)
+
+// clashRuleProvider 是 Clash 配置里 rule-providers 的一项：http 类型从 Url 下载，inline 类型的内容写在 Payload 里。
+type clashRuleProvider struct {
+	Type     string
+	Behavior string
+	Format   string
+	Url      string
+	Payload  []string
+}
+
+// parseClashRuleConfig 解析 Clash（mihomo）的配置：rules 按顺序转换，策略组按 proxy-groups 里的第一个选项归为走节点、
+// 直连或拦截，RULE-SET 引用 rule-providers 里的规则集（http 的下载，inline 的直接用）。
+func parseClashRuleConfig(text string) (ruleConfig, error) {
+	root := yamlMap(parseYamlLite(text))
+	groups := map[string]proxyGroup{}
+	for _, item := range yamlList(root["proxy-groups"]) {
+		group := yamlMap(item)
+		if name := yamlString(group["name"]); name != "" {
+			groups[strings.ToLower(name)] = proxyGroup{Kind: strings.ToLower(yamlString(group["type"])), Members: yamlStrings(group["proxies"])}
+		}
+	}
+	providers := map[string]clashRuleProvider{}
+	for name, item := range yamlMap(root["rule-providers"]) {
+		definition := yamlMap(item)
+		providers[name] = clashRuleProvider{
+			Type:     strings.ToLower(yamlString(definition["type"])),
+			Behavior: strings.ToLower(yamlString(definition["behavior"])),
+			Format:   strings.ToLower(yamlString(definition["format"])),
+			Url:      yamlString(definition["url"]),
+			Payload:  yamlStrings(definition["payload"]),
+		}
+	}
+	var config ruleConfig
+	for _, rule := range yamlStrings(root["rules"]) {
+		if !config.addClash(rule, groups, providers) {
+			break
+		}
+	}
+	if len(config.Lines) == 0 && config.Final == "" {
+		return config, errors.New("Clash 配置里没有找到分流规则（rules）")
+	}
+	return config, nil
+}
+
+// addClash 加入 Clash 配置里的一条规则，遇到 MATCH 时返回 false。PASS（跳过这条规则）和内核做不到的规则跳过。
+func (config *ruleConfig) addClash(rule string, groups map[string]proxyGroup, providers map[string]clashRuleProvider) bool {
+	fields := splitRuleFields(stripRuleComment(rule))
+	kind := strings.ToUpper(fields[0])
+	if len(fields) >= 3 && strings.EqualFold(fields[2], "PASS") || len(fields) == 2 && kind != "MATCH" && strings.EqualFold(fields[1], "PASS") {
+		config.Skipped++
+		return true
+	}
+	if kind != "RULE-SET" {
+		return config.add(rule, groups)
+	}
+	provider, found := providers[fieldAt(fields, 1)]
+	if len(fields) < 3 || !found {
+		config.Skipped++
+		return true
+	}
+	policy := resolvePolicy(fields[2], groups)
+	domainSet := provider.Behavior == "domain"
+	switch {
+	case provider.Type == "inline":
+		for _, item := range provider.Payload {
+			if entry, ok := ruleListEntry(item, domainSet); ok {
+				entry.NoResolve = entry.NoResolve || isIpRule(entry) && hasNoResolve(fields[3:])
+				config.Lines = append(config.Lines, ruleLine{Entry: entry, Policy: policy})
+			} else {
+				config.Skipped++
+			}
+		}
+	case provider.Format == "mrs" || provider.Behavior != "domain" && provider.Behavior != "ipcidr" && provider.Behavior != "classical":
+		// mrs 是二进制格式，读不了。
+		config.Skipped++
+	case strings.HasPrefix(strings.ToLower(provider.Url), "http://") || strings.HasPrefix(strings.ToLower(provider.Url), "https://"):
+		config.Lines = append(config.Lines, ruleLine{Set: provider.Url, DomainSet: domainSet, NoResolve: hasNoResolve(fields[3:]), Policy: policy})
+	default:
+		config.Skipped++
+	}
+	return true
+}
+
+func fieldAt(fields []string, index int) string {
+	if index < len(fields) {
+		return fields[index]
+	}
+	return ""
 }
 
 func isRuleComment(line string) bool {
@@ -216,7 +312,7 @@ func (config *ruleConfig) add(line string, groups map[string]proxyGroup) bool {
 			}
 			return true
 		}
-		config.Lines = append(config.Lines, ruleLine{Set: fields[1], DomainSet: kind == "DOMAIN-SET", Policy: resolvePolicy(fields[2], groups)})
+		config.Lines = append(config.Lines, ruleLine{Set: fields[1], DomainSet: kind == "DOMAIN-SET", NoResolve: hasNoResolve(fields[3:]), Policy: resolvePolicy(fields[2], groups)})
 		return true
 	}
 	if len(fields) < 3 {
@@ -232,14 +328,23 @@ func (config *ruleConfig) add(line string, groups map[string]proxyGroup) bool {
 	return true
 }
 
-// convertRuleEntry 把一条 Surge / QuantumultX 写法的规则换成内核的写法，内核做不到或写得不对时返回 false。
-func convertRuleEntry(kind, value string, options []string) (ruleEntry, bool) {
-	noResolve := false
+func hasNoResolve(options []string) bool {
 	for _, option := range options {
 		if strings.EqualFold(option, "no-resolve") {
-			noResolve = true
+			return true
 		}
 	}
+	return false
+}
+
+// isIpRule 表示规则按 IP 判断（要不要为它解析域名由 no-resolve 决定）。
+func isIpRule(entry ruleEntry) bool {
+	return entry.Kind == "IP-CIDR" || entry.Kind == "IP-CIDR6" || entry.Kind == "GEOIP"
+}
+
+// convertRuleEntry 把一条 Surge / QuantumultX 写法的规则换成内核的写法，内核做不到或写得不对时返回 false。
+func convertRuleEntry(kind, value string, options []string) (ruleEntry, bool) {
+	noResolve := hasNoResolve(options)
 	switch kind {
 	case "DOMAIN", "HOST":
 		domain, ok := normalizeRuleDomain(value)
@@ -269,6 +374,9 @@ func convertRuleEntry(kind, value string, options []string) (ruleEntry, bool) {
 	case "GEOIP":
 		country := strings.ToUpper(value)
 		return ruleEntry{Kind: "GEOIP", Value: country, NoResolve: noResolve}, ruleCountryPattern.MatchString(country)
+	case "GEOSITE":
+		site := strings.ToLower(value)
+		return ruleEntry{Kind: "GEOSITE", Value: site}, ruleSitePattern.MatchString(site)
 	case "DST-PORT", "DEST-PORT":
 		return ruleEntry{Kind: "DST-PORT", Value: value}, rulePortPattern.MatchString(value)
 	}
@@ -361,14 +469,7 @@ func parseRuleList(content []byte, domainSet bool) (entries []ruleEntry, skipped
 			continue
 		}
 		line = strings.TrimSpace(strings.TrimPrefix(line, "- "))
-		line = strings.Trim(stripRuleComment(line), `'"`)
-		var entry ruleEntry
-		ok := false
-		if fields := splitRuleFields(line); len(fields) >= 2 && !domainSet {
-			entry, ok = convertRuleEntry(strings.ToUpper(fields[0]), fields[1], fields[2:])
-		} else if len(fields) == 1 {
-			entry, ok = bareRuleEntry(line, domainSet)
-		}
+		entry, ok := ruleListEntry(strings.Trim(stripRuleComment(line), `'"`), domainSet)
 		if !ok {
 			skipped++
 			continue
@@ -376,6 +477,18 @@ func parseRuleList(content []byte, domainSet bool) (entries []ruleEntry, skipped
 		entries = append(entries, entry)
 	}
 	return entries, skipped, nil
+}
+
+// ruleListEntry 转换规则列表里的一行：带逗号的是规则（行里写的去向忽略），否则是域名或 IP 段。
+func ruleListEntry(line string, domainSet bool) (ruleEntry, bool) {
+	fields := splitRuleFields(line)
+	if len(fields) >= 2 && !domainSet {
+		return convertRuleEntry(strings.ToUpper(fields[0]), fields[1], fields[2:])
+	}
+	if len(fields) == 1 && fields[0] != "" {
+		return bareRuleEntry(fields[0], domainSet)
+	}
+	return ruleEntry{}, false
 }
 
 // bareRuleEntry 解析只写了域名或 IP 段的一行：以 . 或 +. 开头的域名包括子域名，带 * 的是通配。
@@ -399,7 +512,7 @@ func bareRuleEntry(line string, domainSet bool) (ruleEntry, bool) {
 // ---------- 转换 ----------
 
 // convertedRules 是转换后交给内核的规则：Rules 是规则行，其中的规则集是 Providers 里的文件。
-// Count 是展开规则列表后的规则数；Final 是其余网站的去向；Geo 表示用到了 GEOIP，需要地理数据。
+// Count 是展开规则列表后的规则数；Final 是其余网站的去向；Geo 表示用到了 GEOIP 或 GEOSITE，需要地理数据。
 type convertedRules struct {
 	Rules     []string
 	Providers []convertedProvider
@@ -440,6 +553,7 @@ func convertRules(config ruleConfig, sets map[ruleSetSource][]ruleEntry, prefix 
 			continue
 		}
 		for _, entry := range sets[ruleSetSource{line.Set, line.DomainSet}] {
+			entry.NoResolve = entry.NoResolve || line.NoResolve && isIpRule(entry)
 			rules = append(rules, policyRule{entry, line.Policy})
 		}
 	}
@@ -483,6 +597,9 @@ func (result *convertedRules) addRun(rules []policyRule, prefix string) {
 			} else {
 				ips = append(ips, entry.Value)
 			}
+		case "GEOSITE":
+			result.Geo = true
+			inline = append(inline, "GEOSITE,"+entry.Value+","+target)
 		case "GEOIP":
 			result.Geo = true
 			rule := "GEOIP," + entry.Value + "," + target

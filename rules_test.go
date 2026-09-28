@@ -109,14 +109,100 @@ func TestParseRuleConfig(t *testing.T) {
 		t.Errorf("没有分段的规则解析不对：%+v %v", config, err)
 	}
 	failures := map[string]string{
-		"<html><body>404</body></html>":                       "网页",
-		"[General]\nipv6 = false\n":                           "没有找到分流规则",
-		"port: 7890\nproxies: []\nrules:\n  - MATCH,DIRECT\n": "Clash",
+		"<html><body>404</body></html>":                 "网页",
+		"[General]\nipv6 = false\n":                     "没有找到分流规则",
+		"port: 7890\nproxies: []\nrules:\n  - PASS,x\n": "Clash 配置里没有找到分流规则",
 	}
 	for content, problem := range failures {
 		if _, err := parseRuleConfig([]byte(content)); err == nil || !strings.Contains(err.Error(), problem) {
 			t.Errorf("%q 应报错「%s」：%v", content, problem, err)
 		}
+	}
+}
+
+// Clash（mihomo）的配置：策略组按第一个选项归类，RULE-SET 引用 rule-providers 里的规则集。
+func TestParseClashRuleConfig(t *testing.T) {
+	content := `mixed-port: 7890
+proxies: []
+proxy-groups:
+  - name: 🚀 节点选择
+    type: select
+    proxies: [♻️ 自动选择, DIRECT]
+  - {name: ♻️ 自动选择, type: url-test, use: [机场]}
+  - {name: 🎯 全球直连, type: select, proxies: [DIRECT, 🚀 节点选择]}
+  - {name: 🛑 广告拦截, type: select, proxies: [REJECT, DIRECT]}
+  - {name: 🐟 漏网之鱼, type: select, proxies: [🚀 节点选择, 🎯 全球直连]}
+rule-providers:
+  reject: {type: http, behavior: domain, url: "https://example.com/reject.txt", path: ./reject.yaml}
+  cncidr: {type: http, behavior: ipcidr, format: text, url: https://example.com/cncidr.txt}
+  apps: {type: http, behavior: classical, url: https://example.com/apps.yaml}
+  binary: {type: http, behavior: domain, format: mrs, url: https://example.com/a.mrs}
+  local: {type: file, behavior: domain, path: ./local.yaml}
+  mine:
+    type: inline
+    behavior: domain
+    payload:
+      - '+.mine.example'
+      - exact.example
+rules:
+  - RULE-SET,reject,🛑 广告拦截
+  - RULE-SET,mine,🎯 全球直连
+  - DOMAIN-SUFFIX,google.com,🚀 节点选择
+  - GEOSITE,category-ads-all,🛑 广告拦截
+  - GEOSITE,geolocation-!cn,🚀 节点选择
+  - RULE-SET,binary,🛑 广告拦截
+  - RULE-SET,local,DIRECT
+  - RULE-SET,missing,DIRECT
+  - PROCESS-NAME,Telegram.exe,🚀 节点选择
+  - DOMAIN,skip.example,PASS
+  - RULE-SET,apps,🚀 节点选择
+  - RULE-SET,cncidr,🎯 全球直连,no-resolve
+  - GEOIP,CN,🎯 全球直连
+  - MATCH,🐟 漏网之鱼
+  - DOMAIN,after.match,DIRECT
+`
+	config, err := parseRuleConfig([]byte(content))
+	if err != nil {
+		t.Fatal(err)
+	}
+	type line struct {
+		kind, value, set string
+		domainSet        bool
+		policy           string
+	}
+	var got []line
+	for _, item := range config.Lines {
+		got = append(got, line{item.Entry.Kind, item.Entry.Value, item.Set, item.DomainSet, item.Policy})
+	}
+	want := []line{
+		{"", "", "https://example.com/reject.txt", true, rulePolicyReject},
+		{"DOMAIN-SUFFIX", "mine.example", "", false, rulePolicyDirect},
+		{"DOMAIN", "exact.example", "", false, rulePolicyDirect},
+		{"DOMAIN-SUFFIX", "google.com", "", false, rulePolicyProxy},
+		{"GEOSITE", "category-ads-all", "", false, rulePolicyReject},
+		{"GEOSITE", "geolocation-!cn", "", false, rulePolicyProxy},
+		{"", "", "https://example.com/apps.yaml", false, rulePolicyProxy},
+		{"", "", "https://example.com/cncidr.txt", false, rulePolicyDirect},
+		{"GEOIP", "CN", "", false, rulePolicyDirect},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Clash 规则转换不对：\n%+v", got)
+	}
+	// 漏网之鱼 → 节点选择 → 自动选择（url-test）：走节点。
+	if config.Final != rulePolicyProxy || config.Skipped != 5 {
+		t.Errorf("MATCH 的去向或跳过的规则数不对（mrs、file、不存在的规则集、PROCESS-NAME、PASS）：%q %d", config.Final, config.Skipped)
+	}
+
+	if !config.Lines[7].NoResolve || config.Lines[6].NoResolve {
+		t.Error("RULE-SET 后面的 no-resolve 应记下")
+	}
+	sets := map[ruleSetSource][]ruleEntry{{"https://example.com/cncidr.txt", false}: {{Kind: "IP-CIDR", Value: "1.0.1.0/24"}}}
+	converted := convertRules(config, sets, "r")
+	if !converted.Geo || !containsString(converted.Rules, "GEOSITE,category-ads-all,REJECT") || !containsString(converted.Rules, "GEOSITE,geolocation-!cn,ProxySwitch") {
+		t.Errorf("GEOSITE 规则应原样交给内核，并下载地理数据：%v", converted.Rules)
+	}
+	if !containsString(converted.Rules, "IP-CIDR,1.0.1.0/24,DIRECT,no-resolve") {
+		t.Errorf("规则集里的 IP 段按 RULE-SET 的 no-resolve 不解析域名：%v", converted.Rules)
 	}
 }
 
@@ -299,5 +385,44 @@ func TestFetchRules(t *testing.T) {
 	}
 	if _, err := checkRuleConfig("ftp://example.com/rules.conf", []string{""}); err == nil {
 		t.Error("只支持 http 和 https 地址")
+	}
+}
+
+// 下载 Clash 配置：rule-providers 里的规则集一起下载，yaml 的 payload 和 text 格式都能读。
+func TestFetchClashRules(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/clash.yaml":
+			fmt.Fprintf(writer, "proxy-groups:\n  - {name: 节点选择, type: select, proxies: [自动选择, DIRECT]}\n  - {name: 自动选择, type: url-test, use: [a]}\n"+
+				"rule-providers:\n  reject:\n    type: http\n    behavior: domain\n    url: http://%s/reject.yaml\n  cn:\n    type: http\n    behavior: ipcidr\n    format: text\n    url: http://%s/cn.txt\n"+
+				"rules:\n  - RULE-SET,reject,REJECT\n  - DOMAIN-SUFFIX,google.com,节点选择\n  - RULE-SET,cn,DIRECT,no-resolve\n  - MATCH,节点选择\n", request.Host, request.Host)
+		case "/reject.yaml":
+			_, _ = writer.Write([]byte("payload:\n  - '+.ads.example.com'\n  - 'tracker.example.com'\n"))
+		case "/cn.txt":
+			_, _ = writer.Write([]byte("# 大陆 IP\n1.0.1.0/24\n1.0.2.0/23\n"))
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	dir := t.TempDir()
+	result, err := fetchRules(dir, "p1", server.URL+"/clash.yaml", []string{""})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Sets != 2 || result.FailedSets != 0 || result.Count != 5 || result.Final != rulePolicyProxy {
+		t.Errorf("Clash 配置的下载结果不对：%+v", result)
+	}
+	manifest, err := readRuleManifest(dir, "p1", result.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"DOMAIN-SUFFIX,ads.example.com,REJECT", "DOMAIN,tracker.example.com,REJECT", "DOMAIN-SUFFIX,google.com,ProxySwitch", "IP-CIDR,1.0.1.0/24,DIRECT,no-resolve", "IP-CIDR,1.0.2.0/23,DIRECT,no-resolve", "MATCH,ProxySwitch"}
+	if !reflect.DeepEqual(manifest.Rules, want) {
+		t.Errorf("转换后的规则不对：%v", manifest.Rules)
+	}
+	check, err := checkRuleConfig(server.URL+"/clash.yaml", []string{""})
+	if err != nil || check.Rules != 1 || check.Sets != 2 || check.Final != rulePolicyProxy {
+		t.Errorf("检查 Clash 配置：%+v %v", check, err)
 	}
 }

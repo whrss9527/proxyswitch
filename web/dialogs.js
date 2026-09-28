@@ -715,7 +715,7 @@ function renderRulesField(draft, errors) {
   const custom = draft.rulesChoice === "custom";
   const preset = rulePresetFor(draft.rulesChoice);
   const hint = custom
-    ? "小火箭（Shadowrocket）或 Surge 的规则配置（.conf）地址，网上分享的规则配置一般都能用。可以先点「检查规则」看看"
+    ? "小火箭（Shadowrocket）、Surge 的规则配置（.conf）或 Clash 配置（.yaml）的地址，网上分享的规则配置一般都能用。可以先点「检查规则」看看"
     : preset
       ? `${preset.description}。来自 Shadowrocket-ADBlock-Rules-Forever，每天自动更新`
       : "国内的网站和 IP 直连，其余走节点";
