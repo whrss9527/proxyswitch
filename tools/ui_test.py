@@ -1287,7 +1287,8 @@ def run_sync_flows(page, api, config_path):
     names = [profile["name"] for profile in read_config(config_path)["profiles"]]
     check("另一台电脑的配置" in names and "同步来的名字" in names, "合并后两边的配置都在")
     check(wait_until(lambda: read_sync_file(folder)["device"] == this and len(read_sync_file(folder)["config"]["profiles"]) == len(names)), "合并的结果写进同步文件夹")
-    check(page.locator("#sync-pending").count() == 0, "选择后不再提示")
+    # 同步文件在请求返回之前就写好了，页面要等返回的状态到了才重绘。
+    check(wait_until(lambda: page.locator("#sync-pending").count() == 0), "选择后不再提示")
 
     # 恢复：关闭同步，配置名字改回来，免得影响后面的测试。
     api.call("POST", "/api/sync/disable")
