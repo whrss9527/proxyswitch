@@ -357,6 +357,8 @@ type DiagnoseFacts struct {
 	ProxiedVia string
 	Trace      *RouteTrace
 	Node       string
+	// DnsFailed 表示这台电脑解析不到这个域名。
+	DnsFailed bool
 	// NodeDelay 为 nil 表示没测，0 表示连不上。
 	NodeDelay *int
 	// DeviceConnections 是最近设备对这个网站的连接数，只在设备视角时有。
@@ -365,7 +367,7 @@ type DiagnoseFacts struct {
 
 // DiagnoseAction 是结论里可以直接点的操作。Kind：turn_on 开启订阅配置（Profile 是名字）、pin_to_proxy 让 Host 走节点、
 // auto_select 自动选择节点、test_nodes 全部测速、open_nodes 查看节点、open_share 去共享页、open_proxies 去代理页、
-// copy_report 复制诊断报告。
+// flush_dns 清除这台电脑的 DNS 缓存、copy_report 复制诊断报告。
 type DiagnoseAction struct {
 	Kind    string `json:"kind"`
 	Label   string `json:"label"`
@@ -380,7 +382,10 @@ type DiagnoseVerdict struct {
 	Actions     []DiagnoseAction `json:"actions"`
 }
 
-var copyReportAction = DiagnoseAction{Kind: "copy_report", Label: "复制诊断报告"}
+var (
+	copyReportAction = DiagnoseAction{Kind: "copy_report", Label: "复制诊断报告"}
+	flushDnsAction   = DiagnoseAction{Kind: "flush_dns", Label: "清除 DNS 缓存"}
+)
 
 func turnOnAction(profile string) DiagnoseAction {
 	return DiagnoseAction{Kind: "turn_on", Label: "开启「" + profile + "」", Profile: profile}
@@ -404,16 +409,23 @@ func diagnoseVerdict(facts DiagnoseFacts) DiagnoseVerdict {
 	if proxied == nil {
 		// 本机没开代理，或者没法经它访问。
 		if facts.Direct != nil && facts.Direct.Ok {
-			return verdict("直连正常，本机没开代理", "这个网站直连就能打开（"+facts.Direct.Summary()+"）。如果浏览器里仍然打不开，多半是网站本身或浏览器的问题，和代理无关。", copyReportAction)
+			return verdict("直连正常，本机没开代理", "这个网站直连就能打开（"+facts.Direct.Summary()+"）。如果浏览器里仍然打不开，可能是系统记着旧的地址，清除 DNS 缓存后再试；再不行多半是网站本身或浏览器的问题，和代理无关。", flushDnsAction, copyReportAction)
 		}
 		reason := "没有测"
 		if facts.Direct != nil {
 			reason = facts.Direct.Summary()
 		}
-		if facts.TurnOn != "" {
-			return verdict("本机没开代理，直连又打不开", "直连："+reason+"。这个网站直连访问不了，开启订阅配置后再试。", withTurnOn(copyReportAction)...)
+		dnsText := ""
+		var dnsActions []DiagnoseAction
+		if facts.DnsFailed {
+			// 解析不到可能是系统记着之前失败的结果（例如刚才断网），清除 DNS 缓存后重新解析。
+			dnsText = "这台电脑解析不到这个域名，如果刚才断过网，清除 DNS 缓存后再试。"
+			dnsActions = append(dnsActions, flushDnsAction)
 		}
-		return verdict("本机没开代理，直连又打不开", "直连："+reason+"。还没有能用的订阅，先在「代理」页添加机场订阅，或者开启一个代理配置。", DiagnoseAction{Kind: "open_proxies", Label: "去代理页"}, copyReportAction)
+		if facts.TurnOn != "" {
+			return verdict("本机没开代理，直连又打不开", "直连："+reason+"。"+dnsText+"这个网站直连访问不了，开启订阅配置后再试。", withTurnOn(append(dnsActions, copyReportAction)...)...)
+		}
+		return verdict("本机没开代理，直连又打不开", "直连："+reason+"。"+dnsText+"还没有能用的订阅，先在「代理」页添加机场订阅，或者开启一个代理配置。", append([]DiagnoseAction{{Kind: "open_proxies", Label: "去代理页"}}, append(dnsActions, copyReportAction)...)...)
 	}
 	if proxied.Ok {
 		explanation := "经" + facts.ProxiedVia + "访问成功：" + proxied.Summary() + "。"
@@ -430,7 +442,7 @@ func diagnoseVerdict(facts DiagnoseFacts) DiagnoseVerdict {
 		if facts.Perspective == diagnoseDevice {
 			return verdict("链路正常", explanation+"如果设备上仍然打不开，多半是那个应用自己的问题。", copyReportAction)
 		}
-		return verdict("链路正常", explanation+"如果浏览器里仍然打不开，试试刷新或者清除缓存；少数程序不走系统代理。", copyReportAction)
+		return verdict("链路正常", explanation+"如果浏览器里仍然打不开，试试刷新，或者清除 DNS 缓存（开着 TUN 模式时尤其有用）；少数程序不走系统代理。", flushDnsAction, copyReportAction)
 	}
 	// 经代理访问失败。
 	if trace := facts.Trace; trace != nil {

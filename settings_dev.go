@@ -37,9 +37,10 @@ type devBackend struct {
 	// wslConfig 模拟 .wslconfig 的内容，wslRestart 表示改过设置还没重启 WSL。
 	wslConfig  string
 	wslRestart bool
-	// winHttpProxy 和 winHttpBypass 模拟 WinHTTP 的代理设置。
+	// winHttpProxy 和 winHttpBypass 模拟 WinHTTP 的代理设置；dnsFlushes 记下清除 DNS 缓存的次数。
 	winHttpProxy  string
 	winHttpBypass string
+	dnsFlushes    int
 }
 
 var devDefaultNetwork = NetworkInfo{
@@ -226,6 +227,14 @@ func (backend *devBackend) Close() {
 func (backend *devBackend) InstallUpdate(progress func(received, total int64)) error {
 	_, err := downloadLatestRelease(backend.UpdatePaths(), filepath.Join(backend.engine.paths.Dir, "update.download"), progress)
 	return err
+}
+
+// FlushDns 在开发模式下只记一次，不清除系统的缓存。
+func (backend *devBackend) FlushDns() error {
+	return backend.locked(func() error {
+		backend.dnsFlushes++
+		return nil
+	})
 }
 
 // WinHttpInfo 在开发模式下返回模拟的 WinHTTP 代理设置。
@@ -419,6 +428,11 @@ func (backend *devBackend) devRoutes(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("GET /api/dev/system", func(writer http.ResponseWriter, request *http.Request) {
 		writeJson(writer, http.StatusOK, backend.Diagnostics())
+	})
+	mux.HandleFunc("GET /api/dev/dns", func(writer http.ResponseWriter, request *http.Request) {
+		backend.mutex.Lock()
+		defer backend.mutex.Unlock()
+		writeJson(writer, http.StatusOK, map[string]int{"flushes": backend.dnsFlushes})
 	})
 	mux.HandleFunc("POST /api/dev/battery", func(writer http.ResponseWriter, request *http.Request) {
 		var body struct {

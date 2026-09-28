@@ -234,10 +234,12 @@ func TestDiagnoseVerdict(t *testing.T) {
 		actions  string
 	}{
 		{"设备视角共享没在监听", DiagnoseFacts{Perspective: diagnoseDevice}, "共享入口没在监听", "open_share"},
-		{"没开代理直连正常", DiagnoseFacts{Perspective: diagnosePc, Route: "off", Direct: ok}, "直连正常，本机没开代理", "copy_report"},
+		{"没开代理直连正常", DiagnoseFacts{Perspective: diagnosePc, Route: "off", Direct: ok}, "直连正常，本机没开代理", "flush_dns,copy_report"},
 		{"没开代理直连不通，有订阅", DiagnoseFacts{Perspective: diagnosePc, Route: "off", Direct: failed, TurnOn: "机场"}, "本机没开代理，直连又打不开", "turn_on,copy_report"},
 		{"没开代理直连不通，没有订阅", DiagnoseFacts{Perspective: diagnosePc, Route: "off", Direct: failed}, "本机没开代理，直连又打不开", "open_proxies,copy_report"},
-		{"链路正常", DiagnoseFacts{Perspective: diagnosePc, Route: "subscription", UsesCore: true, Proxied: ok, ProxiedVia: "订阅配置", Trace: &RouteTrace{Rule: "Match", Chain: "ProxySwitch[香港 01]"}}, "链路正常", "copy_report"},
+		{"没开代理解析不到，有订阅", DiagnoseFacts{Perspective: diagnosePc, Route: "off", Direct: failed, TurnOn: "机场", DnsFailed: true}, "本机没开代理，直连又打不开", "turn_on,flush_dns,copy_report"},
+		{"没开代理解析不到，没有订阅", DiagnoseFacts{Perspective: diagnosePc, Route: "off", Direct: failed, DnsFailed: true}, "本机没开代理，直连又打不开", "open_proxies,flush_dns,copy_report"},
+		{"链路正常", DiagnoseFacts{Perspective: diagnosePc, Route: "subscription", UsesCore: true, Proxied: ok, ProxiedVia: "订阅配置", Trace: &RouteTrace{Rule: "Match", Chain: "ProxySwitch[香港 01]"}}, "链路正常", "flush_dns,copy_report"},
 		{"设备最近没访问", DiagnoseFacts{Perspective: diagnoseDevice, ShareListening: true, Proxied: ok, DeviceConnections: &none}, "从这台电脑看链路是通的，但设备最近没有访问它", "open_share,copy_report"},
 		{"设备访问过", DiagnoseFacts{Perspective: diagnoseDevice, ShareListening: true, Proxied: ok, DeviceConnections: &some}, "链路正常", "copy_report"},
 		{"规则直连但不通", DiagnoseFacts{Perspective: diagnosePc, Host: "x.com", UsesCore: true, Proxied: failed, Direct: failed, Trace: &RouteTrace{Rule: "GeoIP(CN)", Chain: "DIRECT"}}, "规则把它分到了直连，但直连不通", "pin_to_proxy,copy_report"},
@@ -255,8 +257,13 @@ func TestDiagnoseVerdict(t *testing.T) {
 			t.Errorf("%s：%q %s\n%s", item.name, verdict.Headline, kinds(verdict), verdict.Explanation)
 		}
 	}
-	if verdict := diagnoseVerdict(cases[7].facts); verdict.Actions[0].Host != "x.com" || !strings.Contains(verdict.Actions[0].Label, "x.com") {
-		t.Errorf("让网站走节点的操作应带上域名：%+v", verdict.Actions[0])
+	for _, item := range cases {
+		if item.name != "规则直连但不通" {
+			continue
+		}
+		if verdict := diagnoseVerdict(item.facts); verdict.Actions[0].Host != "x.com" || !strings.Contains(verdict.Actions[0].Label, "x.com") {
+			t.Errorf("让网站走节点的操作应带上域名：%+v", verdict.Actions[0])
+		}
 	}
 	report := diagnoseReport(DiagnoseJob{Url: "https://x.com/", Perspective: diagnosePc, Rows: []DiagnoseRow{{Title: "直接访问", Outcome: "fail", Summary: "不通", Detail: "细节"}}, Verdict: &DiagnoseVerdict{Headline: "结论", Explanation: "解释"}})
 	if !strings.Contains(report, "https://x.com/（这台电脑") || !strings.Contains(report, "✗ 直接访问：不通（细节）") || !strings.Contains(report, "结论：结论\n解释") {

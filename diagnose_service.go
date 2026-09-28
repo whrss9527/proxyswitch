@@ -243,6 +243,7 @@ func (service *subscriptionService) collectDiagnose(ctx context.Context, target 
 		switch {
 		case ctx.Err() != nil:
 		case len(system) == 0:
+			facts.DnsFailed = true
 			set("dns", "fail", "本机解析不到这个域名", remoteText)
 		default:
 			detail := remoteText

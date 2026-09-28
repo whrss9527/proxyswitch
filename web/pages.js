@@ -800,7 +800,7 @@ function diagnoseVerdictView(job) {
     <div class="diagnose-headline" id="diagnose-headline">${verdict.headline}</div>
     <p class="diagnose-explanation selectable">${verdict.explanation}</p>
     <div class="diagnose-actions">
-      ${verdict.actions.map((action, index) => html`<button class="button ${index === 0 && action.kind !== "copy_report" ? "accent" : ""}" data-action="diagnose-action" data-index="${index}">${action.label}</button>`)}
+      ${verdict.actions.map((action, index) => html`<button class="button ${index === 0 && action.kind !== "copy_report" && action.kind !== "flush_dns" ? "accent" : ""}" data-action="diagnose-action" data-index="${index}" data-kind="${action.kind}">${action.label}</button>`)}
       <button class="button subtle" data-action="diagnose-start">${icon("refresh")}再测一次</button>
     </div>`;
 }
