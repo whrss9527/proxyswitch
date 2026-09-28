@@ -369,7 +369,8 @@ func (toaster *toaster) icon(state, color string) string {
 		return path
 	}
 	path := filepath.Join(toaster.iconDir, name+".png")
-	if err := writeIconPng(path, trayIconStyle(state, color)); err != nil {
+	if err := writeIconPng(path, trayIconStyle(state, color)); err != nil && !fileExists(path) {
+		// 文件还在（例如正被系统读着换不掉）时继续用上次画的。
 		slog.Warn("生成通知图标失败", "err", err)
 		path = ""
 	}
