@@ -624,7 +624,7 @@ function finalView() {
       ${settingCard({
         iconName: "signpost",
         title: "没被任何规则命中的流量",
-        description: value ? "相当于 Quantumult X 的 final、Clash 的 MATCH" : following,
+        description: value ? "规则集和自定义规则都没命中的流量走这里" : following,
         control: html`<select class="select" data-final-policy aria-label="其余流量的去向">${choices.map(([optionValue, label]) => html`<option value="${optionValue}" ${optionValue === value ? raw("selected") : ""}>${label}</option>`)}</select>`,
       })}
     </div>
@@ -680,10 +680,10 @@ function rulesPage() {
 // ---------- 策略组 ----------
 
 const groupTypes = {
-  select: { title: "手动选择", detail: "自己选，默认跟随节点（正在使用的配置选中的节点）", quanx: "static", icon: "mouse" },
-  "url-test": { title: "自动选择", detail: "定期测延迟，自动用最低的那个", quanx: "url-latency-benchmark", icon: "gauge" },
-  fallback: { title: "故障转移", detail: "按顺序用第一个能用的节点，坏了自动换下一个", quanx: "available", icon: "refresh" },
-  "load-balance": { title: "负载均衡", detail: "筛出来的节点轮流用，分摊流量", quanx: "round-robin", icon: "swap" },
+  select: { title: "手动选择", detail: "自己选，默认跟随节点（正在使用的配置选中的节点）", icon: "mouse" },
+  "url-test": { title: "自动选择", detail: "定期测延迟，自动用最低的那个", icon: "gauge" },
+  fallback: { title: "故障转移", detail: "按顺序用第一个能用的节点，坏了自动换下一个", icon: "refresh" },
+  "load-balance": { title: "负载均衡", detail: "筛出来的节点轮流用，分摊流量", icon: "swap" },
 };
 
 // groupSpecialLabels 是手动选择的组里三个特殊候选的名字（配置里的写法 → 显示名）。
@@ -757,7 +757,7 @@ function policyGroupsView() {
       <div class="actions"><button class="button subtle" data-action="group-add">${icon("plus")}添加策略组</button></div>
     </div>
     <div class="card policy-groups">
-      ${rows.length ? html`<div class="policy-group-list">${rows}</div>` : html`<p class="muted policy-groups-empty">还没有策略组。比如建一个「流媒体」组，在「分流规则」页把 netflix.com 或者 Netflix 的规则集指到它，就能单独给它选节点。相当于 Quantumult X 的策略组（policy）。</p>`}
+      ${rows.length ? html`<div class="policy-group-list">${rows}</div>` : html`<p class="muted policy-groups-empty">还没有策略组。比如建一个「流媒体」组，在「分流规则」页把 netflix.com 或者 Netflix 的规则集指到它，就能单独给它选节点。</p>`}
     </div>`;
 }
 

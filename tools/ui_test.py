@@ -785,7 +785,7 @@ def run_flows(page, api, info, config_path):
     page.fill(".dialog #group-name", "流媒体")
     page.fill(".dialog #group-filter", "港|日本")
     page.click(".dialog [data-group-type=fallback]")
-    check("坏了自动换下一个" in page.inner_text(".dialog") and "available" in page.inner_text(".dialog"), "说明策略组的类型和 Quantumult X 里的叫法")
+    check("坏了自动换下一个" in page.inner_text(".dialog"), "说明策略组的类型")
     check(page.input_value(".dialog #group-name") == "流媒体" and page.input_value(".dialog #group-filter") == "港|日本", "切换类型时填好的内容还在")
     page.click(".dialog [data-group-type=select]")
     page.click(".dialog [data-action=group-save]")
