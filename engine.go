@@ -121,6 +121,8 @@ type Engine struct {
 	health healthTracker
 	// 健康检查自动关闭的配置，代理服务器恢复后自动重新开启。
 	autoOffProfileId string
+	// guard 是守护系统代理的记录（见 guard.go）。
+	guard proxyGuard
 
 	network           NetworkInfo
 	pendingSignature  string
@@ -450,6 +452,7 @@ func (engine *Engine) activate(profile *Profile) applyResult {
 	result := engine.apply(profile, previous, status.System)
 	engine.remember(profile, result.applied > 0)
 	engine.resetHealth()
+	engine.guard = proxyGuard{}
 	return result
 }
 

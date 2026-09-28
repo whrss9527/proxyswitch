@@ -466,6 +466,18 @@ def run_flows(page, api, info, config_path):
     page.click(".profile:has-text('手改的名字') [data-action=use]")
     check(wait_until(lambda: api.call("GET", "/api/state")["status"]["state"] == "on"), "开启检测到的本机代理")
 
+    # ---------- 守护系统代理 ----------
+    page.click("[data-page=general]")
+    page.click("button.switch[data-setting=guard_proxy]")
+    check(wait_until(lambda: read_config(config_path).get("guard_proxy") is True), "开启守护系统代理")
+    guarded = api.call("GET", "/api/dev/system")["system"]["server"]
+    api.call("POST", "/api/dev/external", {"server": "192.168.1.9:3128"})
+    check(wait_until(lambda: api.call("GET", "/api/dev/system")["system"]["server"] == guarded, timeout=6), "其他程序改掉系统代理后自动改回")
+    check(any(notice["title"] == "已改回系统代理" and "192.168.1.9:3128" in notice["text"] for notice in api.call("GET", "/api/dev/notices")), "改回系统代理时通知")
+    page.click("button.switch[data-setting=guard_proxy]")
+    check(wait_until(lambda: read_config(config_path).get("guard_proxy") is False), "关闭守护系统代理")
+    page.click("[data-page=proxies]")
+
     # ---------- 终端命令 ----------
     page.click("[data-action=terminal-menu]")
     check(page.locator(".menu .menu-item").count() == 3, "终端命令菜单有 PowerShell、命令提示符、Bash 三项")

@@ -993,6 +993,7 @@ function generalPage() {
     <div class="section-title">连接</div>
     <div class="card card-group">
       ${settingCard({ iconName: "power", title: "关闭代理时", description: "恢复开启前的设置：适合公司电脑原本就配置了代理的情况", control: select("off_mode", config.off_mode, [["direct", "直接连接"], ["restore", "恢复开启前的设置"]]) })}
+      ${settingCard({ iconName: "shield", title: "守护系统代理", description: "代理开启期间，其他程序或 Windows 设置改掉系统代理时自动改回。被反复修改时会停下来提示", control: html`<span class="switch-label">${config.guard_proxy ? "开" : "关"}</span>${switchButton({ checked: config.guard_proxy, setting: "guard_proxy", label: "守护系统代理" })}` })}
       ${settingCard({ iconName: "shield", title: "代理服务器连不上时", description: "开启后每 5 秒检查一次代理服务器能否连接", control: select("health_check", config.health_check, [["notify", "提醒我"], ["auto_off", "自动关闭，恢复后重新开启"], ["off", "不检查"]]) })}
       ${settingCard({ iconName: "gauge", title: "测速地址", description: "测速时经代理访问这个地址，返回越快延迟越低", control: html`<input class="input mono" style="width:280px" id="test-url" data-setting-text="test_url" value="${config.test_url}" spellcheck="false">${config.test_url !== app.state.defaults.test_url ? html`<button class="button subtle icon-only" data-action="reset-test-url" title="恢复默认">${icon("refresh")}</button>` : ""}` })}
     </div>

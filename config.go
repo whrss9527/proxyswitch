@@ -97,6 +97,7 @@ type Config struct {
 	StartupAction   string       `json:"startup_action"`
 	OffMode         string       `json:"off_mode"`
 	DisableOnExit   bool         `json:"disable_on_exit"`
+	GuardProxy      bool         `json:"guard_proxy"`
 	HealthCheck     string       `json:"health_check"`
 	TrayClick       string       `json:"tray_click"`
 	TrayDoubleClick string       `json:"tray_double_click"`
@@ -161,6 +162,8 @@ const defaultConfigText = `// ProxySwitch 配置文件。推荐在托盘菜单�
   "off_mode": "direct",
   // 退出程序时是否顺便关闭代理
   "disable_on_exit": false,
+  // 代理开启期间，其他程序或 Windows 设置改掉系统代理时自动改回
+  "guard_proxy": false,
   // 代理服务器连不上时：notify 提醒 / auto_off 自动关闭代理 / off 不检查
   "health_check": "notify",
 
