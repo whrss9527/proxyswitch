@@ -187,9 +187,9 @@ func validateSubscriptionUrl(address string) error {
 	return nil
 }
 
-// localFilePath 是 file:// 地址在本机的路径；不是本机文件的地址时 ok 为 false。
+// localFilePath 是 file:// 地址（或 Windows 路径）在本机的路径；不是本机文件的地址时 ok 为 false。
 func localFilePath(address string) (path string, ok bool) {
-	parsed, err := url.Parse(strings.TrimSpace(address))
+	parsed, err := url.Parse(normalizeSubscriptionAddress(address))
 	if err != nil || parsed.Scheme != "file" {
 		return "", false
 	}
