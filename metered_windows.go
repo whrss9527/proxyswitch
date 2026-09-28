@@ -4,6 +4,8 @@ package main
 
 import (
 	"runtime"
+	"sync"
+	"time"
 	"unsafe"
 )
 
@@ -28,6 +30,24 @@ const (
 	nlmCostOverDataLimit = 0x10000
 	nlmCostRoaming       = 0x40000
 )
+
+// meteredCache 记下最近一次读到的结果：读网络信息每 3 秒一次，网络没变时每分钟才重新问一次系统。
+var meteredCache struct {
+	sync.Mutex
+	signature string
+	checked   time.Time
+	metered   bool
+}
+
+// cachedNetworkMetered 是 signature 这个网络是否按流量计费，网络变了或者过了一分钟才重新读。
+func cachedNetworkMetered(signature string) bool {
+	meteredCache.Lock()
+	defer meteredCache.Unlock()
+	if signature != meteredCache.signature || time.Since(meteredCache.checked) >= time.Minute {
+		meteredCache.signature, meteredCache.checked, meteredCache.metered = signature, time.Now(), networkMetered()
+	}
+	return meteredCache.metered
+}
 
 // networkMetered 表示现在的网络按流量计费，读不到时当作不计费。
 func networkMetered() bool {
