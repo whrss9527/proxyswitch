@@ -427,7 +427,7 @@ func (settings *SettingsServer) handlePage(writer http.ResponseWriter, request *
 		return
 	}
 	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-	writer.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'")
+	writer.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'")
 	_, _ = writer.Write(page)
 }
 
@@ -436,6 +436,8 @@ var assetTypes = map[string]string{
 	".js":  "text/javascript; charset=utf-8",
 	".svg": "image/svg+xml",
 	".png": "image/png",
+	// 设置页的字体：思源黑体的常用字子集（见 tools/subset_font.py）。
+	".woff2": "font/woff2",
 }
 
 // handleAsset 提供页面的样式、脚本和图片。它们不含任何数据，所以不要求 token。

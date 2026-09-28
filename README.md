@@ -4,7 +4,7 @@
 
 <p align="center">常驻任务栏托盘的 Windows 代理开关：单击开关，右键切换，按所在网络自动切换；填上机场订阅就能直接选节点上网。</p>
 
-![设置界面](docs/screenshot-light.png)
+![设置界面](docs/screenshot-light.webp)
 
 ## 功能
 
@@ -200,7 +200,7 @@ ProxySwitch 在后台运行 mihomo 内核，内核在 `127.0.0.1:17890` 提供�
 - 只在网络变化时切换。你在某个网络里手动切换后，它不会再改回去，直到你换了网络。
 - Windows 11 24H2 起读取 Wi-Fi 名称需要打开「位置」权限。没打开时 ProxySwitch 会根据网关从系统记录的网络列表里找出 Wi-Fi 名称；也可以改用 DNS 后缀或网关作为条件，这两种不需要权限。
 
-![按网络自动切换](docs/screenshot-network.png)
+![按网络自动切换](docs/screenshot-network.webp)
 
 ### 在已经打开的终端里使用代理
 
@@ -266,11 +266,13 @@ GitHub 的接口对未登录的访问限制了次数（每个 IP 每小时 60 �
 
 1.x 版本还没有程序内更新，从 1.x 升级时到 [Releases](https://github.com/whrss9527/proxyswitch/releases) 下载新版本替换一次 exe 即可，原来的配置文件可以直接使用。
 
-## 深色模式和高对比度
+## 外观、深色模式和高对比度
 
-设置窗口和托盘菜单都跟随系统的深浅色，也可以在「设置 → 常规 → 外观」里固定为浅色或深色。开启 Windows 的高对比度主题时，设置窗口改用系统的高对比度颜色。
+设置窗口和 macOS 版是同一套毛玻璃风格：柔和的彩色底，浮起的侧栏，半透明的卡片、对话框和菜单，强调色跟随 Windows 的主题色，开着代理时窗口顶上泛一点配置的颜色。文字优先用苹方（装了的话），没装时用程序自带的思源黑体（Noto Sans SC 的常用字子集），整体观感和 Mac 上一致。
 
-![深色模式](docs/screenshot-dark.png)
+设置窗口和托盘菜单都跟随系统的深浅色，也可以在「设置 → 常规 → 外观」里固定为浅色或深色。Windows 的「透明效果」关掉时玻璃换成不透明的底色；开启高对比度主题时，设置窗口改用系统的高对比度颜色。
+
+![深色模式](docs/screenshot-dark.webp)
 
 ## 配置文件
 
@@ -450,6 +452,8 @@ make dev CORE=/path/to/mihomo   # 同上，用本机的 mihomo 试用机场订�
 make ui-test      # 设置界面的浏览器自动化测试（需要 Python Playwright）
 ```
 
+设置界面的字体是思源黑体（Noto Sans SC）的子集，包括界面和程序提示里用到的全部汉字和 3755 个常用字。改了界面文字、用到了子集里没有的字时，CI 里的 `python3 tools/subset_font.py --check` 会报出来，运行 `python3 tools/subset_font.py`（需要 `pip install fonttools brotli`）重新生成即可。
+
 订阅和代理内核的测试需要真实的 mihomo，设置 `PROXYSWITCH_CORE` 为它的路径才会运行，例如 `PROXYSWITCH_CORE=/path/to/mihomo make test`；CI 会下载 `core_config.go` 里固定版本的官方内核来跑。
 
 在 Windows 上编译：
@@ -471,7 +475,7 @@ go build -trimpath -ldflags="-H windowsgui -s -w" -o ProxySwitch.exe .
 | `yamllite.go` | 只读的 YAML 子集，解析 Clash 配置里的策略组、规则集和规则 |
 | `core.go` `core_config.go` `coreinstall.go` `engine_core.go` | 代理内核（mihomo）：生成配置、启动和监控进程、通过它的接口选节点和测速；下载并校验内核；与引擎的衔接 |
 | `terminal.go` | 在当前终端设置代理的命令 |
-| `settings.go` `web/` | 设置界面的本地服务和页面 |
+| `settings.go` `web/` | 设置界面的本地服务和页面；`web/NotoSansSC-subset.woff2` 是界面字体，由 `tools/subset_font.py` 生成 |
 | `*_windows.go` | Windows 实现：系统代理（WinINET）、PAC 执行（WinHTTP）、托盘、菜单、通知（系统通知用 WinRT 的 ToastNotificationManager）、快捷键、网络信息、监听端口、替换程序完成更新、内核进程随 ProxySwitch 退出（作业对象） |
 | `settings_dev.go` `dev_fakes.go` `memorysystem.go` | 开发模式和测试用的内存实现、假代理 |
 
@@ -488,3 +492,5 @@ ProxySwitch 免费开源。觉得好用的话，可以用微信扫一扫请我�
 [MIT](LICENSE)
 
 机场订阅使用的 [mihomo](https://github.com/MetaCubeX/mihomo) 是 GPL-3.0 许可的独立程序。ProxySwitch 不包含它的代码，只在需要时从它的官方发布下载，作为单独的进程运行。
+
+设置界面自带的字体是 [Noto Sans SC](https://github.com/notofonts/noto-cjk)（思源黑体）的子集，使用 [SIL Open Font License 1.1](web/NotoSansSC-OFL.txt)。

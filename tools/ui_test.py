@@ -5,7 +5,8 @@
 走一遍首次使用、添加和编辑配置、测速、切换、自动切换、常规设置、诊断、深色模式、健康检查等流程。
 
 用法：python3 tools/ui_test.py [截图目录]
-截图目录里的 docs_light.png / docs_dark.png 可以直接用作 README 的截图。
+截图目录里的 docs_light.png / docs_dark.png / docs_network.png 就是 README 的截图，README 里用的是它们转成的 WebP
+（底色是渐变，PNG 要么太大要么有色带）：PIL 的 Image.save(..., quality=92, method=6)。
 """
 import hashlib
 import http.server
@@ -252,7 +253,8 @@ def run_flows(page, api, info, config_path):
     page.click(".dialog [data-kind=http]")
     page.click(".dialog [data-color='#2563eb']")
     page.wait_for_selector(".dialog .preview li")
-    check("git" in page.inner_text(".dialog .preview"), "预览列出 git 的修改")
+    # 预览在改动后 250 毫秒刷新，之前的预览可能还在。
+    check(wait_until(lambda: "git" in page.inner_text(".dialog .preview"), timeout=5), "预览列出 git 的修改")
     shot(page, "03_editor")
     page.click(".dialog [data-action=dialog-save]")
     page.wait_for_selector(".dialog", state="detached")
