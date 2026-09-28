@@ -181,8 +181,11 @@ func (backend *devBackend) OpenUrl(address string) error {
 	return nil
 }
 
-func (backend *devBackend) ActiveProxyUrl() string {
-	return ""
+// UpdatePaths 与 Windows 版一样先经代理和内核、最后直连；模拟的发布在本机，实际只直连。
+func (backend *devBackend) UpdatePaths() []string {
+	backend.mutex.Lock()
+	defer backend.mutex.Unlock()
+	return proxiesFirst(backend.engine.DownloadPaths())
 }
 
 // RememberUpdate 与 Windows 版一样记下检查发现的新版本，没有新版本时清除。
@@ -202,7 +205,7 @@ func (backend *devBackend) Close() {
 
 // InstallUpdate 在开发模式下只下载并校验新版本（保存到配置目录），不替换程序。
 func (backend *devBackend) InstallUpdate(progress func(received, total int64)) error {
-	_, err := downloadLatestRelease("", filepath.Join(backend.engine.paths.Dir, "update.download"), progress)
+	_, err := downloadLatestRelease(backend.UpdatePaths(), filepath.Join(backend.engine.paths.Dir, "update.download"), progress)
 	return err
 }
 

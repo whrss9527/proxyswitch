@@ -1078,15 +1078,12 @@ func (app *App) RememberUpdate(info UpdateInfo) {
 	})
 }
 
-// ActiveProxyUrl 返回正在使用的代理地址，检查更新时经它访问 GitHub。
-func (app *App) ActiveProxyUrl() string {
-	proxyUrl := ""
-	_ = app.tray.RunOnUi(func() {
-		if status := app.engine.Status(); status.State == statusOn && status.Profile.Server != "" {
-			proxyUrl = serverToUrl(status.Profile.Server)
-		}
-	})
-	return proxyUrl
+// UpdatePaths 是检查和下载更新时依次尝试的网络路径：先经正在使用的代理、其他软件设置的系统代理和内核，
+// 最后直连（GitHub 直连常常很慢）。
+func (app *App) UpdatePaths() []string {
+	paths := []string{""}
+	_ = app.tray.RunOnUi(func() { paths = proxiesFirst(app.engine.DownloadPaths()) })
+	return paths
 }
 
 // systemAccentColor 返回 Windows 的强调色（#rrggbb），读不到时用默认蓝色。

@@ -45,7 +45,7 @@ type SettingsBackend interface {
 	OpenConfigFile() error
 	OpenLogFile() error
 	OpenUrl(address string) error
-	ActiveProxyUrl() string
+	UpdatePaths() []string
 	RememberUpdate(info UpdateInfo)
 	InstallUpdate(progress func(received, total int64)) error
 	SubscriptionNodes(profileId string) (CoreNodes, error)
@@ -609,7 +609,7 @@ func (settings *SettingsServer) handleOpenUrl(writer http.ResponseWriter, reques
 }
 
 func (settings *SettingsServer) handleUpdate(writer http.ResponseWriter, request *http.Request) {
-	info, err := checkLatestRelease(settings.backend.ActiveProxyUrl())
+	info, err := checkLatestRelease(settings.backend.UpdatePaths())
 	if err != nil {
 		slog.WarnContext(request.Context(), "检查更新失败", "err", err)
 		writeError(writer, http.StatusBadGateway, "检查更新失败："+err.Error())

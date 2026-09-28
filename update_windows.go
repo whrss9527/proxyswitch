@@ -27,7 +27,7 @@ func (app *App) InstallUpdate(progress func(received, total int64)) error {
 		executable = resolved
 	}
 	downloaded := executable + ".download"
-	info, err := downloadLatestRelease(app.ActiveProxyUrl(), downloaded, progress)
+	info, err := downloadLatestRelease(app.UpdatePaths(), downloaded, progress)
 	if err != nil {
 		return err
 	}
@@ -119,7 +119,7 @@ func (app *App) watchUpdates() {
 		due := false
 		_ = app.tray.RunOnUi(func() { due = app.engine.UpdateCheckDue() })
 		if due {
-			info, err := checkLatestRelease(app.ActiveProxyUrl())
+			info, err := checkLatestRelease(app.UpdatePaths())
 			if err != nil {
 				slog.Warn("自动检查更新失败", "err", err)
 			} else {
