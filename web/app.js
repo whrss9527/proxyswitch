@@ -1342,6 +1342,9 @@ function renameReferences(config, oldName, newName) {
   }
 }
 
+// generalSettingKeys 是「常规」页上「恢复默认设置」会恢复的设置。
+const generalSettingKeys = ["startup_action", "disable_on_exit", "hotkey", "profile_hotkeys", "tray_click", "tray_double_click", "speed_display", "notify_level", "notify_seconds", "off_mode", "guard_proxy", "health_check", "test_url", "theme", "settings_window", "editor"];
+
 async function importConfig() {
   const file = await pickFile(".json,.jsonc,application/json");
   if (!file) {
@@ -1501,9 +1504,13 @@ const actions = {
     }
   },
   "reset-settings": async () => {
-    const confirmed = await confirmDialog({ title: "恢复默认设置？", message: "「常规」页的设置会恢复为默认值，代理配置和自动切换规则会保留。", confirmText: "恢复默认" });
+    const confirmed = await confirmDialog({ title: "恢复默认设置？", message: "「常规」页的启动、快捷键、托盘、通知、连接、外观和编辑器设置会恢复为默认值，代理配置、规则和其他页的设置会保留。", confirmText: "恢复默认" });
     if (confirmed) {
-      const kept = { profiles: app.config.profiles, auto_switch: app.config.auto_switch };
+      // 去掉这些设置，保存时由程序补上默认值。
+      const kept = JSON.parse(JSON.stringify(app.config));
+      for (const key of generalSettingKeys) {
+        delete kept[key];
+      }
       try {
         receiveState(await api("PUT", "/api/config", kept), { force: true });
         toast("已恢复默认设置");

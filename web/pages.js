@@ -1526,7 +1526,7 @@ function generalPage() {
       ${settingCard({ iconName: "document", title: "配置文件", description: html`<span class="mono">${app.state.paths.config}</span>${app.state.paths.portable ? html` <span class="badge accent">便携模式</span>` : ""}`, control: html`<button class="button" data-action="open-config-dir">${icon("folder")}打开文件夹</button><button class="button" data-action="open-config-file">${icon("pencil")}编辑</button>` })}
       ${settingCard({ iconName: "terminal", title: "编辑器", description: "「编辑」配置文件时使用的程序，留空用记事本，也可以填 code 等命令", control: html`<input class="input" style="width:200px" id="editor" data-setting-text="editor" value="${config.editor}" placeholder="记事本" spellcheck="false">` })}
       ${settingCard({ iconName: "download", title: "备份与恢复", description: "导出全部设置和代理配置，换电脑时导入", control: html`<button class="button" data-action="export-config">${icon("download")}导出</button><button class="button" data-action="import-config">${icon("upload")}导入</button>` })}
-      ${settingCard({ iconName: "refresh", title: "恢复默认设置", description: "把本页的设置恢复为默认值，代理配置和自动切换规则会保留", control: html`<button class="button" data-action="reset-settings">恢复默认</button>` })}
+      ${settingCard({ iconName: "refresh", title: "恢复默认设置", description: "把本页的启动、快捷键、托盘、通知、连接、外观和编辑器设置恢复为默认值，代理配置、规则和其他页的设置都会保留", control: html`<button class="button" data-action="reset-settings">恢复默认</button>` })}
     </div>`;
 }
 
