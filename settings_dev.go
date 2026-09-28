@@ -220,6 +220,11 @@ func (backend *devBackend) InstallUpdate(progress func(received, total int64)) e
 	return err
 }
 
+// RunningPrograms 在开发模式下返回几个常见的程序名。
+func (backend *devBackend) RunningPrograms() []string {
+	return []string{"chrome.exe", "Code.exe", "steam.exe", "Telegram.exe", "WeChat.exe"}
+}
+
 // LoopbackApps 在开发模式下返回模拟的商店应用。
 func (backend *devBackend) LoopbackApps() (LoopbackInfo, error) {
 	backend.mutex.Lock()

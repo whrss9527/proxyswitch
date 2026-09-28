@@ -67,6 +67,7 @@ type SettingsBackend interface {
 	TakeOverClashLinks() error
 	LoopbackApps() (LoopbackInfo, error)
 	SetLoopback(exempt []string) (LoopbackInfo, error)
+	RunningPrograms() []string
 }
 
 type SettingsState struct {
@@ -302,6 +303,7 @@ func (settings *SettingsServer) Start() (string, error) {
 	mux.HandleFunc("POST /api/share/firewall", settings.handleShareFirewall)
 	mux.HandleFunc("POST /api/links/clash", settings.handleClashLinks)
 	mux.HandleFunc("GET /api/loopback", settings.handleLoopback)
+	mux.HandleFunc("GET /api/programs", settings.handlePrograms)
 	mux.HandleFunc("POST /api/loopback", settings.handleSetLoopback)
 	mux.HandleFunc("GET /api/diagnose", settings.handleDiagnose)
 	mux.HandleFunc("POST /api/diagnose", settings.handleStartDiagnose)
@@ -837,6 +839,11 @@ func (settings *SettingsServer) handleShareActivity(writer http.ResponseWriter, 
 func (settings *SettingsServer) handleShareClear(writer http.ResponseWriter, request *http.Request) {
 	settings.backend.ClearShareHistory()
 	writeJson(writer, http.StatusOK, settings.backend.ShareActivity())
+}
+
+// handlePrograms 列出正在运行的程序，给按程序分流的自定义规则选程序名。
+func (settings *SettingsServer) handlePrograms(writer http.ResponseWriter, request *http.Request) {
+	writeJson(writer, http.StatusOK, map[string][]string{"programs": settings.backend.RunningPrograms()})
 }
 
 // handleLoopback 列出微软商店应用和它们能不能连接本机的代理。

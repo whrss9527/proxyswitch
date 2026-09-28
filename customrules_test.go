@@ -1,9 +1,15 @@
 package main
 
 import (
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNormalizeRuleTarget(t *testing.T) {
@@ -42,6 +48,58 @@ func TestCustomRuleLines(t *testing.T) {
 	}
 	if got := customRuleLines(rules); !reflect.DeepEqual(got, want) {
 		t.Errorf("自定义规则在内核里的写法不对：\n%s", strings.Join(got, "\n"))
+	}
+}
+
+func TestProgramCustomRules(t *testing.T) {
+	// 以 .exe 结尾的当作程序；Windows 上程序名补上 .exe，路径里的 / 换成 \。
+	for _, item := range []struct {
+		rule    CustomRule
+		windows bool
+		want    CustomRule
+	}{
+		{CustomRule{Value: " \"WeChat.exe\" "}, true, CustomRule{Type: customRuleProgram, Value: "WeChat.exe", Policy: rulePolicyProxy}},
+		{CustomRule{Type: "Program", Value: "Telegram", Policy: "Direct"}, true, CustomRule{Type: customRuleProgram, Value: "Telegram.exe", Policy: rulePolicyDirect}},
+		{CustomRule{Type: "program", Value: "C:/Games/Steam/steam.exe"}, true, CustomRule{Type: customRuleProgram, Value: `C:\Games\Steam\steam.exe`, Policy: rulePolicyProxy}},
+		{CustomRule{Type: "program", Value: "proxyswitch.test"}, false, CustomRule{Type: customRuleProgram, Value: "proxyswitch.test", Policy: rulePolicyProxy}},
+		{CustomRule{Value: "www.example.com"}, true, CustomRule{Value: "www.example.com", Policy: rulePolicyProxy}},
+	} {
+		rule := item.rule
+		normalizeCustomRule(&rule, item.windows)
+		if rule != item.want {
+			t.Errorf("%+v（windows=%v）应整理成 %+v：%+v", item.rule, item.windows, item.want, rule)
+		}
+		if err := validateCustomRule(rule); err != nil {
+			t.Errorf("%+v 应有效：%v", rule, err)
+		}
+	}
+	for _, rule := range []CustomRule{
+		{Type: customRuleProgram, Value: "", Policy: rulePolicyProxy},
+		{Type: customRuleProgram, Value: "a,b.exe", Policy: rulePolicyProxy},
+		{Type: "app", Value: "a.exe", Policy: rulePolicyProxy},
+	} {
+		if err := validateCustomRule(rule); err == nil {
+			t.Errorf("%+v 应报错", rule)
+		}
+	}
+
+	lines := customRuleLines([]CustomRule{
+		{Type: customRuleProgram, Value: "WeChat.exe", Policy: rulePolicyDirect},
+		{Type: customRuleProgram, Value: `C:\Games\Steam\steam.exe`, Policy: rulePolicyReject},
+		{Type: customRuleProgram, Value: "Telegram.exe", Policy: rulePolicyProxy, Disabled: true},
+	})
+	if want := []string{"PROCESS-NAME,WeChat.exe,DIRECT", `PROCESS-PATH,C:\Games\Steam\steam.exe,REJECT`}; !reflect.DeepEqual(lines, want) {
+		t.Errorf("程序规则在内核里的写法不对：%v", lines)
+	}
+
+	// 写进配置文件时带上 type，网站规则不写。
+	config, err := parseConfig(`{"custom_rules": [{"type": "program", "value": "chrome.exe", "policy": "reject"}, {"value": "example.com"}], "profiles": []}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := marshalConfigFile(config)
+	if !strings.Contains(string(data), `"type": "program"`) || strings.Count(string(data), `"type"`) != 1 {
+		t.Errorf("只有程序规则写 type：\n%s", data)
 	}
 }
 
@@ -108,5 +166,51 @@ func TestEngineCustomRules(t *testing.T) {
 	}
 	if reloaded, _, _ := loadConfig(engine.paths.Config); len(reloaded.CustomRules) != 2 || reloaded.CustomRules[0].Value != "youtube.com" || !reloaded.CustomRules[1].Disabled {
 		t.Errorf("自定义规则应写进配置文件：%+v", reloaded.CustomRules)
+	}
+}
+
+// 按程序分流：内核按连接来自哪个程序匹配。测试程序自己经内核访问，规则写测试程序的名字（换成大写也算）。
+func TestCoreProcessRule(t *testing.T) {
+	binary := requireCoreBinary(t)
+	website := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		_, _ = io.WriteString(writer, "hello")
+	}))
+	defer website.Close()
+	node := startCountingProxy(t, strings.TrimPrefix(website.URL, "http://"))
+	dir := t.TempDir()
+	if err := writeSubscriptionFile(dir, "pa", []byte(nodesYaml(map[string]*countingProxy{"节点": node}, "节点"))); err != nil {
+		t.Fatal(err)
+	}
+	core := newCore(nil)
+	defer core.Stop()
+	port, _ := freeLocalPort()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := strings.ToUpper(filepath.Base(executable))
+	settings := CoreSettings{
+		Binary: binary, Dir: dir, Port: port, TestUrl: "http://" + coreTestHost + "/", Active: "pa", Mode: "rule",
+		Subscriptions: []CoreSubscription{{Id: "pa", Revision: "1"}},
+		CustomRules:   customRuleLines([]CustomRule{{Type: customRuleProgram, Value: name, Policy: rulePolicyReject}}),
+	}
+	if err := core.Wait(core.Sync(settings), 30*time.Second); err != nil {
+		t.Fatalf("内核没能启动：%v", err)
+	}
+	before := node.connections.Load()
+	if status, body, err := requestThroughCore(port, coreTestHost); err == nil && status == http.StatusOK {
+		t.Errorf("这个程序的连接应被拦截：%d %q\n%s", status, body, core.logTail())
+	}
+	if node.connections.Load() != before {
+		t.Error("被拦截的连接不应经过节点")
+	}
+
+	// 去掉规则后照常经节点访问。
+	settings.CustomRules = nil
+	if err := core.Wait(core.Sync(settings), 30*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if body := getThroughCore(t, port); body != "hello" || node.connections.Load() == before {
+		t.Errorf("没有规则时应经节点访问：%q", body)
 	}
 }

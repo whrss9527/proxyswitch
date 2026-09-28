@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -272,17 +273,18 @@ func parseRouteTrace(line string) *RouteTrace {
 		return nil
 	}
 	if head, dial := strings.CutPrefix(body[:arrow], "dial "); dial {
-		// head 是「出口 (match 类型/内容) 来源」或「出口 来源」，来源里没有空格。
+		// head 是「出口 (match 类型/内容) 来源」或「出口 来源」。来源是 IP:端口，按程序分流时后面跟着
+		// 「(程序名)」，程序名里可能有空格。
 		rest := body[arrow+len(" --> "):]
 		target, reason, found := strings.Cut(rest, " error: ")
 		if !found {
 			return nil
 		}
-		separator := strings.LastIndex(head, " ")
-		if separator < 0 {
+		source := traceSourcePattern.FindStringSubmatch(head)
+		if source == nil {
 			return nil
 		}
-		proxy, rule := head[:separator], ""
+		proxy, rule := source[1], ""
 		if start := strings.Index(proxy, " (match "); start >= 0 && strings.HasSuffix(proxy, ")") {
 			kind, payload, _ := strings.Cut(proxy[start+len(" (match "):len(proxy)-1], "/")
 			rule, proxy = kind, proxy[:start]
@@ -315,6 +317,9 @@ func parseRouteTrace(line string) *RouteTrace {
 	}
 	return &RouteTrace{Host: host, Port: port, Rule: rule, Chain: strings.TrimSpace(rest[using+len(" using "):])}
 }
+
+// traceSourcePattern 从内核日志「出口 来源」里分出出口：来源是最后的 IP:端口，可能带着 (程序名)。
+var traceSourcePattern = regexp.MustCompile(`^(.*) \S+:\d+(?:\(.*\))?$`)
 
 func splitTraceTarget(text string) (string, int, bool) {
 	colon := strings.LastIndex(text, ":")

@@ -422,6 +422,29 @@ function normalizeRuleTarget(text) {
   return value.replace(/^\*\./, "").replace(/^\.+|\.+$/g, "");
 }
 
+// normalizeProgramTarget 与程序里的同名函数一致：去掉引号；Windows 上的程序名补上 .exe，路径里的 / 换成 \。
+function normalizeProgramTarget(text) {
+  const value = String(text || "").trim().replace(/^["']+|["']+$/g, "").trim();
+  if (!value || app.state.platform !== "windows") {
+    return value;
+  }
+  if (/[\\/]/.test(value)) {
+    return value.replace(/\//g, "\\");
+  }
+  return /\.exe$/i.test(value) ? value : `${value}.exe`;
+}
+
+// programTargetProblem 检查整理过的程序名，没有问题时返回空。
+function programTargetProblem(value) {
+  if (!value) {
+    return "请填写程序名，例如 WeChat.exe";
+  }
+  if (/[,\r\n\t]/.test(value) || value.length > 260) {
+    return `程序「${value}」写得不对：填程序名（例如 WeChat.exe）或完整路径`;
+  }
+  return "";
+}
+
 // ruleTargetProblem 检查整理过的域名或 IP，没有问题时返回空。
 function ruleTargetProblem(value) {
   if (!value) {
@@ -436,16 +459,19 @@ function ruleTargetProblem(value) {
   return `认不出「${value}」：填域名（例如 youtube.com）或 IP / 网段（例如 8.8.8.8、10.0.0.0/8）`;
 }
 
-// customRulesView 是代理页的自定义规则：域名或 IP 固定走节点、直连或被拦截。只对订阅配置起作用，没有订阅配置时不显示。
+// customRulesView 是代理页的自定义规则：域名、IP 或者程序固定走节点、直连或被拦截。只对订阅配置起作用，
+// 没有订阅配置时不显示。
 function customRulesView() {
   if (!app.config.profiles.some((profile) => profile.subscription)) {
     return "";
   }
   const rules = app.config.custom_rules || [];
   const policyOptions = (value) => Object.entries(policyLabels).map(([policy, label]) => html`<option value="${policy}" ${policy === value ? raw("selected") : ""}>${label}</option>`);
+  const draft = app.customRuleDraft;
+  const program = draft.type === "program";
   const rows = rules.map((rule, index) => html`
     <div class="custom-rule ${rule.disabled ? "disabled" : ""}">
-      <span class="mono custom-rule-value" title="${rule.value}">${rule.value}</span>
+      <span class="mono custom-rule-value" title="${rule.value}">${rule.type === "program" ? html`<span class="badge" title="按程序分流">程序</span> ` : ""}${rule.value}</span>
       <select class="select" data-custom-rule="${index}" aria-label="「${rule.value}」的去向">${policyOptions(rule.policy)}</select>
       <button class="switch" role="switch" aria-checked="${!rule.disabled}" data-action="custom-rule-toggle" data-index="${index}" aria-label="启用「${rule.value}」" title="${rule.disabled ? "已停用" : "已启用"}"></button>
       <button class="button subtle icon-only" data-action="custom-rule-delete" data-index="${index}" title="删除" aria-label="删除「${rule.value}」">${icon("trash")}</button>
@@ -455,12 +481,14 @@ function customRulesView() {
     <div class="card custom-rules">
       ${rows.length ? html`<div class="custom-rule-list">${rows}</div>` : html`<p class="muted custom-rules-empty">还没有自定义规则。可以让某个网站固定走节点，或者让公司内网、局域网里的服务直连。</p>`}
       <div class="custom-rule-add">
-        <input class="input mono" data-focus="custom-rule-value" value="${app.customRuleDraft.value}" placeholder="域名或 IP，例如 youtube.com、8.8.8.8、10.0.0.0/8" spellcheck="false" autocomplete="off" aria-label="域名或 IP">
-        <select class="select" data-focus="custom-rule-policy" aria-label="去向">${policyOptions(app.customRuleDraft.policy)}</select>
+        <select class="select" data-focus="custom-rule-type" aria-label="按什么分流">${[["", "网站或 IP"], ["program", "程序"]].map(([value, label]) => html`<option value="${value}" ${value === draft.type ? raw("selected") : ""}>${label}</option>`)}</select>
+        <input class="input mono" data-focus="custom-rule-value" value="${draft.value}" placeholder="${program ? "程序名，例如 WeChat.exe，也可以填完整路径" : "域名或 IP，例如 youtube.com、8.8.8.8、10.0.0.0/8"}" spellcheck="false" autocomplete="off" aria-label="${program ? "程序名" : "域名或 IP"}" ${program ? raw('list="running-programs"') : ""}>
+        <select class="select" data-focus="custom-rule-policy" aria-label="去向">${policyOptions(draft.policy)}</select>
         <button class="button" data-action="add-custom-rule">${icon("plus")}添加</button>
       </div>
+      ${program ? html`<datalist id="running-programs">${(app.programs || []).map((name) => html`<option value="${name}"></option>`)}</datalist>` : ""}
       <div class="field-error" data-custom-rule-error></div>
-      <p class="caption faint" style="margin:6px 0 0">域名包括它的子域名。只对订阅配置（内置的代理内核）起作用。</p>
+      <p class="caption faint" style="margin:6px 0 0">${program ? "按连接来自哪个程序分流，输入时可以从正在运行的程序里选。" : "域名包括它的子域名。"}只对订阅配置（内置的代理内核）起作用。</p>
     </div>`;
 }
 

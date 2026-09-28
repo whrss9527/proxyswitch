@@ -25,7 +25,7 @@ import (
 // 规则配置的 [Rule] 段从上到下匹配，第一条匹配的规则决定连接走代理、直连还是被拦截，FINAL 是都不匹配时的去向。
 // RULE-SET 和 DOMAIN-SET 引用外部的规则列表（Surge 或 QuantumultX 格式），由 ProxySwitch 一起下载并展开；
 // [Proxy Group] 里的策略组按默认选项归为三种去向之一。内核做不到的规则（USER-AGENT、URL-REGEX 这类要解密 HTTPS
-// 才能判断的，以及 IP-ASN、PROCESS-NAME 等）跳过并计数。Clash 配置用顶层的 rules 列表，策略组看 proxy-groups，
+// 才能判断的，以及 IP-ASN 等）跳过并计数；PROCESS-NAME 和 PROCESS-PATH 按连接来自的程序匹配。Clash 配置用顶层的 rules 列表，策略组看 proxy-groups，
 // RULE-SET 引用 rule-providers 里的规则集。
 //
 // 带去广告的规则有几万条，逐条写进内核的配置会让每个连接逐条比对。去向相同的连续规则先后顺序不影响结果，
@@ -379,6 +379,8 @@ func convertRuleEntry(kind, value string, options []string) (ruleEntry, bool) {
 		return ruleEntry{Kind: "GEOSITE", Value: site}, ruleSitePattern.MatchString(site)
 	case "DST-PORT", "DEST-PORT":
 		return ruleEntry{Kind: "DST-PORT", Value: value}, rulePortPattern.MatchString(value)
+	case "PROCESS-NAME", "PROCESS-PATH":
+		return ruleEntry{Kind: kind, Value: value}, value != "" && len(value) <= maxProgramLength && !strings.ContainsAny(value, ",\x00\r\n")
 	}
 	return ruleEntry{}, false
 }

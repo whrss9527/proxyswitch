@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"unicode/utf8"
 )
@@ -182,9 +183,11 @@ const defaultConfigText = `// ProxySwitch 配置文件。推荐在托盘菜单�
   "core": { "path": "", "port": 17890 },
 
   // 自定义规则：域名（包括子域名）或 IP / 网段固定走节点（proxy）、直连（direct）或被拦截（reject），
+  // type 为 program 时按程序分流，value 是程序名或完整路径；
   // 排在订阅配置的分流规则前面，全局代理时也生效；只对订阅配置（内置的代理内核）起作用
   "custom_rules": [
-    // { "value": "youtube.com", "policy": "proxy" }
+    // { "value": "youtube.com", "policy": "proxy" },
+    // { "type": "program", "value": "WeChat.exe", "policy": "direct" }
   ],
 
   // 局域网共享：让 PS5、Switch、手机等设备把这台电脑（本机 IP:port）当代理服务器，网络和本机一样。
@@ -384,9 +387,7 @@ func normalizeConfig(config *Config) {
 		config.CustomRules = []CustomRule{}
 	}
 	for index := range config.CustomRules {
-		rule := &config.CustomRules[index]
-		rule.Value = normalizeRuleTarget(rule.Value)
-		rule.Policy = lowerTrim(rule.Policy, rulePolicyProxy)
+		normalizeCustomRule(&config.CustomRules[index], runtime.GOOS == "windows")
 	}
 	config.Share.Allowed = strings.TrimSpace(config.Share.Allowed)
 	if config.Share.Port == 0 {
