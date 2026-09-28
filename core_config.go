@@ -279,8 +279,8 @@ func coreConfigText(settings CoreSettings, controller, secret string) []byte {
 		LogLevel:      "warning",
 		UnifiedDelay:  true,
 		TcpConcurrent: true,
-		// 只在有按程序分流的规则时查找连接来自哪个程序。
-		FindProcessMode:    "strict",
+		// 查找每个连接来自哪个程序：连接页显示程序名，按程序分流的规则也要用。
+		FindProcessMode:    "always",
 		ExternalController: controller,
 		Secret:             secret,
 		// 选中的节点由 ProxySwitch 记在配置文件里，每次启动后重新设置，不用内核自己记。
