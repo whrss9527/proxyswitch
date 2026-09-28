@@ -621,8 +621,6 @@ def run_flows(page, api, info, config_path):
     page.click("[data-action=add-custom-rule]")
     check(wait_until(lambda: len(custom_rules()) == 2 and custom_rules()[1] == {"type": "program", "value": "Telegram.exe", "policy": "direct"}), "添加按程序分流的规则")
     check(wait_until(lambda: "程序" in page.inner_text(".custom-rule-list")), "程序规则在列表里标出来")
-    page.locator(".custom-rules").scroll_into_view_if_needed()
-    shot(page, "09_custom_rules")
     page.fill("[data-focus=custom-rule-value]", "a,b")
     page.press("[data-focus=custom-rule-value]", "Enter")
     check("写得不对" in page.inner_text("[data-custom-rule-error]"), "程序名不对时给出提示")
