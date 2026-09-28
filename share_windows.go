@@ -6,9 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"runtime"
 	"strings"
-	"syscall"
 	"time"
 	"unsafe"
 )
@@ -18,18 +16,11 @@ import (
 var (
 	procSetThreadExecutionState = kernel32.NewProc("SetThreadExecutionState")
 	procGetSystemPowerStatus    = kernel32.NewProc("GetSystemPowerStatus")
-	procGetExitCodeProcess      = kernel32.NewProc("GetExitCodeProcess")
-	procShellExecuteExW         = shell32.NewProc("ShellExecuteExW")
 )
 
 const (
 	esContinuous     = 0x80000000
 	esSystemRequired = 0x00000001
-
-	seeMaskNoCloseProcess = 0x00000040
-	seeMaskNoAsync        = 0x00000100
-	swHide                = 0
-	errorCancelled        = 1223
 
 	shareFirewallRule    = "ProxySwitch 局域网共享"
 	shareFirewallTimeout = time.Minute
@@ -80,68 +71,6 @@ func (guard *sleepGuard) update(share ShareConfig) string {
 	return status
 }
 
-// shellExecuteInfo 是 SHELLEXECUTEINFOW。
-type shellExecuteInfo struct {
-	size       uint32
-	mask       uint32
-	window     uintptr
-	verb       *uint16
-	file       *uint16
-	parameters *uint16
-	directory  *uint16
-	show       int32
-	instApp    uintptr
-	idList     uintptr
-	class      *uint16
-	classKey   uintptr
-	hotKey     uint32
-	icon       uintptr
-	process    uintptr
-}
-
-// runElevated 以管理员身份运行程序（弹出用户账户控制的确认），等它结束，退出码不是 0 时返回错误。
-// ShellExecuteEx 要求调用的线程初始化了 COM，所以在一个专用线程上执行，结束后这个线程随之退出。
-func runElevated(file, parameters string, timeout time.Duration) error {
-	done := make(chan error, 1)
-	go func() {
-		runtime.LockOSThread()
-		coInitialize()
-		info := shellExecuteInfo{
-			mask:       seeMaskNoCloseProcess | seeMaskNoAsync,
-			verb:       utf16Pointer("runas"),
-			file:       utf16Pointer(file),
-			parameters: utf16Pointer(parameters),
-			show:       swHide,
-		}
-		info.size = uint32(unsafe.Sizeof(info))
-		if result, _, err := procShellExecuteExW.Call(uintptr(unsafe.Pointer(&info))); result == 0 {
-			if errno, ok := err.(syscall.Errno); ok && errno == errorCancelled {
-				done <- errors.New("没有获得管理员权限：需要在弹出的确认框里点「是」")
-				return
-			}
-			done <- fmt.Errorf("无法以管理员身份运行：%v", err)
-			return
-		}
-		if info.process == 0 {
-			done <- nil
-			return
-		}
-		defer procCloseHandle.Call(info.process)
-		if wait, _, _ := procWaitForSingleObject.Call(info.process, uintptr(timeout.Milliseconds())); wait != 0 {
-			done <- errors.New("等待超时，请稍后在 Windows 防火墙设置里检查")
-			return
-		}
-		var code uint32
-		procGetExitCodeProcess.Call(info.process, uintptr(unsafe.Pointer(&code)))
-		if code != 0 {
-			done <- fmt.Errorf("netsh 没有执行成功（退出码 %d）", code)
-			return
-		}
-		done <- nil
-	}()
-	return <-done
-}
-
 // allowFirewall 让 Windows 防火墙放行 program 的传入连接：先删掉针对它的入站规则（包括第一次询问时点了「取消」
 // 自动加上的阻止规则，阻止规则比允许规则优先），再加一条允许规则，公用和专用网络都生效。
 func allowFirewall(program string) error {
@@ -150,6 +79,13 @@ func allowFirewall(program string) error {
 	}
 	parameters := fmt.Sprintf(`/c netsh advfirewall firewall delete rule name=all dir=in program="%[1]s" & netsh advfirewall firewall add rule name="%[2]s" dir=in action=allow program="%[1]s" enable=yes profile=any`, program, shareFirewallRule)
 	if err := runElevated(systemDir()+`\cmd.exe`, parameters, shareFirewallTimeout); err != nil {
+		var exit elevatedExitError
+		switch {
+		case errors.As(err, &exit):
+			return fmt.Errorf("netsh 没有执行成功（退出码 %d）", exit.code)
+		case errors.Is(err, errElevatedTimeout):
+			return errors.New("等待超时，请稍后在 Windows 防火墙设置里检查")
+		}
 		return err
 	}
 	slog.Info("已在 Windows 防火墙里放行内核", "program", program)

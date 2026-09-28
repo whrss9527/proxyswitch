@@ -50,6 +50,10 @@ func main() {
 	command := ""
 	var arguments []string
 	for index, argument := range os.Args[1:] {
+		if value, found := strings.CutPrefix(argument, loopbackArgument); found {
+			// 以管理员身份运行，设置商店应用的回环豁免（见 loopback_windows.go）。
+			os.Exit(runLoopbackHelper(value))
+		}
 		if isLink(argument) {
 			// 浏览器或脚本打开的 proxyswitch:// 或 clash:// 链接。
 			os.Exit(runLink(argument))

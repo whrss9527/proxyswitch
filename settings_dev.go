@@ -30,6 +30,9 @@ type devBackend struct {
 	firewallAllowed int
 	// links 模拟 clash:// 链接的登记：开始时由另一个程序（clash-verge）处理。
 	links LinksInfo
+	// loopback 模拟商店应用和它们的回环豁免；loopbackChanges 记下以管理员身份修改的次数。
+	loopback        []LoopbackApp
+	loopbackChanges int
 }
 
 var devDefaultNetwork = NetworkInfo{
@@ -40,7 +43,12 @@ var devDefaultNetwork = NetworkInfo{
 }
 
 func newDevBackend(paths Paths, httpProxy, socks *fakeProxy) *devBackend {
-	backend := &devBackend{system: newMemorySystem(), httpProxy: httpProxy, socks: socks, links: LinksInfo{Clash: "clash-verge"}}
+	backend := &devBackend{system: newMemorySystem(), httpProxy: httpProxy, socks: socks, links: LinksInfo{Clash: "clash-verge"}, loopback: []LoopbackApp{
+		{Sid: "S-1-15-2-1001", Name: "Microsoft Store", Package: "microsoft.windowsstore_8wekyb3d8bbwe"},
+		{Sid: "S-1-15-2-1002", Name: "Netflix", Package: "4df9e0f8.netflix_mcm4njqhnhss8"},
+		{Sid: "S-1-15-2-1003", Name: "Xbox", Package: "microsoft.gamingapp_8wekyb3d8bbwe", Exempt: true},
+		{Sid: "S-1-15-2-1004", Name: "邮件和日历", Package: "microsoft.windowscommunicationsapps_8wekyb3d8bbwe"},
+	}}
 	backend.engine = newEngine(backend.system, paths, backend.addNotice)
 	core := newCore(func(message string) {
 		_ = backend.locked(func() error {
@@ -210,6 +218,37 @@ func (backend *devBackend) Close() {
 func (backend *devBackend) InstallUpdate(progress func(received, total int64)) error {
 	_, err := downloadLatestRelease(backend.UpdatePaths(), filepath.Join(backend.engine.paths.Dir, "update.download"), progress)
 	return err
+}
+
+// LoopbackApps 在开发模式下返回模拟的商店应用。
+func (backend *devBackend) LoopbackApps() (LoopbackInfo, error) {
+	backend.mutex.Lock()
+	defer backend.mutex.Unlock()
+	return LoopbackInfo{Apps: append([]LoopbackApp{}, backend.loopback...)}, nil
+}
+
+// SetLoopback 在开发模式下修改模拟的回环豁免，和 Windows 版一样没有变化时不需要「管理员确认」。
+func (backend *devBackend) SetLoopback(exempt []string) (LoopbackInfo, error) {
+	backend.mutex.Lock()
+	var current []string
+	for _, item := range backend.loopback {
+		if item.Exempt {
+			current = append(current, item.Sid)
+		}
+	}
+	desired := mergeLoopback(current, backend.loopback, exempt)
+	if !sameSids(desired, current) {
+		backend.loopbackChanges++
+		allowed := map[string]bool{}
+		for _, sid := range desired {
+			allowed[sid] = true
+		}
+		for index := range backend.loopback {
+			backend.loopback[index].Exempt = allowed[backend.loopback[index].Sid]
+		}
+	}
+	backend.mutex.Unlock()
+	return backend.LoopbackApps()
 }
 
 // TakeOverClashLinks 在开发模式下只改模拟的登记情况。

@@ -1000,7 +1000,30 @@ function systemPage() {
     <div class="card card-group">
       ${settingCard({ iconName: "link", title: "网页链接", description: html`浏览器和脚本可以用链接操作 ProxySwitch，例如 <span class="mono">proxyswitch://toggle</span> 开关代理`, control: html`<span class="switch-label">${config.url_links ? "开" : "关"}</span>${switchButton({ checked: config.url_links, setting: "url_links", label: "网页链接" })}` })}
       ${config.url_links ? clashLinksCard() : ""}
+    </div>
+
+    <div class="section-title">微软商店应用</div>
+    <div class="card card-group">
+      ${settingCard({ iconName: "box", title: "让商店应用走代理", description: "商店、邮件、Xbox 等商店应用默认连不上本机的代理（127.0.0.1），开启代理后可能上不了网。允许后它们也能经代理上网，修改要管理员确认，重新打开这些应用后生效", control: loopbackControl() })}
     </div>`;
+}
+
+// loopbackControl 是商店应用一栏的状态和按钮：已允许几个应用、全部允许、选择应用。
+function loopbackControl() {
+  const loopback = app.loopback;
+  if (!loopback || loopback.loading) {
+    return html`<span class="caption muted" style="display:inline-flex;gap:6px;align-items:center"><span class="spinner" style="width:12px;height:12px"></span>正在读取应用</span>`;
+  }
+  if (loopback.error) {
+    return html`<span class="caption" style="color:var(--danger)" title="${loopback.error}">读不到应用</span><button class="button" data-action="loopback-refresh">${icon("refresh")}重试</button>`;
+  }
+  const apps = loopback.info.apps;
+  const allowed = apps.filter((item) => item.exempt).length;
+  const busy = loopback.saving ? raw("disabled") : "";
+  return html`
+    <span class="caption muted" data-loopback-count>已允许 ${allowed} / ${apps.length} 个</span>
+    ${allowed < apps.length ? html`<button class="button" data-action="loopback-all" ${busy}>${loopback.saving ? html`<span class="spinner"></span>` : ""}全部允许</button>` : ""}
+    <button class="button" data-action="loopback-choose" ${busy}>选择应用…</button>`;
 }
 
 // clashLinksCard 说明机场网站的「一键导入 Clash」（clash:// 链接）由谁处理，别的程序在处理时可以接管。
