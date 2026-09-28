@@ -345,3 +345,147 @@ func TestCoreMissingBinary(t *testing.T) {
 		t.Errorf("状态应记下错误：%+v", status)
 	}
 }
+
+// 局域网共享：内核多开一个入口给局域网设备，流量跟着本机走（直连、转发给本机在用的代理、走同样的节点）。
+func TestCoreWithShare(t *testing.T) {
+	binary := requireCoreBinary(t)
+	website := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		_, _ = io.WriteString(writer, "hello")
+	}))
+	defer website.Close()
+	target := strings.TrimPrefix(website.URL, "http://")
+	node, upstream := startCountingProxy(t, target), startCountingProxy(t, target)
+	dir := t.TempDir()
+	core := newCore(nil)
+	defer core.Stop()
+	corePort, _ := freeLocalPort()
+	sharePort, _ := freeLocalPort()
+	allowed := []string{"127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"}
+	through := func(host string) (int32, int32, string) {
+		t.Helper()
+		nodeBefore, upstreamBefore := node.connections.Load(), upstream.connections.Load()
+		status, body, err := requestThroughCore(sharePort, host)
+		return node.connections.Load() - nodeBefore, upstream.connections.Load() - upstreamBefore, fmt.Sprintf("%d %s %v", status, body, err)
+	}
+
+	// 只为共享运行：本机的代理端口不监听，共享的设备直连。
+	settings := CoreSettings{Binary: binary, Dir: dir, Port: corePort, TestUrl: "http://" + coreTestHost + "/", Mode: "rule",
+		Share: &CoreShare{Port: sharePort, Allowed: allowed, Upstream: ShareUpstream{Kind: shareUpstreamDirect}}}
+	if err := core.Wait(core.Sync(settings), 30*time.Second); err != nil {
+		t.Fatalf("只为共享也应启动内核：%v", err)
+	}
+	if status := core.Status(); !status.Running || status.Port != 0 || !status.Share.Listening || status.Share.Port != sharePort {
+		t.Errorf("状态不对：%+v", status)
+	}
+	if connection, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", corePort), time.Second); err == nil {
+		connection.Close()
+		t.Error("只为共享运行时本机的代理端口不应监听")
+	}
+	if viaNode, viaUpstream, result := through(target); viaNode != 0 || viaUpstream != 0 || result != "200 hello <nil>" {
+		t.Errorf("本机没开代理时共享的设备应直连：%s", result)
+	}
+
+	// 不在允许名单里的来源连不上共享入口（这里去掉了本机回环）；重新加载时已经建立的连接不断。
+	open, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", sharePort), 3*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer open.Close()
+	openReader := bufio.NewReader(open)
+	fmt.Fprintf(open, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", target, target)
+	if response, err := http.ReadResponse(openReader, nil); err != nil || response.StatusCode != http.StatusOK {
+		t.Fatalf("经共享入口建立隧道失败：%v", err)
+	}
+	settings.Share = &CoreShare{Port: sharePort, Allowed: []string{"192.168.1.20/32"}, Upstream: ShareUpstream{Kind: shareUpstreamDirect}}
+	if err := core.Wait(core.Sync(settings), 30*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, result := through(target); result == "200 hello <nil>" {
+		t.Errorf("不在允许名单里的来源不应能用共享入口：%s", result)
+	}
+	_ = open.SetDeadline(time.Now().Add(5 * time.Second))
+	fmt.Fprintf(open, "GET / HTTP/1.1\r\nHost: %s\r\n\r\n", target)
+	if response, err := http.ReadResponse(openReader, nil); err != nil || response.StatusCode != http.StatusOK {
+		t.Errorf("重新加载后已经建立的连接应继续可用：%v", err)
+	}
+	open.Close()
+
+	// 本机用其他代理：共享的流量转发给它，内核只重新加载。
+	pid := corePid(core)
+	settings.Share = &CoreShare{Port: sharePort, Allowed: allowed, Upstream: ShareUpstream{Kind: shareUpstreamProxy, Proxy: "http://" + upstream.Address()}}
+	if err := core.Wait(core.Sync(settings), 30*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if _, viaUpstream, result := through(coreTestHost); viaUpstream == 0 || result != "200 hello <nil>" {
+		t.Errorf("共享的流量应转发给本机在用的代理：%s", result)
+	}
+	if corePid(core) != pid {
+		t.Error("只是去向变了，不应重启内核")
+	}
+
+	// 经共享入口的连接能在连接列表里看到来源和入口。
+	tunnel, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", sharePort), 3*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Fprintf(tunnel, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", target, target)
+	if response, err := http.ReadResponse(bufio.NewReader(tunnel), nil); err != nil || response.StatusCode != http.StatusOK {
+		t.Fatalf("经共享入口建立隧道失败：%v", err)
+	}
+	// 内核先答应 CONNECT 再去拨号，拨通后连接才出现在列表里。
+	var connections []CoreConnection
+	found := false
+	for deadline := time.Now().Add(5 * time.Second); !found && time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+		connections, err = core.Connections()
+		for _, connection := range connections {
+			if connection.Metadata.InboundName == coreShareListener && connection.Metadata.SourceIp == "127.0.0.1" && connection.Target() != "" && connection.Outbound() != "" {
+				found = true
+			}
+		}
+	}
+	tunnel.Close()
+	if err != nil || !found {
+		t.Errorf("连接列表里应有经共享入口的连接：%+v %v", connections, err)
+	}
+
+	// 加上订阅、本机用订阅：共享的设备走同样的节点，本机的代理端口开始监听。
+	if err := writeSubscriptionFile(dir, "p1", []byte(nodesYaml(map[string]*countingProxy{"节点": node}, "节点"))); err != nil {
+		t.Fatal(err)
+	}
+	settings.Subscriptions = []CoreSubscription{{Id: "p1", Node: "节点", Revision: "1"}}
+	settings.Active = "p1"
+	settings.Share = &CoreShare{Port: sharePort, Allowed: allowed, Upstream: ShareUpstream{Kind: shareUpstreamCore}}
+	if err := core.Wait(core.Sync(settings), 30*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if status := core.Status(); status.Port != corePort || !status.Share.Listening {
+		t.Errorf("有订阅后本机端口应监听，共享照常：%+v", status)
+	}
+	if viaNode, _, result := through(coreTestHost); viaNode == 0 || result != "200 hello <nil>" {
+		t.Errorf("本机用订阅时共享的设备应走同样的节点：%s", result)
+	}
+
+	// 共享端口被占用：共享报错，内核照常运行。
+	occupied, _ := net.Listen("tcp", "127.0.0.1:0")
+	defer occupied.Close()
+	settings.Share = &CoreShare{Port: occupied.Addr().(*net.TCPAddr).Port, Allowed: allowed, Upstream: ShareUpstream{Kind: shareUpstreamCore}}
+	if err := core.Wait(core.Sync(settings), 30*time.Second); err != nil {
+		t.Errorf("共享端口被占用不算内核出错：%v", err)
+	}
+	if status := core.Status(); !status.Running || status.Share.Listening || !strings.Contains(status.Share.Error, "被其他程序占用") {
+		t.Errorf("共享端口被占用时应说明：%+v", status)
+	}
+
+	// 关掉共享：共享入口不再监听。
+	settings.Share = nil
+	if err := core.Wait(core.Sync(settings), 30*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if connection, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", sharePort), time.Second); err == nil {
+		connection.Close()
+		t.Error("关掉共享后共享入口不应再监听")
+	}
+	if status := core.Status(); status.Share != (CoreShareStatus{}) {
+		t.Errorf("关掉共享后状态应清空：%+v", status.Share)
+	}
+}

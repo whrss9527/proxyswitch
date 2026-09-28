@@ -36,6 +36,8 @@ func TestStructSizes(t *testing.T) {
 		{"WINHTTP_AUTOPROXY_OPTIONS", unsafe.Sizeof(winHttpAutoProxyOptions{}), 32},
 		{"WINHTTP_PROXY_INFO", unsafe.Sizeof(winHttpProxyInfo{}), 24},
 		{"JOBOBJECT_EXTENDED_LIMIT_INFORMATION", unsafe.Sizeof(jobObjectExtendedLimitInformation{}), 144},
+		{"SHELLEXECUTEINFOW", unsafe.Sizeof(shellExecuteInfo{}), 112},
+		{"SYSTEM_POWER_STATUS", unsafe.Sizeof(systemPowerStatus{}), 12},
 	}
 	for _, size := range sizes {
 		if size.actual != size.wanted {
@@ -202,4 +204,16 @@ func TestSystemHelpers(t *testing.T) {
 	_ = rasEntryNames()
 	_ = machineWideProxy()
 	_ = findAppBrowser()
+}
+
+// 局域网共享期间阻止睡眠：用电池时也保持的设置下总是保持，关掉共享后放开。
+func TestSleepGuard(t *testing.T) {
+	var guard sleepGuard
+	if status := guard.update(ShareConfig{Enabled: true, KeepAwake: true, KeepAwakeOnBattery: true}); status != "holding" || !guard.holding {
+		t.Errorf("应阻止睡眠：%s", status)
+	}
+	if status := guard.update(ShareConfig{}); status != "off" || guard.holding {
+		t.Errorf("关掉共享后应放开：%s", status)
+	}
+	onBatteryPower()
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"net/url"
 	"strconv"
 	"strings"
 )
@@ -19,7 +20,35 @@ const (
 	coreTopGroup = "ProxySwitch"
 	// coreHealthInterval 是内核在后台测试节点延迟的间隔（秒），lazy 表示只在组被使用时才测。
 	coreHealthInterval = 1800
+	// coreShareListener 是局域网共享的入口，也是它专用的分流规则（sub-rules）的名字。
+	coreShareListener = "lan-share"
+	// coreUpstreamProxy 是本机用其他代理时，共享的流量转发过去的那个代理在内核里的名字。
+	coreUpstreamProxy = "上游代理"
 )
+
+// 共享出去的流量往哪走，跟着本机的代理状态。
+const (
+	shareUpstreamDirect      = "direct"
+	shareUpstreamCore        = "core"
+	shareUpstreamProxy       = "proxy"
+	shareUpstreamUnsupported = "unsupported"
+)
+
+// ShareUpstream 是共享出去的流量往哪走：Kind 是 direct（本机没开代理，设备经这台电脑直连）、core（本机用的是订阅，
+// 设备走同样的节点和分流规则）、proxy（本机用的是其他代理，转发给 Proxy）或 unsupported（PAC 没法转发，设备暂时直连，
+// Reason 说明原因）。
+type ShareUpstream struct {
+	Kind   string `json:"kind"`
+	Proxy  string `json:"proxy,omitempty"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// CoreShare 是局域网共享：共享入口的端口、允许连进来的来源（IP 段，含本机回环）、共享流量的去向。
+type CoreShare struct {
+	Port     int
+	Allowed  []string
+	Upstream ShareUpstream
+}
 
 // CoreSettings 是内核应该处于的状态，由引擎按配置和已下载的订阅算出来。BinaryStamp 是内核程序文件的修改时间，
 // 程序被替换（更新内核）后改变，内核随之重启。Active 是正在使用的订阅配置的 id（可以为空）；Mode 是它的模式；
@@ -39,6 +68,16 @@ type CoreSettings struct {
 	// CustomRules 是自定义规则在内核里的写法，排在分流规则前面，全局代理时也生效。
 	CustomRules   []string
 	Subscriptions []CoreSubscription
+	// Share 是局域网共享，nil 表示没开。没有订阅时内核只为共享运行，本机的代理端口不监听。
+	Share *CoreShare
+}
+
+// coreMixedPort 是内核在本机提供代理的端口：只为局域网共享运行时为 0（不监听）。
+func coreMixedPort(settings CoreSettings) int {
+	if len(settings.Subscriptions) == 0 {
+		return 0
+	}
+	return settings.Port
 }
 
 // CoreSubscription 是一个已下载的订阅。Node 为空表示自动选择；Revision 在订阅文件更新后改变，内核据此重新读取。
@@ -123,6 +162,32 @@ type coreGroup struct {
 	Lazy      bool     `json:"lazy,omitempty"`
 }
 
+type coreListener struct {
+	Name   string `json:"name"`
+	Type   string `json:"type"`
+	Listen string `json:"listen"`
+	Port   int    `json:"port"`
+	Rule   string `json:"rule"`
+}
+
+type coreProxy struct {
+	Name     string `json:"name"`
+	Type     string `json:"type"`
+	Server   string `json:"server"`
+	Port     int    `json:"port"`
+	Username string `json:"username,omitempty"`
+	Password string `json:"password,omitempty"`
+	Tls      bool   `json:"tls,omitempty"`
+}
+
+type coreSniffer struct {
+	Enable              bool                      `json:"enable"`
+	ParsePureIp         bool                      `json:"parse-pure-ip"`
+	OverrideDestination bool                      `json:"override-destination"`
+	ForceDnsMapping     bool                      `json:"force-dns-mapping"`
+	Sniff               map[string]map[string]any `json:"sniff"`
+}
+
 type coreRuleProvider struct {
 	Type     string `json:"type"`
 	Behavior string `json:"behavior"`
@@ -145,10 +210,15 @@ type coreConfigFile struct {
 	GeoAutoUpdate      bool                        `json:"geo-auto-update"`
 	GeodataMode        bool                        `json:"geodata-mode"`
 	GeoxUrl            map[string]string           `json:"geox-url"`
+	LanAllowedIps      []string                    `json:"lan-allowed-ips,omitempty"`
+	Sniffer            coreSniffer                 `json:"sniffer"`
+	Listeners          []coreListener              `json:"listeners,omitempty"`
+	Proxies            []coreProxy                 `json:"proxies,omitempty"`
 	ProxyProviders     map[string]coreProvider     `json:"proxy-providers"`
 	ProxyGroups        []coreGroup                 `json:"proxy-groups"`
 	RuleProviders      map[string]coreRuleProvider `json:"rule-providers,omitempty"`
 	Rules              []string                    `json:"rules"`
+	SubRules           map[string][]string         `json:"sub-rules,omitempty"`
 }
 
 // coreConfigText 生成内核的配置。controller 和 secret 是 REST API 的地址和密码，只在本机监听。
@@ -158,7 +228,7 @@ func coreConfigText(settings CoreSettings, controller, secret string) []byte {
 		testUrl = defaultTestUrl
 	}
 	config := coreConfigFile{
-		MixedPort:          settings.Port,
+		MixedPort:          coreMixedPort(settings),
 		BindAddress:        "127.0.0.1",
 		Mode:               "rule",
 		LogLevel:           "warning",
@@ -172,6 +242,12 @@ func coreConfigText(settings CoreSettings, controller, secret string) []byte {
 		GeoxUrl:        map[string]string{},
 		ProxyProviders: map[string]coreProvider{},
 		ProxyGroups:    []coreGroup{},
+		// 域名嗅探：自己解析 DNS 被污染的设备（PS5 等）和程序会按假 IP 来连，从 TLS / HTTP 握手里取回域名，
+		// 按域名分流，并把域名交给节点去解析。
+		Sniffer: coreSniffer{Enable: true, ParsePureIp: true, OverrideDestination: true, ForceDnsMapping: true, Sniff: map[string]map[string]any{
+			"HTTP": {"ports": []any{80, "8080-8880"}},
+			"TLS":  {"ports": []any{443, 8443}},
+		}},
 	}
 	for _, geo := range coreGeoFiles {
 		key := map[string]string{"Country.mmdb": "mmdb", "GeoSite.dat": "geosite"}[geo.Name]
@@ -190,6 +266,13 @@ func coreConfigText(settings CoreSettings, controller, secret string) []byte {
 			coreGroup{Name: subscription.Id, Type: "select", Proxies: []string{coreAutoGroup(subscription.Id)}, Use: []string{provider}},
 		)
 		subscriptionGroups = append(subscriptionGroups, subscription.Id)
+	}
+	if len(subscriptionGroups) == 0 {
+		// 只为局域网共享运行：本机不经内核，没有节点。
+		config.Rules = []string{"MATCH,DIRECT"}
+		addShare(&config, settings.Share)
+		data, _ := json.MarshalIndent(config, "", "  ")
+		return append(data, '\n')
 	}
 	config.ProxyGroups = append(config.ProxyGroups, coreGroup{Name: coreTopGroup, Type: "select", Proxies: subscriptionGroups})
 	config.Rules = append(config.Rules, corePrivateRules...)
@@ -213,6 +296,59 @@ func coreConfigText(settings CoreSettings, controller, secret string) []byte {
 	if !strings.HasPrefix(config.Rules[len(config.Rules)-1], "MATCH,") {
 		config.Rules = append(config.Rules, "MATCH,"+coreTopGroup)
 	}
+	addShare(&config, settings.Share)
 	data, _ := json.MarshalIndent(config, "", "  ")
 	return append(data, '\n')
+}
+
+// addShare 加上局域网共享：共享入口监听所有网卡，只放行允许的来源；它的流量按同名的 sub-rules 分流，
+// 切换去向时只改规则，入口不动，已有的连接不断。
+func addShare(config *coreConfigFile, share *CoreShare) {
+	if share == nil {
+		return
+	}
+	config.LanAllowedIps = share.Allowed
+	config.Listeners = []coreListener{{Name: coreShareListener, Type: "mixed", Listen: "0.0.0.0", Port: share.Port, Rule: coreShareListener}}
+	upstream := share.Upstream
+	if upstream.Kind == shareUpstreamProxy {
+		if proxy, ok := coreUpstream(upstream.Proxy); ok {
+			config.Proxies = []coreProxy{proxy}
+		} else {
+			upstream = ShareUpstream{Kind: shareUpstreamDirect}
+		}
+	}
+	config.SubRules = map[string][]string{coreShareListener: shareRules(upstream, config.Rules)}
+}
+
+// shareRules 是共享入口的分流：本机用订阅时和本机完全一样；本机用其他代理时局域网直连、其余转发给它；否则全部直连。
+func shareRules(upstream ShareUpstream, mainRules []string) []string {
+	switch upstream.Kind {
+	case shareUpstreamCore:
+		return mainRules
+	case shareUpstreamProxy:
+		return append(append([]string{}, corePrivateRules...), "MATCH,"+coreUpstreamProxy)
+	}
+	return []string{"MATCH,DIRECT"}
+}
+
+// coreUpstream 把 http://主机:端口、https://主机:端口 或 socks5://主机:端口（可以带用户名和密码）写成内核里的代理。
+func coreUpstream(proxyUrl string) (coreProxy, bool) {
+	parsed, err := url.Parse(proxyUrl)
+	if err != nil || parsed.Hostname() == "" {
+		return coreProxy{}, false
+	}
+	port, err := strconv.Atoi(parsed.Port())
+	if err != nil || port < 1 || port > 65535 {
+		return coreProxy{}, false
+	}
+	kind := map[string]string{"http": "http", "https": "http", "socks5": "socks5", "socks5h": "socks5", "socks": "socks5"}[parsed.Scheme]
+	if kind == "" {
+		return coreProxy{}, false
+	}
+	proxy := coreProxy{Name: coreUpstreamProxy, Type: kind, Server: parsed.Hostname(), Port: port, Tls: parsed.Scheme == "https"}
+	if parsed.User != nil {
+		proxy.Username = parsed.User.Username()
+		proxy.Password, _ = parsed.User.Password()
+	}
+	return proxy, true
 }

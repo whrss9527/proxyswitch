@@ -101,13 +101,18 @@ func (engine *Engine) coreSettings() CoreSettings {
 			settings.Rules, settings.RuleProviders = manifest.Rules, manifest.Providers
 		}
 	}
+	if engine.config.Share.Enabled {
+		settings.Share = engine.coreShare(engine.Status(), settings.Active)
+	}
 	return settings
 }
 
 // syncCore 把内核应处于的状态交给内核（异步生效），记下这次设定的序号，调用方可以用它等待生效。
 func (engine *Engine) syncCore() {
 	if engine.core != nil {
-		engine.coreGeneration = engine.core.Sync(engine.coreSettings())
+		settings := engine.coreSettings()
+		engine.syncedShare = settings.Share
+		engine.coreGeneration = engine.core.Sync(settings)
 	}
 }
 

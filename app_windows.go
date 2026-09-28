@@ -23,6 +23,8 @@ const (
 	menuTest
 	menuEditConfig
 	menuUpdate
+	menuShare
+	menuShareCopy
 	menuExit
 	menuTerminalBase = 50
 	menuProfileBase  = 100
@@ -79,6 +81,9 @@ type App struct {
 	crashedLastTime bool
 	// 最近一次弹出的托盘菜单里订阅子菜单各项的含义，按编号减去 menuChoiceBase 查找。
 	menuChoices []menuChoice
+	// 局域网共享期间阻止睡眠；shareError 是已经提示过的共享入口的问题。
+	sleep      sleepGuard
+	shareError string
 }
 
 func newApp(paths Paths) *App {
@@ -200,6 +205,7 @@ func (app *App) refresh() {
 		return
 	}
 	status := app.engine.Status()
+	app.updateShare(status)
 	app.tray.Update(app.iconFor(status), app.tooltipFor(status))
 }
 
@@ -257,6 +263,13 @@ func (app *App) tooltipFor(status Status) string {
 		lines = append(lines, "还没有代理配置，单击添加")
 	default:
 		lines = append(lines, "已关闭，单击开启："+status.Profile.Name)
+	}
+	if config != nil && config.Share.Enabled && app.subscriptionService != nil {
+		if address := app.shareAddress(); address != "" {
+			lines = append(lines, "局域网共享："+address)
+		} else {
+			lines = append(lines, "局域网共享：没有连上局域网")
+		}
 	}
 	return truncateRunes(strings.Join(lines, "\n"), 127)
 }
@@ -448,6 +461,12 @@ func (app *App) menuItems() []MenuItem {
 	if len(config.AutoSwitch.Rules) > 0 {
 		items = append(items, MenuItem{Id: menuAutoSwitch, Text: "按网络自动切换", Checked: config.AutoSwitch.Enabled})
 	}
+	if app.subscriptionService != nil {
+		items = append(items, MenuItem{Id: menuShare, Text: "局域网共享（PS5 等设备）", Checked: config.Share.Enabled})
+		if address := app.shareAddress(); config.Share.Enabled && address != "" {
+			items = append(items, MenuItem{Id: menuShareCopy, Text: "复制设备上要填的地址 " + address})
+		}
+	}
 	items = append(items,
 		MenuItem{Id: menuSettings, Text: "设置...", Default: config.TrayClick == "settings"},
 		MenuItem{Id: menuAutostart, Text: "开机自动启动", Checked: isAutostartEnabled()},
@@ -626,6 +645,10 @@ func (app *App) handleMenu(command uint32) {
 		}
 	case command == menuTest:
 		app.testActiveProxy()
+	case command == menuShare && config != nil:
+		_ = app.setShareFromUi(!config.Share.Enabled)
+	case command == menuShareCopy:
+		app.copyShareAddress()
 	case command == menuUpdate:
 		// 打开「关于」页并立即检查，有新版本时在那里一键更新。
 		app.openSettingsAt("about", "check-update")
@@ -737,6 +760,8 @@ func (app *App) onCopyData(data []byte) uintptr {
 		err = app.engine.Toggle()
 	case "use":
 		err = app.engine.UseProfile(argument)
+	case "share":
+		err = app.shareCommand(argument)
 	case "settings":
 		app.openSettings()
 	default:
@@ -781,6 +806,7 @@ func (app *App) onEndSession() {
 
 func (app *App) onDestroy() {
 	app.handleExit()
+	app.sleep.update(ShareConfig{})
 	if app.subscriptionService != nil {
 		app.core.Kill()
 	}
@@ -913,6 +939,9 @@ func (app *App) settingsState() SettingsState {
 	state.Accent = systemAccentColor()
 	state.Targets = targetInfos(app.gitAvailable.Load())
 	state.Update = app.latestUpdate
+	if app.sleep.status != "" {
+		state.Share.Awake = app.sleep.status
+	}
 	return state
 }
 

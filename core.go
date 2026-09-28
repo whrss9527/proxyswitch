@@ -48,11 +48,19 @@ func coreBinaryName() string {
 	return "mihomo"
 }
 
-// CoreStatus 是内核的运行状态，给设置页显示。
+// CoreStatus 是内核的运行状态，给设置页显示。Share 是局域网共享入口的状态。
 type CoreStatus struct {
-	Running bool   `json:"running"`
-	Port    int    `json:"port,omitempty"`
-	Error   string `json:"error,omitempty"`
+	Running bool            `json:"running"`
+	Port    int             `json:"port,omitempty"`
+	Error   string          `json:"error,omitempty"`
+	Share   CoreShareStatus `json:"share"`
+}
+
+// CoreShareStatus 是局域网共享入口的状态：Listening 表示正在 Port 上监听，没监听起来时 Error 说明原因。
+type CoreShareStatus struct {
+	Listening bool   `json:"listening"`
+	Port      int    `json:"port,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 
 // CoreNode 是订阅里的一个节点。Tested 表示测过延迟，Alive 是最近一次测试是否成功（本机测得的延迟可能是 0）。
@@ -91,6 +99,7 @@ type Core struct {
 	configText []byte
 	lastError  string
 	crashes    []time.Time
+	share      CoreShareStatus
 }
 
 // newCore 创建内核管理器并启动后台 goroutine。onError 在内核启动失败或意外退出时调用（在后台 goroutine 里）。
@@ -156,9 +165,11 @@ func (core *Core) Kill() {
 func (core *Core) Status() CoreStatus {
 	core.mutex.Lock()
 	defer core.mutex.Unlock()
-	status := CoreStatus{Running: core.process != nil, Error: core.lastError}
+	status := CoreStatus{Running: core.process != nil, Error: core.lastError, Share: core.share}
 	if status.Running {
-		status.Port = core.current.Port
+		status.Port = coreMixedPort(core.current)
+	} else {
+		status.Share.Listening = false
 	}
 	return status
 }
@@ -189,14 +200,61 @@ func (core *Core) run() {
 	}
 }
 
-// apply 让内核进入 settings 描述的状态：没有订阅时停止；程序、目录、端口变了就重启；配置变了就重新加载；
-// 订阅文件更新了就让内核重新读取；最后设置每个订阅选中的节点和正在使用的订阅。
+// apply 让内核进入 settings 描述的状态：既没有订阅也没开局域网共享时停止；程序、目录、本机端口变了就重启；
+// 配置变了就重新加载；订阅文件更新了就让内核重新读取；最后设置每个订阅选中的节点和正在使用的订阅。
+// 共享入口的问题（端口被占用等）不算内核出错，记在共享的状态里，其余照常。
 func (core *Core) apply(settings CoreSettings) error {
-	if len(settings.Subscriptions) == 0 {
+	shareError := ""
+	if share := settings.Share; share != nil && !core.shareListening(share.Port) {
+		if err := checkPortFree(share.Port); err != nil {
+			shareError = fmt.Sprintf("端口 %d 被其他程序占用，换一个端口再试", share.Port)
+			settings.Share = nil
+		}
+	}
+	err := core.applyCore(settings)
+	status := CoreShareStatus{Error: shareError}
+	if share := settings.Share; share != nil && err == nil {
+		status.Port = share.Port
+		if status.Error = core.verifyShare(share.Port); status.Error == "" {
+			status.Listening = true
+		}
+	} else if share != nil && err != nil {
+		status.Error = err.Error()
+	}
+	if status.Error != "" && status.Error != core.Status().Share.Error {
+		slog.Warn("局域网共享出错", "err", status.Error)
+	}
+	core.mutex.Lock()
+	core.share = status
+	core.mutex.Unlock()
+	return err
+}
+
+// shareListening 表示共享入口已经在 port 上监听（端口被内核自己占着，不能再检查是否空闲）。
+func (core *Core) shareListening(port int) bool {
+	core.mutex.Lock()
+	defer core.mutex.Unlock()
+	return core.process != nil && core.current.Share != nil && core.current.Share.Port == port && core.share.Listening
+}
+
+// verifyShare 确认共享入口在监听：入口起不来时内核只记日志，不会退出。
+func (core *Core) verifyShare(port int) string {
+	for attempt := 0; attempt < 20; attempt++ {
+		if connection, err := net.DialTimeout("tcp", "127.0.0.1:"+strconv.Itoa(port), time.Second); err == nil {
+			connection.Close()
+			return ""
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return fmt.Sprintf("端口 %d 没有监听起来：%s", port, core.logTail())
+}
+
+func (core *Core) applyCore(settings CoreSettings) error {
+	if len(settings.Subscriptions) == 0 && settings.Share == nil {
 		core.stopProcess()
 		return nil
 	}
-	if !core.running() || core.current.Binary != settings.Binary || core.current.BinaryStamp != settings.BinaryStamp || core.current.Dir != settings.Dir || core.current.Port != settings.Port {
+	if !core.running() || core.current.Binary != settings.Binary || core.current.BinaryStamp != settings.BinaryStamp || core.current.Dir != settings.Dir || coreMixedPort(core.current) != coreMixedPort(settings) {
 		core.stopProcess()
 		if err := core.checkCrashes(); err != nil {
 			return err
@@ -267,8 +325,10 @@ func (core *Core) start(settings CoreSettings) error {
 	if filepath.Dir(settings.Binary) == filepath.Clean(settings.Dir) {
 		removeOldCorePrograms(settings.Binary)
 	}
-	if err := checkPortFree(settings.Port); err != nil {
-		return err
+	if port := coreMixedPort(settings); port != 0 {
+		if err := checkPortFree(port); err != nil {
+			return err
+		}
 	}
 	apiPort, err := freeLocalPort()
 	if err != nil {
@@ -358,9 +418,13 @@ func (core *Core) waitReady(exited chan struct{}, settings CoreSettings) error {
 	if err := core.waitProviders(settings, deadline); err != nil {
 		return err
 	}
-	connection, err := net.DialTimeout("tcp", "127.0.0.1:"+strconv.Itoa(settings.Port), 2*time.Second)
+	port := coreMixedPort(settings)
+	if port == 0 {
+		return nil
+	}
+	connection, err := net.DialTimeout("tcp", "127.0.0.1:"+strconv.Itoa(port), 2*time.Second)
 	if err != nil {
-		return fmt.Errorf("代理内核没能监听端口 %d：%s", settings.Port, core.logTail())
+		return fmt.Errorf("代理内核没能监听端口 %d：%s", port, core.logTail())
 	}
 	connection.Close()
 	return nil
@@ -426,8 +490,9 @@ func (core *Core) reload(text []byte, settings CoreSettings) error {
 	if err := os.WriteFile(configPath, text, 0o600); err != nil {
 		return fmt.Errorf("无法写入内核配置：%v", err)
 	}
-	// 不加 force：端口没变时内核保留原来的监听，不打断正在进行的连接（端口变了会重启内核）。
-	if err := core.request(http.MethodPut, "/configs", map[string]string{"path": configPath}, nil, coreStartTimeout); err != nil {
+	// 加 force 内核才会重新应用 lan-allowed-ips 这类入口的设置（局域网共享只放行允许的设备）；端口没变时
+	// 它保留原来的监听，不打断正在进行的连接（端口变了会重启内核）。
+	if err := core.request(http.MethodPut, "/configs?force=true", map[string]string{"path": configPath}, nil, coreStartTimeout); err != nil {
 		return fmt.Errorf("代理内核没能加载新配置：%v", err)
 	}
 	if err := core.waitProviders(settings, time.Now().Add(coreStartTimeout)); err != nil {
@@ -485,6 +550,52 @@ func (core *Core) stopProcess() {
 		slog.Warn("代理内核没有及时退出")
 	}
 	slog.Info("代理内核已停止")
+}
+
+// CoreConnection 是内核里的一条连接（/connections）。Chains 的第一个是实际走的出口（节点、DIRECT 或上游代理）。
+type CoreConnection struct {
+	Id       string `json:"id"`
+	Metadata struct {
+		SourceIp        string `json:"sourceIP"`
+		DestinationIp   string `json:"destinationIP"`
+		DestinationPort string `json:"destinationPort"`
+		Host            string `json:"host"`
+		SniffHost       string `json:"sniffHost"`
+		InboundName     string `json:"inboundName"`
+	} `json:"metadata"`
+	Upload      int64    `json:"upload"`
+	Download    int64    `json:"download"`
+	Start       string   `json:"start"`
+	Chains      []string `json:"chains"`
+	Rule        string   `json:"rule"`
+	RulePayload string   `json:"rulePayload"`
+}
+
+// Target 是连接访问的主机：域名，没有时是嗅探到的域名或目标 IP。
+func (connection CoreConnection) Target() string {
+	for _, host := range []string{connection.Metadata.Host, connection.Metadata.SniffHost, connection.Metadata.DestinationIp} {
+		if host != "" {
+			return host
+		}
+	}
+	return ""
+}
+
+// Outbound 是连接实际走的出口。
+func (connection CoreConnection) Outbound() string {
+	if len(connection.Chains) == 0 {
+		return ""
+	}
+	return connection.Chains[0]
+}
+
+// Connections 列出内核里现在开着的连接。
+func (core *Core) Connections() ([]CoreConnection, error) {
+	var result struct {
+		Connections []CoreConnection `json:"connections"`
+	}
+	err := core.request(http.MethodGet, "/connections", nil, &result, coreApiTimeout)
+	return result.Connections, err
 }
 
 // Nodes 列出订阅里的节点和最近一次测得的延迟。
