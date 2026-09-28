@@ -193,7 +193,13 @@ func (engine *Engine) subscriptionDue(profile *Profile, now time.Time) bool {
 		return retry
 	}
 	updated, _ := time.Parse(time.RFC3339Nano, info.Updated)
-	return (now.Sub(updated) >= subscriptionInterval || updated.After(now)) && retry
+	return (now.Sub(updated) >= subscriptionInterval || updated.After(now)) && retry && !engine.UpdatesPaused()
+}
+
+// UpdatesPaused 表示在按流量计费的网络上，暂停每天自动更新订阅和分流规则（pause_on_metered）。第一次下载、
+// 地址改了之后的下载和手动更新不受影响。
+func (engine *Engine) UpdatesPaused() bool {
+	return engine.config != nil && engine.config.PauseOnMetered && engine.network.Metered
 }
 
 // DownloadPaths 是下载订阅、内核和地理数据时依次尝试的网络路径：直连，然后是正在使用的代理，最后是内核。
@@ -329,7 +335,7 @@ func (engine *Engine) rulesDue(profile *Profile, now time.Time) bool {
 	}
 	updated, _ := time.Parse(time.RFC3339Nano, info.Updated)
 	stale := now.Sub(updated) >= subscriptionInterval || updated.After(now) || info.FailedSets > 0
-	return stale && retry
+	return stale && retry && !engine.UpdatesPaused()
 }
 
 // RecordRules 记下一次分流规则下载的结果：成功时换用新版本的规则、删除旧版本，内核随之重新加载。

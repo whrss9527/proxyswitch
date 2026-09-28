@@ -108,6 +108,7 @@ type Config struct {
 	CheckUpdates    bool         `json:"check_updates"`
 	SpeedDisplay    string       `json:"speed_display"`
 	UrlLinks        bool         `json:"url_links"`
+	PauseOnMetered  bool         `json:"pause_on_metered"`
 	Core            CoreConfig   `json:"core"`
 	Tun             TunConfig    `json:"tun"`
 	CustomRules     []CustomRule `json:"custom_rules"`
@@ -133,6 +134,7 @@ func defaultConfig() *Config {
 		CheckUpdates:    true,
 		SpeedDisplay:    speedSystem,
 		UrlLinks:        true,
+		PauseOnMetered:  true,
 		Core:            CoreConfig{Port: defaultCorePort},
 		CustomRules:     []CustomRule{},
 		Share:           ShareConfig{Port: defaultSharePort, KeepAwake: true},
@@ -191,6 +193,8 @@ const defaultConfigText = `// ProxySwitch 配置文件。推荐在托盘菜单�
 
   // 订阅使用的代理内核（mihomo）：path 留空使用 ProxySwitch 下载的内核，port 是它在本机提供代理的端口
   "core": { "path": "", "port": 17890 },
+  // 按流量计费的网络（手机热点、设成按流量计费的 Wi-Fi 等）上暂停每天自动更新订阅和分流规则，手动更新不受影响
+  "pause_on_metered": true,
   // TUN 模式（虚拟网卡）：使用订阅配置时接管整台电脑的流量，不认系统代理的程序（游戏、命令行工具等）也走节点和分流规则；
   // 内核要以管理员权限运行，启动时确认一次
   "tun": { "enabled": false },

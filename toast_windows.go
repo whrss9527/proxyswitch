@@ -39,13 +39,6 @@ var (
 	procWindowsDeleteString    = combase.NewProc("WindowsDeleteString")
 )
 
-type guid struct {
-	data1 uint32
-	data2 uint16
-	data3 uint16
-	data4 [8]byte
-}
-
 // 用到的 WinRT 接口
 var (
 	iidXmlDocument                     = guid{0xF7F3A506, 0x1E87, 0x42D6, [8]byte{0xBC, 0xFB, 0xB8, 0xC8, 0x09, 0xFA, 0x54, 0x94}}
@@ -57,7 +50,6 @@ var (
 
 // 虚函数表里的位置：0~2 是 IUnknown 的方法，3~5 是 IInspectable 的，接口自己的从 6 开始。
 const (
-	methodRelease                   = 2
 	methodLoadXml                   = 6 // IXmlDocumentIO
 	methodCreateToastNotifierWithId = 7 // IToastNotificationManagerStatics
 	methodCreateToastNotification   = 6 // IToastNotificationFactory
@@ -66,38 +58,6 @@ const (
 	methodShow                      = 6 // IToastNotifier
 	methodHide                      = 7 // IToastNotifier
 )
-
-// comCall 调用接口 object 的虚函数表里第 index 个方法，返回的 HRESULT 为负时是错误。
-//
-//go:uintptrescapes
-func comCall(object unsafe.Pointer, index int, args ...uintptr) error {
-	vtable := *(*unsafe.Pointer)(object)
-	method := *(*uintptr)(unsafe.Add(vtable, index*int(unsafe.Sizeof(uintptr(0)))))
-	result, _, _ := syscall.SyscallN(method, append([]uintptr{uintptr(object)}, args...)...)
-	return hresultError(result)
-}
-
-func comRelease(object unsafe.Pointer) {
-	if object != nil {
-		_ = comCall(object, methodRelease)
-	}
-}
-
-// comQuery 从 object 取得 iid 接口（QueryInterface）。
-func comQuery(object unsafe.Pointer, iid *guid) (unsafe.Pointer, error) {
-	var result unsafe.Pointer
-	if err := comCall(object, 0, uintptr(unsafe.Pointer(iid)), uintptr(unsafe.Pointer(&result))); err != nil {
-		return nil, err
-	}
-	return result, nil
-}
-
-func hresultError(result uintptr) error {
-	if int32(result) >= 0 {
-		return nil
-	}
-	return fmt.Errorf("%v（0x%08X）", syscall.Errno(uint32(result)), uint32(result))
-}
 
 // newHstring 创建 WinRT 字符串，用完用 deleteHstring 释放。
 func newHstring(text string) (uintptr, error) {

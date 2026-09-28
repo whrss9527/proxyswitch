@@ -295,6 +295,7 @@ GitHub 的接口对未登录的访问限制了次数（每个 IP 每小时 60 �
 | `check_updates` | `true` / `false` | 每天自动检查一次新版本 |
 | `speed_display` | `system` / `core` / `none` | 实时网速：系统网络总速度 / 只算内置代理 / 不显示 |
 | `url_links` | `true` / `false` | 登记 `proxyswitch://` 链接和机场网站的一键导入（`clash://`，没有其他程序处理时） |
+| `pause_on_metered` | `true` / `false` | 按流量计费的网络（手机热点、设成按流量计费的 Wi-Fi 等）上暂停每天自动更新订阅和分流规则，手动更新不受影响；换到其他网络后马上补上。默认开启 |
 | `core` | 见下 | 订阅使用的代理内核 |
 | `tun` | `{"enabled": true / false}` | TUN 模式：开着订阅配置时接管全部流量，内核要以管理员权限运行 |
 | `custom_rules` | 见下 | 自定义规则 |

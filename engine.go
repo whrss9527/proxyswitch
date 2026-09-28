@@ -777,7 +777,12 @@ func (engine *Engine) AutoOffPending() bool {
 // UpdateNetwork 由网络监视定期调用。网络特征变化并在下一次检查时保持不变后，按规则自动切换；
 // 断网期间和回到原来的网络时不做切换，避免与手动选择冲突。
 func (engine *Engine) UpdateNetwork(info NetworkInfo) {
+	resumed := engine.UpdatesPaused() && !info.Metered
 	engine.network = info
+	if resumed {
+		// 换到了不按流量计费的网络，暂停的更新马上补上。
+		engine.requestDownloads()
+	}
 	signature := info.Signature()
 	if signature != engine.pendingSignature {
 		engine.pendingSignature = signature

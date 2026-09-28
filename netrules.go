@@ -20,6 +20,8 @@ type NetworkInfo struct {
 	Ssids     []string         `json:"ssids"`
 	SsidError string           `json:"ssid_error,omitempty"`
 	Adapters  []NetworkAdapter `json:"adapters"`
+	// Metered 表示现在的网络按流量计费（手机热点、设成按流量计费的 Wi-Fi 等），不影响 Signature。
+	Metered bool `json:"metered,omitempty"`
 }
 
 // Signature 在网络没变时保持不变，变化时（换 Wi-Fi、插拔网线、连 VPN）随之改变。
