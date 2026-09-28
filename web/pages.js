@@ -1,9 +1,10 @@
 "use strict";
 
-// 各页面的内容：代理、自动切换、常规、诊断、关于。每个函数根据 app 里的状态生成整页 HTML。
+// 各页面的内容：代理、局域网共享、自动切换、常规、诊断、关于。每个函数根据 app 里的状态生成整页 HTML。
 
 const pages = [
   { id: "proxies", label: "代理", icon: "globe" },
+  { id: "share", label: "局域网共享", icon: "router" },
   { id: "network", label: "自动切换", icon: "wifi" },
   { id: "general", label: "常规", icon: "sliders" },
   { id: "diagnostics", label: "诊断", icon: "pulse" },
@@ -136,7 +137,8 @@ function hasSubscriptions() {
 }
 
 // coreNotice 提示代理内核的问题：还没下载（可以一键下载）、正在下载、出错、可以更新。没有问题时为空。
-function coreNotice() {
+// coreNotice 提示内核的问题（还没下载、正在下载、出错、可以更新），purpose 是需要内核的功能。
+function coreNotice(purpose = "使用订阅") {
   const core = app.state.core;
   if (core.installing || app.coreInstalling) {
     const progress = core.installing || { received: 0, total: 0 };
@@ -154,11 +156,11 @@ function coreNotice() {
         <div class="infobar-actions"><button class="button" data-action="goto" data-page="general">修改内核位置</button></div></div></div>`;
     }
     if (core.downloadable) {
-      return html`<div class="infobar info">${icon("download")}<div class="infobar-body"><div class="infobar-title">使用订阅需要先下载代理内核</div>
-        ProxySwitch 用 mihomo（Clash.Meta）内核连接订阅里的节点。只需下载一次，约 20 MB，下载后自动校验。
+      return html`<div class="infobar info">${icon("download")}<div class="infobar-body"><div class="infobar-title">${purpose}需要先下载代理内核</div>
+        ProxySwitch 用 mihomo（Clash.Meta）内核连接订阅里的节点、提供局域网共享。只需下载一次，约 20 MB，下载后自动校验。
         <div class="infobar-actions"><button class="button accent" data-action="install-core">${icon("download")}下载内核</button></div></div></div>`;
     }
-    return html`<div class="infobar info">${icon("info")}<div class="infobar-body"><div class="infobar-title">使用订阅需要 mihomo 内核</div>
+    return html`<div class="infobar info">${icon("info")}<div class="infobar-body"><div class="infobar-title">${purpose}需要 mihomo 内核</div>
       这个版本不能在程序里下载内核，请在「常规」里填写本机 mihomo 程序的位置。
       <div class="infobar-actions"><button class="button" data-action="goto" data-page="general">填写内核位置</button></div></div></div>`;
   }
@@ -469,6 +471,7 @@ function proxiesPage() {
     ${pageHeader("代理")}
     ${warnings}
     ${profiles.length === 0 && app.state.status.state === "off" ? "" : heroView()}
+    ${shareBanner()}
     ${profiles.length === 0 ? html`<div style="margin-top:16px">${emptyView()}</div>` : html`
       <div class="section-title">代理配置
         <div class="actions">
@@ -480,6 +483,221 @@ function proxiesPage() {
       <div class="stack">${profiles.map((profile, index) => profileRow(profile, index))}</div>
       <p class="caption faint" style="margin:14px 2px 0">单击托盘图标开关代理，右键托盘图标可以快速切换配置。</p>
       ${customRulesView()}`}`;
+}
+
+// ---------- 局域网共享 ----------
+
+// shareUpstreamText 是「现在转发到」的文字：共享的设备的流量往哪走。
+function shareUpstreamText(upstream) {
+  switch (upstream.kind) {
+    case "core":
+      return "内置代理（和本机一样的节点和分流规则）";
+    case "proxy":
+      return upstream.proxy.replace(/^http:\/\//, "");
+    case "unsupported":
+      return "直接连接（PAC 没法转发）";
+  }
+  return "直接连接（本机没开代理）";
+}
+
+// shareUpstreamSummary 是代理页里局域网共享的一句话。
+function shareUpstreamSummary(upstream) {
+  switch (upstream.kind) {
+    case "core":
+      return "设备和本机一样走节点和分流规则";
+    case "proxy":
+      return `设备的流量转发到 ${shareUpstreamText(upstream)}`;
+    case "unsupported":
+      return "本机用的是 PAC，没法转发，设备暂时直连";
+  }
+  return "设备经这台电脑直接上网";
+}
+
+// shareBanner 是代理页里局域网共享的状态，开着共享时显示，点击打开共享页。
+function shareBanner() {
+  const share = app.state.config && app.state.config.share;
+  if (!share || !share.enabled) {
+    return "";
+  }
+  const status = app.state.core.share || {};
+  const address = (app.state.share.addresses || [])[0];
+  let detail = html`${shareUpstreamSummary(app.state.share.upstream)}`;
+  if (status.error) {
+    detail = html`<span style="color:var(--danger)">${status.error}</span>`;
+  } else if (!status.listening) {
+    detail = html`正在启动…`;
+  }
+  return html`
+    <button class="card share-banner" data-action="goto" data-page="share" title="查看局域网共享">
+      ${icon("router", "large")}
+      <div class="share-banner-text">
+        <div>局域网共享 · ${address ? html`<span class="mono">${address.ip}:${share.port}</span>` : "没有连上局域网"}</div>
+        <div class="setting-description">${detail}</div>
+      </div>
+      ${icon("chevron")}
+    </button>`;
+}
+
+// shareClientsProblem 与程序里的 parseShareClients 一致：检查允许的设备（IP 或网段），没有问题时返回空。
+function shareClientsProblem(text) {
+  const invalid = String(text || "").split(/[,，;\s]+/).filter(Boolean).filter((item) => {
+    const [address, bits, extra] = item.split("/");
+    if (extra !== undefined || (bits !== undefined && !/^\d{1,3}$/.test(bits))) {
+      return true;
+    }
+    if (/^(\d{1,3}\.){3}\d{1,3}$/.test(address)) {
+      return address.split(".").some((part) => Number(part) > 255) || Number(bits || 0) > 32;
+    }
+    return !(/^[0-9a-f:]+$/i.test(address) && address.includes(":")) || Number(bits || 0) > 128;
+  });
+  return invalid.length ? `认不出这些地址：${invalid.join("、")}（填 IP 或网段，例如 192.168.1.20、192.168.1.0/24）` : "";
+}
+
+// sharePortProblem 检查共享的端口，没有问题时返回空。
+function sharePortProblem(text) {
+  const port = Number(String(text).trim());
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+    return "端口需要在 1024~65535 之间";
+  }
+  if (port === app.config.core.port) {
+    return `不能和代理内核的端口 ${port} 相同`;
+  }
+  return "";
+}
+
+function shareStatusView() {
+  const share = app.state.core.share || {};
+  if (!app.state.config.share.enabled) {
+    return html`<span class="muted">未开启</span>`;
+  }
+  if (share.listening) {
+    return html`<span style="color:var(--success)">正在监听端口 <span class="numeric">${share.port}</span>，局域网里的设备可以连接</span>`;
+  }
+  if (share.error) {
+    return html`<span style="color:var(--danger);white-space:pre-wrap">${share.error}</span>`;
+  }
+  return html`<span class="muted" style="display:inline-flex;gap:6px;align-items:center"><span class="spinner" style="width:12px;height:12px"></span>正在启动…</span>`;
+}
+
+function shareAwakeView(share) {
+  switch (app.state.share.awake) {
+    case "holding":
+      return html`<span class="badge success">${icon("sun")}正在保持唤醒</span>`;
+    case "paused":
+      return html`<span class="badge warning">${icon("battery")}用电池供电，已暂停</span>`;
+  }
+  return html`<span class="badge">${share.enabled && share.keep_awake ? "未保持" : "共享开启后生效"}</span>`;
+}
+
+function shareAddressView(share) {
+  const addresses = app.state.share.addresses || [];
+  const primary = addresses[0];
+  const others = addresses.slice(1);
+  const guide = html`
+    <p class="caption muted share-guide"><strong>PS5</strong>：设置 → 网络 → 设置 → 设置互联网连接 → 选中正在用的网络 → 高级设置 → 代理服务器 → 使用，填上面的地址和端口。
+      <strong>Switch</strong>：设置 → 互联网 → 互联网设置 → 选中网络 → 更改设置 → 代理服务器设置 → 启用。手机、平板在 Wi-Fi 的「配置代理 → 手动」里填同样的地址。</p>
+    <p class="caption faint share-guide">电脑的 IP 变了设备就连不上了：建议在路由器里给这台电脑分配固定 IP。PS5 只把 HTTP / HTTPS 流量（商店、下载、登录、浏览器）交给代理，游戏联机的 UDP 流量仍然直连。</p>`;
+  if (!primary) {
+    return html`<div class="card share-address">
+      <div class="share-address-row">${icon("warning")}<div><div class="setting-title">这台电脑现在没有连上局域网</div><div class="setting-description">连上 Wi-Fi 或网线后，这里会显示设备上要填的地址。</div></div></div>
+      ${guide}</div>`;
+  }
+  const address = `${primary.ip}:${share.port}`;
+  return html`
+    <div class="card share-address">
+      <div class="share-address-row">
+        <div class="share-address-main">
+          <div class="share-address-value mono" id="share-address">${primary.ip} : ${share.port}</div>
+          <div class="setting-description">代理服务器地址填 <span class="mono">${primary.ip}</span>（这台电脑的「${primary.interface}」），端口填 <span class="mono">${share.port}</span></div>
+        </div>
+        <button class="button" data-action="copy-share-address" data-address="${address}">${icon("copy")}复制</button>
+      </div>
+      ${others.length ? html`<p class="caption muted share-guide">这台电脑还有别的网卡：${others.map((item) => `${item.interface} ${item.ip}`).join("、")}。设备要和电脑在同一个网络里才连得上，按实际情况选。</p>` : ""}
+      ${guide}
+    </div>`;
+}
+
+function shareActivityView() {
+  const activity = app.shareActivity || { clients: [], recent: [] };
+  const listening = Boolean(app.state.core.share && app.state.core.share.listening);
+  const clients = activity.clients.map((client) => html`
+    <div class="share-client">
+      ${icon("gamepad")}
+      <div class="share-client-text">
+        <div class="mono">${client.ip}</div>
+        <div class="caption muted">${client.connections} 个连接 · ↑ ${formatBytes(client.upload)} ↓ ${formatBytes(client.download)}${client.last_host ? ` · 最近 ${client.last_host}` : ""}${client.last_outbound ? ` → ${client.last_outbound}` : ""}</div>
+      </div>
+    </div>`);
+  const canAddRule = hasSubscriptions();
+  const recent = activity.recent.slice(0, 30).map((connection, index) => html`
+    <div class="share-connection">
+      <span class="mono share-connection-host" title="${connection.host}:${connection.port} · 来自 ${connection.client}">${connection.host}${connection.port && connection.port !== "443" && connection.port !== "80" ? `:${connection.port}` : ""}</span>
+      <span class="caption faint share-connection-rule" title="${connection.rule}">${connection.rule}</span>
+      <span class="share-connection-outbound ${connection.outbound === "DIRECT" ? "direct" : ""}">${connection.outbound === "DIRECT" ? "直连" : connection.outbound === "REJECT" ? "拦截" : connection.outbound}</span>
+      ${canAddRule && connection.host ? html`<button class="button subtle icon-only" data-action="share-rule-menu" data-index="${index}" title="为 ${connection.host} 添加自定义规则" aria-label="为 ${connection.host} 添加自定义规则">${icon("more")}</button>` : ""}
+    </div>`);
+  return html`
+    <div class="section-title">正在使用的设备</div>
+    <div class="card share-list">
+      ${clients.length ? html`${clients}<p class="caption faint" style="margin:6px 0 0">按来源 IP 归并，只统计现在还开着的连接。</p>`
+        : html`<p class="caption muted" style="margin:0">${listening ? "还没有设备经这台电脑上网。PS5 上设置好后，打开商店或者测试互联网连接就能在这里看到它。" : "共享开启后，这里会列出正在使用的设备。"}</p>`}
+    </div>
+    <div class="section-title">最近的连接
+      ${activity.recent.length ? html`<div class="actions"><button class="button subtle" data-action="share-clear">${icon("trash")}清空</button></div>` : ""}
+    </div>
+    <div class="card share-list">
+      ${recent.length ? html`<div class="share-connections">${recent}</div>
+        <p class="caption faint" style="margin:8px 0 0">PS5 的代理设置只对系统流量（联网测试、PSN、商店）和浏览器生效。打开 YouTube 这类应用时这里没有出现 youtube.com、googlevideo.com，说明那个应用没走代理，可以用 PS5 的浏览器打开同一个网站对照。域名一栏是 IP 时，说明设备自己解析的 DNS 被污染了，内核会从 TLS 握手里取回域名再分流。</p>`
+        : html`<p class="caption muted" style="margin:0">设备经共享入口发起的连接会按时间列在这里：访问了哪个网站、走的是哪个节点还是直连、命中了哪条规则。</p>`}
+    </div>`;
+}
+
+function sharePage() {
+  if (!app.config) {
+    return html`${pageHeader("局域网共享")}${configErrorView()}`;
+  }
+  const share = app.config.share;
+  const core = app.state.core;
+  const upstream = app.state.share.upstream;
+  const listening = Boolean(core.share && core.share.listening);
+  const test = app.shareTest || {};
+  let testView = "";
+  if (test.running) {
+    testView = html`<span class="test-result muted"><span class="spinner" style="width:12px;height:12px"></span>正在经共享端口访问测速地址…</span>`;
+  } else if (test.result) {
+    testView = test.result.ok
+      ? html`<span class="test-result" style="color:var(--success)">${icon("success")}${test.result.millis ? `${test.result.millis} ms · ` : ""}共享入口和上游都通。设备还连不上时，多半是 Windows 防火墙拦住了，或者设备和电脑不在同一个网络。</span>`
+      : html`<span class="test-result" style="color:var(--danger)">${icon("error")}${test.result.message}</span>`;
+  }
+  const firewall = app.state.platform === "windows" || app.state.platform === "dev";
+  const notice = !core.installed || core.installing || app.coreInstalling ? coreNotice("局域网共享") : "";
+  return html`
+    ${pageHeader("局域网共享", saveIndicator())}
+    <p class="muted" style="margin:-12px 0 16px">让 PS5、Switch、手机这些同一局域网里的设备把这台电脑当代理服务器，享受和本机一样的网络。</p>
+    ${notice}
+    <div class="card card-group">
+      ${settingCard({ iconName: "router", title: "允许局域网里的设备经这台电脑上网", description: shareStatusView(), control: html`<span class="switch-label">${share.enabled ? "开" : "关"}</span>${switchButton({ checked: app.state.config.share.enabled, action: "share-toggle", label: "局域网共享", disabled: app.busy })}` })}
+      ${settingCard({ iconName: "signpost", title: "现在转发到", description: html`<span class="${upstream.kind === "proxy" ? "mono" : ""}">${shareUpstreamText(upstream)}</span>`, note: upstream.reason ? html`<span style="color:var(--warning)">${upstream.reason}</span>` : "" })}
+    </div>
+    <p class="caption faint" style="margin:8px 2px 0">跟着本机走：本机开着订阅配置，共享的设备就用同样的节点和分流规则；本机用其他代理（公司代理、别的代理软件），就转发给它；本机没开代理，就经这台电脑直接上网。本机切换配置时，共享的设备几秒内跟着变。</p>
+
+    <div class="section-title">在 PS5 / Switch 上填写</div>
+    ${shareAddressView(share)}
+
+    <div class="section-title">谁能用、用哪个端口</div>
+    <div class="card card-group">
+      ${settingCard({ iconName: "shield", title: "允许的设备", description: "留空时同一局域网（10.x、172.16–31.x、192.168.x）里的任何设备都能用；在公共 Wi-Fi 上最好只填设备的 IP。本机自己总是允许的", control: html`<input class="input mono" style="width:240px" id="share-allowed" data-share-allowed value="${share.allowed}" placeholder="所有局域网设备" spellcheck="false" autocomplete="off" aria-label="允许的设备">`, note: app.shareInputError ? html`<span style="color:var(--danger)">${app.shareInputError}</span>` : "" })}
+      ${settingCard({ iconName: "link", title: "端口", description: html`默认 17892，不能和代理内核的端口（${app.config.core.port}）相同。改了端口，设备上也要跟着改`, control: html`<input class="input mono numeric" style="width:96px" id="share-port" data-share-port value="${share.port}" inputmode="numeric" spellcheck="false" aria-label="端口"><button class="button" data-action="share-test" ${listening && !test.running ? "" : raw("disabled")} title="从本机经共享端口访问测速地址">${icon("gauge")}测试</button>`, note: testView })}
+      ${firewall ? settingCard({ iconName: "shield", title: "Windows 防火墙", description: "第一次开启共享时 Windows 会询问是否允许 mihomo 访问网络，要点「允许」。点了取消、或者当前网络是「公用网络」时，设备会连不上：可以在这里放行（需要管理员权限）", control: html`<button class="button" data-action="share-firewall" ${app.shareFirewallBusy ? raw("disabled") : ""}>${icon("shield")}允许通过防火墙</button>` }) : ""}
+    </div>
+
+    <div class="section-title">保持唤醒</div>
+    <div class="card card-group">
+      ${settingCard({ iconName: "sun", title: "共享期间不让电脑睡眠", description: "电脑一睡，设备的网就断了。显示器照常可以关；合上笔记本的盖子仍然会睡眠。程序退出或关掉共享后恢复", control: html`${shareAwakeView(share)}${switchButton({ checked: share.keep_awake, setting: "share.keep_awake", label: "共享期间不让电脑睡眠" })}` })}
+      ${settingCard({ iconName: "battery", title: "用电池时也保持", description: "默认只在接着电源时保持，免得忘了关把电用光", control: switchButton({ checked: share.keep_awake_on_battery, setting: "share.keep_awake_on_battery", label: "用电池时也保持", disabled: !share.keep_awake }) })}
+    </div>
+
+    ${shareActivityView()}`;
 }
 
 // ---------- 自动切换 ----------
@@ -877,6 +1095,7 @@ function aboutPage() {
 ProxySwitch.exe off             关闭代理
 ProxySwitch.exe toggle          开 / 关切换
 ProxySwitch.exe use 配置名       切换到指定配置并开启
+ProxySwitch.exe share [on|off]  开关局域网共享（不写表示切换）
 ProxySwitch.exe status          查看状态（退出码 0 开启，1 关闭）
 ProxySwitch.exe settings        打开设置</pre></div>
     <div class="section-title">文件位置</div>
@@ -890,6 +1109,7 @@ ProxySwitch.exe settings        打开设置</pre></div>
 
 const pageRenderers = {
   proxies: proxiesPage,
+  share: sharePage,
   network: networkPage,
   general: generalPage,
   diagnostics: diagnosticsPage,
