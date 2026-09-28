@@ -112,20 +112,20 @@ func TestSettingsGuard(t *testing.T) {
 	if page.StatusCode != http.StatusOK || !strings.Contains(string(body), "<title>ProxySwitch 设置</title>") {
 		t.Errorf("应能打开页面，得到 %d", page.StatusCode)
 	}
-	if !strings.Contains(page.Header.Get("Content-Security-Policy"), "script-src 'self'") {
-		t.Error("页面应带 CSP")
+	if policy := page.Header.Get("Content-Security-Policy"); !strings.Contains(policy, "script-src 'self'") || !strings.Contains(policy, "font-src 'self'") {
+		t.Errorf("页面应带 CSP，允许自带的字体：%s", policy)
 	}
-	for _, asset := range []string{"/assets/settings.css", "/assets/core.js", "/assets/app.js"} {
+	for asset, contentType := range map[string]string{"/assets/settings.css": "text/css", "/assets/core.js": "text/javascript", "/assets/app.js": "text/javascript", "/assets/NotoSansSC-subset.woff2": "font/woff2"} {
 		response, err := http.Get(fixture.base + asset)
 		if err != nil {
 			t.Fatal(err)
 		}
 		response.Body.Close()
-		if response.StatusCode != http.StatusOK {
-			t.Errorf("%s 应能访问，得到 %d", asset, response.StatusCode)
+		if response.StatusCode != http.StatusOK || !strings.HasPrefix(response.Header.Get("Content-Type"), contentType) {
+			t.Errorf("%s 应能访问（%s），得到 %d %s", asset, contentType, response.StatusCode, response.Header.Get("Content-Type"))
 		}
 	}
-	for _, missing := range []string{"/assets/settings.html", "/assets/nothing.js", "/assets/../settings.go"} {
+	for _, missing := range []string{"/assets/settings.html", "/assets/nothing.js", "/assets/../settings.go", "/assets/NotoSansSC-OFL.txt"} {
 		response, err := http.Get(fixture.base + missing)
 		if err != nil {
 			t.Fatal(err)

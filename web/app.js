@@ -162,21 +162,26 @@ function applyAppearance() {
   const theme = currentTheme(app.config ? app.config.theme : "system");
   if (document.documentElement.dataset.theme !== theme) {
     document.documentElement.dataset.theme = theme;
-    // 独立窗口的标题栏跟随页面背景色；设置里选了固定的深浅色时两条都改成这个颜色。
+    // 独立窗口的标题栏跟随页面顶部的颜色；设置里选了固定的深浅色时两条都改成这个颜色。
     for (const meta of document.querySelectorAll('meta[name="theme-color"]')) {
-      meta.setAttribute("content", theme === "dark" ? "#202020" : "#f3f3f3");
+      meta.setAttribute("content", theme === "dark" ? "#141824" : "#e6ecf9");
     }
   }
   applyAccent(app.state.accent, theme);
   const status = app.state.status;
   const profile = findProfile(status.profile);
+  // 代理开着时窗口顶上泛一点配置的颜色。
+  let glow = "transparent";
   if (status.state === "on" && profile) {
     setFavicon(profile.color, true);
+    glow = profile.color;
   } else if (status.state === "external") {
     setFavicon(amberTrack, true);
+    glow = amberTrack;
   } else {
     setFavicon(grayTrack, false);
   }
+  document.documentElement.style.setProperty("--glow", glow);
 }
 
 darkQuery.addEventListener("change", () => {

@@ -459,34 +459,30 @@ function contrast(first, second) {
   return (light + 0.05) / (dark + 0.05);
 }
 
-// applyAccent 按系统强调色生成浅色 / 深色主题下的按钮色：浅色主题用深一些的颜色配白字，深色主题用浅一些的颜色配黑字。
+// applyAccent 按系统强调色生成两种颜色：填充色（开关、选中的导航和分段、主要按钮，配白字）保持鲜亮，只在白字看不清时
+// 调深；文字色（链接、强调的文字）在浅色主题下调深、深色主题下调浅，保证在底色上看得清。
 function applyAccent(hex, theme) {
   const base = parseColor(hex) || [0, 103, 192];
   const root = document.documentElement.style;
   const white = [255, 255, 255];
   const black = [0, 0, 0];
-  let accent;
-  let onAccent;
-  if (theme === "dark") {
-    accent = mixColor(base, white, 0.4);
-    for (let step = 0; step < 10 && contrast(accent, black) < 7; step++) {
-      accent = mixColor(accent, white, 0.15);
-    }
-    onAccent = black;
-  } else {
-    accent = mixColor(base, black, 0.15);
-    for (let step = 0; step < 10 && contrast(accent, white) < 4.5; step++) {
-      accent = mixColor(accent, black, 0.15);
-    }
-    onAccent = white;
+  const background = theme === "dark" ? [22, 24, 32] : [240, 242, 248];
+  let fill = theme === "dark" ? mixColor(base, white, 0.08) : base;
+  for (let step = 0; step < 12 && contrast(fill, white) < (theme === "dark" ? 3 : 3.4); step++) {
+    fill = mixColor(fill, black, 0.1);
   }
-  const background = theme === "dark" ? [32, 32, 32] : [243, 243, 243];
-  root.setProperty("--accent", toHex(accent));
-  root.setProperty("--accent-hover", toHex(mixColor(accent, background, 0.1)));
-  root.setProperty("--accent-pressed", toHex(mixColor(accent, background, 0.2)));
-  root.setProperty("--accent-text", toHex(accent));
-  root.setProperty("--accent-soft", `rgba(${accent.map(Math.round).join(",")},${theme === "dark" ? 0.16 : 0.09})`);
-  root.setProperty("--on-accent", toHex(onAccent));
+  let text = theme === "dark" ? mixColor(base, white, 0.3) : base;
+  for (let step = 0; step < 12 && contrast(text, background) < 4.5; step++) {
+    text = mixColor(text, theme === "dark" ? white : black, 0.12);
+  }
+  const rgb = fill.map(Math.round).join(",");
+  root.setProperty("--accent", toHex(fill));
+  root.setProperty("--accent-hover", toHex(mixColor(fill, white, 0.12)));
+  root.setProperty("--accent-pressed", toHex(mixColor(fill, black, 0.12)));
+  root.setProperty("--accent-text", toHex(text));
+  root.setProperty("--accent-soft", `rgba(${rgb},${theme === "dark" ? 0.22 : 0.11})`);
+  root.setProperty("--accent-ring", `rgba(${rgb},${theme === "dark" ? 0.45 : 0.3})`);
+  root.setProperty("--on-accent", "#ffffff");
 }
 
 // setFavicon 让窗口图标跟随代理状态。
