@@ -352,6 +352,7 @@ func (engine *Engine) RecordSubscription(profileId, address string, result subsc
 	engine.saveState()
 	slog.Info("订阅已更新", "profile", profile.Name, "nodes", result.Nodes)
 	engine.syncCore()
+	engine.CheckSubscriptionUsage()
 	if !loaded {
 		notice := Notice{Level: noticeInfo, Title: "订阅已就绪：" + profile.Name, Text: fmt.Sprintf("共 %d 个节点，可以开启了", result.Nodes), Icon: iconStateOn, Color: profile.Color, Tag: noticeTagSubscription}
 		if status := engine.Status(); status.State != statusOn || status.Profile == nil || status.Profile.Id != profile.Id {

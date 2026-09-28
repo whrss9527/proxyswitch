@@ -78,7 +78,11 @@ func (service *subscriptionService) Run() {
 func (service *subscriptionService) downloadDue() {
 	var due []Profile
 	var paths []string
-	if service.onEngine(func() { due, paths = service.engine.SubscriptionsDue(), service.engine.DownloadPaths() }) != nil {
+	if service.onEngine(func() {
+		// 到期是随时间临近的，不等下一次下载订阅，定时检查。
+		service.engine.CheckSubscriptionUsage()
+		due, paths = service.engine.SubscriptionsDue(), service.engine.DownloadPaths()
+	}) != nil {
 		return
 	}
 	for _, profile := range due {

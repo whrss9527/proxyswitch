@@ -813,6 +813,8 @@ type State struct {
 	RuleSets        map[string]*RuleSetInfo      `json:"rule_sets,omitempty"`
 	GeoAttempted    string                       `json:"geo_attempted,omitempty"`
 	Resume          string                       `json:"resume,omitempty"`
+	// UsageNotified 是每个订阅上次提醒过的流量和到期情况（「流量|到期」），见 CheckSubscriptionUsage。
+	UsageNotified map[string]string `json:"usage_notified,omitempty"`
 	// Synced 是上次和同步文件一致时配置里同步部分的摘要，SyncedFolder 是那时的同步文件夹：重启后用来判断本机改过没有。
 	Synced       string `json:"synced,omitempty"`
 	SyncedFolder string `json:"synced_folder,omitempty"`
