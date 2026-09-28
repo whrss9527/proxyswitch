@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // 从设置页的接口一路到真实的内核：下载订阅、列出节点、开启、切换节点、测速、检查订阅地址。
@@ -226,5 +227,23 @@ func TestSettingsRulesFlow(t *testing.T) {
 	}
 	if status, data := fixture.request(t, "POST", base+"/mode", map[string]string{"mode": "fast"}, nil); status == http.StatusOK || !strings.Contains(string(data), "fast") {
 		t.Errorf("不认识的模式应报错：%d %s", status, data)
+	}
+
+	// 自定义规则排在分流规则前面：按规则直连的网站可以固定走节点，走节点的可以拦截。
+	config := fixture.backend.engine.Config().Clone()
+	config.CustomRules = []CustomRule{{Value: "pinned.invalid", Policy: rulePolicyProxy}, {Value: coreTestHost, Policy: rulePolicyReject}}
+	if status, data := fixture.request(t, "PUT", "/api/config", config, nil); status != http.StatusOK {
+		t.Fatalf("保存自定义规则失败：%d %s", status, data)
+	}
+	var generation int
+	_ = fixture.backend.onEngine(func() { generation = fixture.backend.engine.CoreGeneration() })
+	if err := fixture.backend.core.Wait(generation, 10*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if viaNode, result := through("pinned.invalid"); !viaNode || result != "200 hello <nil>" {
+		t.Errorf("自定义规则让它走节点：%s", result)
+	}
+	if viaNode, _ := through(coreTestHost); viaNode {
+		t.Error("自定义规则拦截的网站不应经过节点")
 	}
 }

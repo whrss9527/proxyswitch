@@ -36,6 +36,8 @@ type CoreSettings struct {
 	GeoReady      bool
 	Rules         []string
 	RuleProviders map[string]CoreRuleProvider
+	// CustomRules 是自定义规则在内核里的写法，排在分流规则前面，全局代理时也生效。
+	CustomRules   []string
 	Subscriptions []CoreSubscription
 }
 
@@ -191,6 +193,7 @@ func coreConfigText(settings CoreSettings, controller, secret string) []byte {
 	}
 	config.ProxyGroups = append(config.ProxyGroups, coreGroup{Name: coreTopGroup, Type: "select", Proxies: subscriptionGroups})
 	config.Rules = append(config.Rules, corePrivateRules...)
+	config.Rules = append(config.Rules, settings.CustomRules...)
 	switch {
 	case settings.Mode == "global":
 	case len(settings.Rules) > 0:

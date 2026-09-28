@@ -526,6 +526,25 @@ def run_flows(page, api, info, config_path):
     check(saved["subscription"] == subscription_url and saved["mode"] == "rule" and saved.get("rules") == rules_url, "订阅配置和分流规则写入配置文件")
     card = ".profile:has-text('测试机场')"
     check(wait_until(lambda: "自定义规则 · 22 条" in page.inner_text(card), timeout=15), "保存后下载分流规则，列表显示规则数")
+
+    # 自定义规则：有订阅配置时代理页才显示；输入会整理成域名，已有的域名改去向。
+    page.fill("[data-focus=custom-rule-value]", "youtube")
+    page.press("[data-focus=custom-rule-value]", "Enter")
+    check("认不出「youtube」" in page.inner_text("[data-custom-rule-error]"), "自定义规则认不出的输入给出提示")
+    page.fill("[data-focus=custom-rule-value]", "https://www.YouTube.com/watch?v=1")
+    page.press("[data-focus=custom-rule-value]", "Enter")
+    custom_rules = lambda: read_config(config_path).get("custom_rules", [])
+    check(wait_until(lambda: custom_rules() == [{"value": "www.youtube.com", "policy": "proxy"}]), "添加自定义规则，网址整理成域名")
+    page.fill("[data-focus=custom-rule-value]", "10.1.2.3/8")
+    page.select_option("[data-focus=custom-rule-policy]", "direct")
+    page.click("[data-action=add-custom-rule]")
+    check(wait_until(lambda: len(custom_rules()) == 2 and custom_rules()[1] == {"value": "10.0.0.0/8", "policy": "direct"}), "IP 段的自定义规则")
+    page.select_option("select[data-custom-rule='0']", "reject")
+    check(wait_until(lambda: custom_rules()[0]["policy"] == "reject"), "修改自定义规则的去向")
+    page.click("[data-action=custom-rule-toggle][data-index='1']")
+    check(wait_until(lambda: custom_rules()[1].get("disabled") is True), "停用自定义规则")
+    page.click("[data-action=custom-rule-delete][data-index='1']")
+    check(wait_until(lambda: len(custom_rules()) == 1), "删除自定义规则")
     if CORE:
         check(wait_until(lambda: "5 个节点" in page.inner_text(card), timeout=10), "保存后下载订阅，列表显示节点数和流量")
         page.click(f"{card} [data-action=nodes]")

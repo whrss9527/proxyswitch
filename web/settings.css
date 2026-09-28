@@ -1622,6 +1622,55 @@ kbd.compact {
 /* ---------- 订阅的节点 ---------- */
 
 /* 滚动节点列表时搜索栏停在对话框顶部。 */
+/* 代理页的自定义规则。 */
+.custom-rules {
+  padding: 14px 16px;
+}
+
+.custom-rule-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.custom-rule {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.custom-rule-value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.custom-rule.disabled .custom-rule-value {
+  color: var(--text-3);
+  text-decoration: line-through;
+}
+
+.custom-rule .select,
+.custom-rule-add .select {
+  min-width: 96px;
+}
+
+.custom-rules-empty {
+  margin: 0 0 12px;
+}
+
+.custom-rule-add {
+  display: flex;
+  gap: 8px;
+}
+
+.custom-rule-add .input {
+  flex: 1;
+}
+
 /* 节点对话框顶部切换按规则分流和全局代理。 */
 .nodes-mode {
   display: flex;

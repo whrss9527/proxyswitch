@@ -88,6 +88,7 @@ func (engine *Engine) coreSettings() CoreSettings {
 	settings.Port = engine.config.Core.Port
 	settings.TestUrl = engine.config.TestUrl
 	settings.GeoReady = engine.geoReady()
+	settings.CustomRules = customRuleLines(engine.config.CustomRules)
 	for index := range engine.config.Profiles {
 		profile := &engine.config.Profiles[index]
 		if profile.IsSubscription() && engine.subscriptionLoaded(profile) {
