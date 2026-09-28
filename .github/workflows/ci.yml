@@ -2,10 +2,14 @@ name: ci
 
 # 推送代码和合并请求时运行：Linux 上跑单元测试和设置页的浏览器测试，Windows 上跑包括修改系统设置在内的全部测试。
 # 两边都下载 core_config.go 里固定版本的官方 mihomo 内核，测试订阅和内核管理。
+# 本仓库分支开的合并请求测试通过后自动合并进 main；合并后（或者直接推 main 测试通过后）CHANGELOG.md 最上面的版本
+# 还没有标签，就自动打标签、编译并发布（用 GITHUB_TOKEN 合并和打标签不会再触发工作流，所以在这里接着调用 release.yml）。
 on:
   push:
     branches: ["**"]
   pull_request:
+    # 草稿转成正式的合并请求时也要跑，才能自动合并。
+    types: [opened, synchronize, reopened, ready_for_review]
 
 jobs:
   linux:
@@ -72,3 +76,91 @@ jobs:
         env:
           PROXYSWITCH_TEST_REGISTRY: "1"
         run: go test -v ./...
+
+  auto-merge:
+    name: 自动合并
+    needs: [linux, windows]
+    # 本仓库分支上开的、合进 main 的合并请求（fork 来的和草稿除外），测试通过就合并。
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.base.ref == 'main' &&
+      !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      sha: ${{ steps.merge.outputs.sha }}
+    steps:
+      - name: 合并
+        id: merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE: ${{ github.event.pull_request.base.ref }}
+        run: |
+          state=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json state,headRefOid --jq '.state + " " + .headRefOid')
+          if [ "$state" != "OPEN $HEAD_SHA" ]; then
+            echo "合并请求已经关闭，或者又有了新的提交（现在是 ${state}），交给新的那次测试。"
+            exit 0
+          fi
+          # 测的是「分支合进当时的 main」的结果；main 之后又有了新提交，合并出来的东西就没测过，不合。
+          tested_base=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA" --jq '.parents[0].sha')
+          current_base=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$BASE" --jq '.object.sha')
+          if [ "$tested_base" != "$current_base" ]; then
+            echo "::error::测试之后 ${BASE} 又有了新提交（测的是 ${tested_base}，现在是 ${current_base}），没有合并。把 ${BASE} 合进分支再推一次，会重新测试并自动合并。"
+            exit 1
+          fi
+          # 变基合并：保留分支上的每个提交，main 保持线性；仓库不允许变基合并时依次退回压缩合并、普通合并。
+          if ! gh pr merge "$PR" --repo "$GITHUB_REPOSITORY" --rebase --match-head-commit "$HEAD_SHA"; then
+            if ! gh pr merge "$PR" --repo "$GITHUB_REPOSITORY" --squash --match-head-commit "$HEAD_SHA"; then
+              gh pr merge "$PR" --repo "$GITHUB_REPOSITORY" --merge --match-head-commit "$HEAD_SHA"
+            fi
+          fi
+          sha=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json mergeCommit --jq '.mergeCommit.oid')
+          [ -n "$sha" ] || { echo "::error::合并后没拿到合并提交"; exit 1; }
+          echo "已合并：$sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+  plan-release:
+    name: 看要不要发版
+    needs: [linux, windows, auto-merge]
+    # 刚自动合并进 main，或者直接推到 main 且测试通过。
+    if: >-
+      !cancelled() && needs.linux.result == 'success' && needs.windows.result == 'success' &&
+      (needs.auto-merge.outputs.sha != '' ||
+       (github.event_name == 'push' && github.ref == 'refs/heads/main'))
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.plan.outputs.tag }}
+      sha: ${{ steps.plan.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.auto-merge.outputs.sha || github.sha }}
+      - name: 读 CHANGELOG.md 最上面的版本
+        id: plan
+        run: |
+          version=$(sed -n 's/^## \([0-9][0-9.]*[0-9]\).*/\1/p' CHANGELOG.md | head -1)
+          [ -n "$version" ] || { echo "::error::CHANGELOG.md 里找不到版本号（格式是「## 2.3.0（2026-09-28）」）"; exit 1; }
+          if git ls-remote --exit-code --tags origin "refs/tags/v${version}" >/dev/null; then
+            echo "v${version} 已经发布过，这次不发版。要发版就在 CHANGELOG.md 最上面加一节新版本。"
+            exit 0
+          fi
+          echo "发布 v${version}，提交 $(git rev-parse HEAD)"
+          echo "tag=v${version}" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  release:
+    name: 发布新版本
+    needs: plan-release
+    if: needs.plan-release.outputs.tag != ''
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.plan-release.outputs.tag }}
+      ref: ${{ needs.plan-release.outputs.sha }}
+    secrets: inherit
