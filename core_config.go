@@ -280,9 +280,9 @@ func coreConfigText(settings CoreSettings, controller, secret string) []byte {
 	switch {
 	case settings.Mode == "global":
 	case len(settings.Rules) > 0:
-		// 地理数据还没下载时先跳过 GEOIP 规则：内核缺少数据会拒绝整个配置。
+		// 地理数据还没下载时先跳过 GEOIP 和 GEOSITE 规则：内核缺少数据会拒绝整个配置。
 		for _, rule := range settings.Rules {
-			if settings.GeoReady || !strings.HasPrefix(rule, "GEOIP,") {
+			if settings.GeoReady || !strings.HasPrefix(rule, "GEOIP,") && !strings.HasPrefix(rule, "GEOSITE,") {
 				config.Rules = append(config.Rules, rule)
 			}
 		}
