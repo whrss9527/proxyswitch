@@ -1381,8 +1381,21 @@ function networkPage() {
       <div class="network-quick">
         ${adapter.dns_suffix ? quickButton("dns_suffix", adapter.dns_suffix, "按 DNS 后缀") : ""}
         ${quickButton("gateway", adapter.gateway_mac || adapter.gateway, "按网关")}
+        ${quickButton("adapter", adapter.name, "按网卡")}
       </div>
     </div>`));
+  // 没有默认网关的网卡：VPN 的虚拟网卡（WireGuard、Tailscale、公司 VPN）以及 WSL、Hyper-V 这些虚拟网卡。
+  const gatewayNames = new Set(network.adapters.map((adapter) => adapter.name));
+  const others = (network.interfaces || []).filter((item) => !gatewayNames.has(item.name));
+  if (others.length) {
+    networkItems.push(html`
+    <div class="network-item">
+      <div>
+        <div class="caption muted">其他已连接的网卡（VPN、虚拟网卡），点一下按它添加规则</div>
+        <div class="network-chips">${others.map((item) => html`<button class="network-chip" data-action="quick-rule" data-match="adapter" data-value="${item.name}" title="${item.description || item.name}">${icon("plus")}<span>${item.name}</span></button>`)}</div>
+      </div>
+    </div>`);
+  }
 
   const matchBadge = !network.ssids.length && !network.adapters.length
     ? html`<span class="badge">未连接网络</span>`
@@ -1397,7 +1410,7 @@ function networkPage() {
         <span class="index">${index + 1}</span>
         <span class="word">连上</span>
         <select class="select" data-rule="${index}" data-rule-field="match" aria-label="条件">${Object.entries(matchLabels).map(([value, label]) => html`<option value="${value}" ${rule.match === value ? raw("selected") : ""}>${label}</option>`)}</select>
-        <span class="word">为</span>
+        <span class="word">${rule.match === "adapter" ? "包含" : "为"}</span>
         <input class="input mono" data-rule="${index}" data-rule-field="value" value="${rule.value}" spellcheck="false" aria-label="值" id="rule-${index}-value">
         <span class="word">时</span>
         <select class="select" data-rule="${index}" data-rule-field="action" aria-label="动作" title="${status.match_index === index ? "当前网络匹配这条规则" : ""}">${actionOptions.map(([value, label]) => html`<option value="${value}" ${actionValue === value ? raw("selected") : ""}>${label}</option>`)}</select>
@@ -1416,7 +1429,7 @@ function networkPage() {
       ${settingCard({
         iconName: "wifi",
         title: "按所在网络自动切换",
-        description: "连上公司 Wi-Fi 自动用公司的代理，回到家自动关闭。只在网络变化时动作，不会覆盖你的手动选择。",
+        description: "连上公司 Wi-Fi 或 VPN 自动用公司的代理，回到家自动关闭。只在网络变化时动作，不会覆盖你的手动选择。",
         control: html`<span class="switch-label">${autoSwitch.enabled ? "开" : "关"}</span>${switchButton({ checked: autoSwitch.enabled, setting: "auto_switch.enabled", label: "按网络自动切换" })}`,
       })}
     </div>

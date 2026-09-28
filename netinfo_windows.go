@@ -105,6 +105,7 @@ const (
 
 	adapterNextOffset         = 8
 	adapterDnsSuffixOffset    = 56
+	adapterDescriptionOffset  = 64
 	adapterFriendlyNameOffset = 72
 	adapterIfTypeOffset       = 100
 	adapterOperStatusOffset   = 104
@@ -113,7 +114,9 @@ const (
 	gatewaySockaddrOffset     = 16
 )
 
-func readAdapters() []NetworkAdapter {
+// readAdapters 读出有默认网关的网卡，以及所有已连接的网卡（包括没有默认网关的 VPN 虚拟网卡，不含回环和 TUN 模式的
+// 虚拟网卡）。
+func readAdapters() ([]NetworkAdapter, []NetworkInterface) {
 	size := uint32(16 << 10)
 	var buffer []byte
 	for attempt := 0; attempt < 3; attempt++ {
@@ -125,16 +128,23 @@ func readAdapters() []NetworkAdapter {
 			break
 		}
 		if result != errorBufferOverflow {
-			return nil
+			return nil, nil
 		}
 	}
 	var adapters []NetworkAdapter
+	var interfaces []NetworkInterface
 	macs := arpTable()
 	for adapter := unsafe.Pointer(&buffer[0]); adapter != nil; adapter = *(*unsafe.Pointer)(unsafe.Add(adapter, adapterNextOffset)) {
 		ifType := *(*uint32)(unsafe.Add(adapter, adapterIfTypeOffset))
 		if ifType == ifTypeSoftwareLoopback || *(*uint32)(unsafe.Add(adapter, adapterOperStatusOffset)) != ifOperStatusUp {
 			continue
 		}
+		name := utf16PointerToString(*(**uint16)(unsafe.Add(adapter, adapterFriendlyNameOffset)))
+		if strings.EqualFold(name, coreTunDevice) {
+			// TUN 模式自己的虚拟网卡：按网卡切换的规则不应该因为它动作。
+			continue
+		}
+		interfaces = append(interfaces, NetworkInterface{Name: name, Description: utf16PointerToString(*(**uint16)(unsafe.Add(adapter, adapterDescriptionOffset)))})
 		gateway := ""
 		for entry := *(*unsafe.Pointer)(unsafe.Add(adapter, adapterGatewayOffset)); entry != nil; entry = *(*unsafe.Pointer)(unsafe.Add(entry, gatewayNextOffset)) {
 			address := sockaddrIp(*(*unsafe.Pointer)(unsafe.Add(entry, gatewaySockaddrOffset)))
@@ -150,7 +160,7 @@ func readAdapters() []NetworkAdapter {
 			continue
 		}
 		networkAdapter := NetworkAdapter{
-			Name:      utf16PointerToString(*(**uint16)(unsafe.Add(adapter, adapterFriendlyNameOffset))),
+			Name:      name,
 			DnsSuffix: utf16PointerToString(*(**uint16)(unsafe.Add(adapter, adapterDnsSuffixOffset))),
 			Gateway:   gateway,
 			Wireless:  ifType == ifTypeIeee80211,
@@ -163,7 +173,7 @@ func readAdapters() []NetworkAdapter {
 		}
 		adapters = append(adapters, networkAdapter)
 	}
-	return adapters
+	return adapters, interfaces
 }
 
 const errorBufferOverflow = 111
@@ -249,13 +259,13 @@ func formatMac(bytes []byte) string {
 
 func readNetworkInfo() NetworkInfo {
 	ssids, hint := wifi.currentSsids()
-	adapters := readAdapters()
+	adapters, interfaces := readAdapters()
 	if len(ssids) == 0 && hint != "" {
 		if remembered := ssidsFromNetworkList(adapters); len(remembered) > 0 {
 			ssids, hint = remembered, ""
 		}
 	}
-	info := NetworkInfo{Ssids: ssids, SsidError: hint, Adapters: adapters}
+	info := NetworkInfo{Ssids: ssids, SsidError: hint, Adapters: adapters, Interfaces: interfaces}
 	info.Metered = cachedNetworkMetered(info.Signature())
 	return info
 }

@@ -15,16 +15,26 @@ type NetworkAdapter struct {
 	Wireless   bool   `json:"wireless"`
 }
 
-// NetworkInfo 是当前所在网络的特征，用于按网络自动切换。
+// NetworkInterface 是一块已连接的网卡，包括没有默认网关的 VPN 虚拟网卡：Name 是 Windows 里显示的名字（「以太网 2」
+// 「Tailscale」），Description 是网卡的型号（「WireGuard Tunnel」「Cisco AnyConnect Virtual Miniport Adapter」）。
+type NetworkInterface struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+// NetworkInfo 是当前所在网络的特征，用于按网络自动切换。Adapters 是有默认网关的网卡，Interfaces 是所有已连接的网卡
+// （不含回环和 TUN 模式的虚拟网卡）。
 type NetworkInfo struct {
-	Ssids     []string         `json:"ssids"`
-	SsidError string           `json:"ssid_error,omitempty"`
-	Adapters  []NetworkAdapter `json:"adapters"`
+	Ssids      []string           `json:"ssids"`
+	SsidError  string             `json:"ssid_error,omitempty"`
+	Adapters   []NetworkAdapter   `json:"adapters"`
+	Interfaces []NetworkInterface `json:"interfaces"`
 	// Metered 表示现在的网络按流量计费（手机热点、设成按流量计费的 Wi-Fi 等），不影响 Signature。
 	Metered bool `json:"metered,omitempty"`
 }
 
-// Signature 在网络没变时保持不变，变化时（换 Wi-Fi、插拔网线、连 VPN）随之改变。
+// Signature 在网络没变时保持不变，变化时（换 Wi-Fi、插拔网线、连上有默认网关的 VPN）随之改变。没有默认网关的网卡
+// 不算在内：WSL、Hyper-V 这些虚拟网卡随时出现和消失，按网卡名称的规则由 networkSignature 另外处理。
 func (info NetworkInfo) Signature() string {
 	var parts []string
 	for _, ssid := range info.Ssids {
@@ -85,8 +95,32 @@ func ruleMatches(rule NetRule, info NetworkInfo) bool {
 				return true
 			}
 		}
+	case "adapter":
+		// 网卡的名字或型号里包含这段文字，不区分大小写：填 WireGuard、Tailscale、AnyConnect 这样的就行。
+		wanted := strings.ToLower(value)
+		for _, networkInterface := range info.Interfaces {
+			if strings.Contains(strings.ToLower(networkInterface.Name), wanted) || strings.Contains(strings.ToLower(networkInterface.Description), wanted) {
+				return true
+			}
+		}
 	}
 	return false
+}
+
+// networkSignature 是网络的特征加上每条按网卡的规则是否命中：连上或断开规则里的 VPN 时随之改变，其他虚拟网卡
+// 出现或消失时不变，自动切换不会因此覆盖手动的选择。
+func networkSignature(info NetworkInfo, autoSwitch AutoSwitch) string {
+	signature := info.Signature()
+	if signature == "" {
+		// 断网期间不做自动切换。
+		return ""
+	}
+	for _, rule := range autoSwitch.Rules {
+		if rule.Match == "adapter" && ruleMatches(rule, info) {
+			signature += ";adapter:" + strings.ToLower(strings.TrimSpace(rule.Value))
+		}
+	}
+	return signature
 }
 
 // normalizeMac 把 aa:bb:cc:dd:ee:ff、AA-BB-CC-DD-EE-FF、aabb.ccdd.eeff 统一成 12 位小写十六进制；不是 MAC 时返回空串。
@@ -138,6 +172,8 @@ func describeRule(rule NetRule) string {
 		return "DNS 后缀「" + rule.Value + "」"
 	case "gateway":
 		return "网关「" + rule.Value + "」"
+	case "adapter":
+		return "网卡「" + rule.Value + "」"
 	}
 	return rule.Value
 }

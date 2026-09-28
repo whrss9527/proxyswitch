@@ -242,7 +242,7 @@ const defaultConfigText = `// ProxySwitch 配置文件。推荐在托盘菜单�
   // 按所在网络自动切换
   "auto_switch": {
     "enabled": false,
-    // match：ssid Wi-Fi 名称 / dns_suffix 网络的 DNS 后缀 / gateway 网关的 MAC 或 IP
+    // match：ssid Wi-Fi 名称 / dns_suffix 网络的 DNS 后缀 / gateway 网关的 MAC 或 IP / adapter 网卡的名字或型号里包含的文字（VPN）
     // action：use 使用 profile 指定的配置 / off 关闭代理；从上到下第一条匹配的规则生效
     "rules": [
       // { "match": "ssid", "value": "Office-WiFi", "action": "use", "profile": "公司代理" }
@@ -687,8 +687,8 @@ func validateAutoSwitch(config *Config) error {
 	autoSwitch := &config.AutoSwitch
 	for index, rule := range autoSwitch.Rules {
 		position := index + 1
-		if !containsString([]string{"ssid", "dns_suffix", "gateway"}, rule.Match) {
-			return fmt.Errorf("第 %d 条自动切换规则的条件 %q 不认识，可用：ssid / dns_suffix / gateway", position, rule.Match)
+		if !containsString([]string{"ssid", "dns_suffix", "gateway", "adapter"}, rule.Match) {
+			return fmt.Errorf("第 %d 条自动切换规则的条件 %q 不认识，可用：ssid / dns_suffix / gateway / adapter", position, rule.Match)
 		}
 		if rule.Value == "" {
 			return fmt.Errorf("第 %d 条自动切换规则没有填要匹配的值", position)

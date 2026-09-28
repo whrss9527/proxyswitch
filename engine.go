@@ -784,6 +784,9 @@ func (engine *Engine) UpdateNetwork(info NetworkInfo) {
 		engine.requestDownloads()
 	}
 	signature := info.Signature()
+	if engine.config != nil {
+		signature = networkSignature(info, engine.config.AutoSwitch)
+	}
 	if signature != engine.pendingSignature {
 		engine.pendingSignature = signature
 		return
