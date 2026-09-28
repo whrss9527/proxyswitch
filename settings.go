@@ -424,9 +424,10 @@ var assetTypes = map[string]string{
 	".css": "text/css; charset=utf-8",
 	".js":  "text/javascript; charset=utf-8",
 	".svg": "image/svg+xml",
+	".png": "image/png",
 }
 
-// handleAsset 提供页面的样式和脚本。它们不含任何数据，所以不要求 token。
+// handleAsset 提供页面的样式、脚本和图片。它们不含任何数据，所以不要求 token。
 func (settings *SettingsServer) handleAsset(writer http.ResponseWriter, request *http.Request) {
 	name := request.PathValue("name")
 	contentType, allowed := assetTypes[path.Ext(name)]
