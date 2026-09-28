@@ -310,8 +310,40 @@ function heroView() {
           ${saveExternal ? html`<button class="button" data-action="save-external">${icon("plus")}保存为配置</button>` : ""}
         </div>` : ""}
         ${hotkey ? html`<span class="caption faint" style="display:flex;gap:6px;align-items:center">快捷键 ${hotkeyKeys(hotkey)}</span>` : ""}
+        ${speedView()}
       </div>
     </div>`;
+}
+
+// formatSpeed 与程序里的同名函数一致：把字节/秒写成 0 B/s、12.3 KB/s、1.2 MB/s。
+function formatSpeed(bytesPerSecond) {
+  let value = Math.max(0, bytesPerSecond);
+  if (value < 1024) {
+    return `${Math.round(value)} B/s`;
+  }
+  for (const unit of ["KB/s", "MB/s", "GB/s"]) {
+    value /= 1024;
+    if (value < 10) {
+      return `${value.toFixed(2)} ${unit}`;
+    }
+    if (value < 100) {
+      return `${value.toFixed(1)} ${unit}`;
+    }
+    if (value < 1000 || unit === "GB/s") {
+      return `${Math.round(value)} ${unit}`;
+    }
+  }
+  return "";
+}
+
+// speedView 是开关卡片上的实时网速，每次同步状态时更新。
+function speedView() {
+  const speed = app.state.speed;
+  if (!speed || speed.mode === "none" || !speed.ready) {
+    return "";
+  }
+  const title = speed.mode === "core" ? "实时网速：只算经过内置代理内核的流量" : "实时网速：这台电脑所有网卡的总速度";
+  return html`<span class="caption muted numeric hero-speed" title="${title}"><span>↑ ${formatSpeed(speed.upload)}</span><span>↓ ${formatSpeed(speed.download)}</span></span>`;
 }
 
 function latencyBadge(profile) {
@@ -919,6 +951,7 @@ function generalPage() {
     <div class="card card-group">
       ${settingCard({ iconName: "mouse", title: "单击托盘图标", control: select("tray_click", config.tray_click, [["toggle", "开关代理"], ["settings", "打开设置"], ["menu", "显示菜单"]]) })}
       ${settingCard({ iconName: "mouse", title: "双击托盘图标", description: config.tray_double_click !== "none" ? "设置了双击后，单击要稍等一下才生效" : "", control: select("tray_double_click", config.tray_double_click, [["none", "不响应"], ["settings", "打开设置"], ["toggle", "开关代理"]]) })}
+      ${settingCard({ iconName: "gauge", title: "实时网速", description: "显示在托盘图标的提示和「代理」页的开关卡片上，每两秒更新一次", control: select("speed_display", config.speed_display, [["system", "系统网络总速度"], ["core", "只算内置代理"], ["none", "不显示"]]) })}
     </div>
 
     <div class="section-title">通知</div>

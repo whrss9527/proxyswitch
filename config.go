@@ -98,6 +98,7 @@ type Config struct {
 	TestUrl         string       `json:"test_url"`
 	Editor          string       `json:"editor"`
 	CheckUpdates    bool         `json:"check_updates"`
+	SpeedDisplay    string       `json:"speed_display"`
 	Core            CoreConfig   `json:"core"`
 	CustomRules     []CustomRule `json:"custom_rules"`
 	Share           ShareConfig  `json:"share"`
@@ -120,6 +121,7 @@ func defaultConfig() *Config {
 		SettingsWindow:  "app",
 		TestUrl:         defaultTestUrl,
 		CheckUpdates:    true,
+		SpeedDisplay:    speedSystem,
 		Core:            CoreConfig{Port: defaultCorePort},
 		CustomRules:     []CustomRule{},
 		Share:           ShareConfig{Port: defaultSharePort, KeepAwake: true},
@@ -168,6 +170,8 @@ const defaultConfigText = `// ProxySwitch 配置文件。推荐在托盘菜单�
   "editor": "",
   // 自动检查更新：每天最多访问一次 GitHub，发现新版本时在托盘提示
   "check_updates": true,
+  // 托盘图标的提示和设置页里显示的实时网速：system 系统网络总速度 / core 只算内置代理内核的流量 / none 不显示
+  "speed_display": "system",
 
   // 订阅使用的代理内核（mihomo）：path 留空使用 ProxySwitch 下载的内核，port 是它在本机提供代理的端口
   "core": { "path": "", "port": 17890 },
@@ -358,6 +362,7 @@ func normalizeConfig(config *Config) {
 	config.TrayDoubleClick = lowerTrim(config.TrayDoubleClick, "none")
 	config.Theme = lowerTrim(config.Theme, "system")
 	config.SettingsWindow = lowerTrim(config.SettingsWindow, "app")
+	config.SpeedDisplay = lowerTrim(config.SpeedDisplay, speedSystem)
 	config.TestUrl = strings.TrimSpace(config.TestUrl)
 	if config.TestUrl == "" {
 		config.TestUrl = defaultTestUrl
@@ -494,6 +499,7 @@ func validateConfig(config *Config) error {
 		{"tray_double_click", config.TrayDoubleClick, []string{"none", "settings", "toggle"}},
 		{"theme", config.Theme, []string{"system", "light", "dark"}},
 		{"settings_window", config.SettingsWindow, []string{"app", "browser"}},
+		{"speed_display", config.SpeedDisplay, []string{speedSystem, speedCore, speedNone}},
 		{"auto_switch.default_action", config.AutoSwitch.DefaultAction, []string{"keep", "off", "use"}},
 	}
 	for _, enum := range enums {

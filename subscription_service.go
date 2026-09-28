@@ -17,6 +17,7 @@ import (
 const (
 	subscriptionCheckInterval = 10 * time.Minute
 	shareRecordInterval       = 2 * time.Second
+	speedInterval             = 2 * time.Second
 	coreWaitTimeout           = 20 * time.Second
 	geoDownloadTimeout        = 5 * time.Minute
 )
@@ -31,9 +32,11 @@ type subscriptionService struct {
 	installing *InstallProgress
 	// rulesMutex 让分流规则同一时间只下载一份：每次下载成功都会删掉其他版本的文件，并发下载会删掉对方刚写的文件。
 	rulesMutex sync.Mutex
-	// shares 记下经局域网共享入口的连接；diagnose 是最近一次网址诊断。
-	shares   shareHistory
-	diagnose diagnoseRunner
+	// shares 记下经局域网共享入口的连接；diagnose 是最近一次网址诊断；speed 是实时网速。
+	shares     shareHistory
+	diagnose   diagnoseRunner
+	speedMutex sync.Mutex
+	speed      speedMeter
 }
 
 func newSubscriptionService(engine *Engine, core *Core, onEngine func(action func()) error) *subscriptionService {
@@ -54,6 +57,7 @@ func (service *subscriptionService) Kick() {
 // Run 在后台下载到期的订阅和地理数据，有新订阅时立即下载，否则每隔一段时间检查一次。
 func (service *subscriptionService) Run() {
 	go service.recordShares()
+	go service.watchSpeed()
 	ticker := time.NewTicker(subscriptionCheckInterval)
 	defer ticker.Stop()
 	for {
@@ -310,6 +314,7 @@ func (service *subscriptionService) fillState(state *SettingsState) {
 	if state.Config != nil {
 		state.Share.Addresses = localAddresses()
 	}
+	state.Speed = service.Speed()
 	if state.Status.State != statusOn || state.Config == nil || !status.Running {
 		return
 	}
@@ -350,6 +355,36 @@ func (service *subscriptionService) ShareActivity() ShareActivity {
 		}
 	}
 	return service.shares.record(connections)
+}
+
+// watchSpeed 每隔两秒按配置里的 speed_display 读一次累计收发的字节数（系统的物理网卡，或者只算内核），算出实时网速。
+func (service *subscriptionService) watchSpeed() {
+	for range time.Tick(speedInterval) {
+		mode := speedNone
+		_ = service.onEngine(func() {
+			if config := service.engine.Config(); config != nil {
+				mode = config.SpeedDisplay
+			}
+		})
+		var received, sent uint64
+		ok := false
+		switch mode {
+		case speedSystem:
+			received, sent, ok = readInterfaceTotals()
+		case speedCore:
+			received, sent, ok = service.core.TrafficTotals()
+		}
+		service.speedMutex.Lock()
+		service.speed.sample(mode, time.Now(), received, sent, ok)
+		service.speedMutex.Unlock()
+	}
+}
+
+// Speed 是最近算出的实时网速。
+func (service *subscriptionService) Speed() SpeedInfo {
+	service.speedMutex.Lock()
+	defer service.speedMutex.Unlock()
+	return service.speed.Info()
 }
 
 // recordShares 在局域网共享期间每隔几秒记下经共享入口的连接：内核只列出还开着的连接，这样一闪而过的短连接

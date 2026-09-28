@@ -38,6 +38,10 @@ func TestStructSizes(t *testing.T) {
 		{"JOBOBJECT_EXTENDED_LIMIT_INFORMATION", unsafe.Sizeof(jobObjectExtendedLimitInformation{}), 144},
 		{"SHELLEXECUTEINFOW", unsafe.Sizeof(shellExecuteInfo{}), 112},
 		{"SYSTEM_POWER_STATUS", unsafe.Sizeof(systemPowerStatus{}), 12},
+		{"MIB_IF_ROW2", unsafe.Sizeof(mibIfRow2{}), 1352},
+		{"MIB_IF_ROW2.InOctets", unsafe.Offsetof(mibIfRow2{}.inOctets), 1208},
+		{"MIB_IF_ROW2.OutOctets", unsafe.Offsetof(mibIfRow2{}.outOctets), 1280},
+		{"MIB_IF_ROW2.OperStatus", unsafe.Offsetof(mibIfRow2{}.operStatus), 1156},
 	}
 	for _, size := range sizes {
 		if size.actual != size.wanted {
@@ -216,4 +220,17 @@ func TestSleepGuard(t *testing.T) {
 		t.Errorf("关掉共享后应放开：%s", status)
 	}
 	onBatteryPower()
+}
+
+// 读到网卡累计收发的字节数，而且只会增加。
+func TestReadInterfaceTotals(t *testing.T) {
+	received, sent, ok := readInterfaceTotals()
+	if !ok {
+		t.Fatal("读不到网卡的收发字节数")
+	}
+	t.Logf("收 %d 字节，发 %d 字节", received, sent)
+	laterReceived, laterSent, _ := readInterfaceTotals()
+	if laterReceived < received || laterSent < sent {
+		t.Errorf("累计字节数不应变小：%d→%d %d→%d", received, laterReceived, sent, laterSent)
+	}
 }
