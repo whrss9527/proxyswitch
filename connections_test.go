@@ -296,6 +296,10 @@ func TestSettingsConnectionsWithCore(t *testing.T) {
 	if len(found.Chains) == 0 || found.Chains[0] != "节点 A" || found.Chains[len(found.Chains)-1] != coreTopGroup || found.Port != "80" || found.Network != "TCP" || found.Share || found.Rule == "" {
 		t.Errorf("连接的出口、规则不对：%+v", found)
 	}
+	// 内核查找每个连接来自哪个程序：这条连接是测试程序自己发起的。
+	if executable, err := os.Executable(); err == nil && !strings.EqualFold(found.Process, filepath.Base(executable)) {
+		t.Errorf("连接应显示发起它的程序 %s：%q", filepath.Base(executable), found.Process)
+	}
 	if view.Session.Download == 0 {
 		t.Errorf("应有内核这次运行的总流量：%+v", view.Session)
 	}
