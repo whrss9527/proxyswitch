@@ -16,6 +16,7 @@ import (
 
 const (
 	subscriptionCheckInterval = 10 * time.Minute
+	shareRecordInterval       = 2 * time.Second
 	coreWaitTimeout           = 20 * time.Second
 	geoDownloadTimeout        = 5 * time.Minute
 )
@@ -30,8 +31,9 @@ type subscriptionService struct {
 	installing *InstallProgress
 	// rulesMutex 让分流规则同一时间只下载一份：每次下载成功都会删掉其他版本的文件，并发下载会删掉对方刚写的文件。
 	rulesMutex sync.Mutex
-	// shares 记下经局域网共享入口的连接。
-	shares shareHistory
+	// shares 记下经局域网共享入口的连接；diagnose 是最近一次网址诊断。
+	shares   shareHistory
+	diagnose diagnoseRunner
 }
 
 func newSubscriptionService(engine *Engine, core *Core, onEngine func(action func()) error) *subscriptionService {
@@ -51,6 +53,7 @@ func (service *subscriptionService) Kick() {
 
 // Run 在后台下载到期的订阅和地理数据，有新订阅时立即下载，否则每隔一段时间检查一次。
 func (service *subscriptionService) Run() {
+	go service.recordShares()
 	ticker := time.NewTicker(subscriptionCheckInterval)
 	defer ticker.Stop()
 	for {
@@ -347,6 +350,16 @@ func (service *subscriptionService) ShareActivity() ShareActivity {
 		}
 	}
 	return service.shares.record(connections)
+}
+
+// recordShares 在局域网共享期间每隔几秒记下经共享入口的连接：内核只列出还开着的连接，这样一闪而过的短连接
+// 也能出现在「最近的连接」里，网址诊断也看得到。
+func (service *subscriptionService) recordShares() {
+	for range time.Tick(shareRecordInterval) {
+		if service.core.Status().Share.Listening {
+			service.ShareActivity()
+		}
+	}
 }
 
 // ClearShareHistory 清空共享页里「最近的连接」。

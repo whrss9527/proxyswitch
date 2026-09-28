@@ -381,7 +381,7 @@ func (history *shareHistory) clear() {
 	history.recent = nil
 }
 
-// recentFor 数最近的连接里访问 host（或它的子域名）的次数，网址诊断用。
+// recentFor 数最近的连接里设备访问 host（或它的子域名）的次数，网址诊断用。本机经共享入口的测试不算。
 func (history *shareHistory) recentFor(host string) int {
 	history.mutex.Lock()
 	defer history.mutex.Unlock()
@@ -389,7 +389,7 @@ func (history *shareHistory) recentFor(host string) int {
 	count := 0
 	for _, connection := range history.recent {
 		target := strings.ToLower(connection.Host)
-		if target == host || strings.HasSuffix(target, "."+host) {
+		if (target == host || strings.HasSuffix(target, "."+host)) && !isLocalHost(connection.Client) {
 			count++
 		}
 	}

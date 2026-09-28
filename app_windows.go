@@ -3,6 +3,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -25,6 +26,7 @@ const (
 	menuUpdate
 	menuShare
 	menuShareCopy
+	menuDiagnose
 	menuExit
 	menuTerminalBase = 50
 	menuProfileBase  = 100
@@ -451,6 +453,7 @@ func (app *App) menuItems() []MenuItem {
 	if status.State == statusOn {
 		items = append(items, MenuItem{Id: menuTest, Text: "测试代理连接"})
 	}
+	items = append(items, MenuItem{Id: menuDiagnose, Text: "网址诊断..."})
 	if status.State == statusOn && status.Profile.Server != "" {
 		var commands []MenuItem
 		for index, command := range terminalCommands(serverToUrl(status.Profile.Server), status.Profile.NoProxy) {
@@ -649,6 +652,8 @@ func (app *App) handleMenu(command uint32) {
 		_ = app.setShareFromUi(!config.Share.Enabled)
 	case command == menuShareCopy:
 		app.copyShareAddress()
+	case command == menuDiagnose:
+		app.openSettingsAt("diagnose", "")
 	case command == menuUpdate:
 		// 打开「关于」页并立即检查，有新版本时在那里一键更新。
 		app.openSettingsAt("about", "check-update")
@@ -762,6 +767,8 @@ func (app *App) onCopyData(data []byte) uintptr {
 		err = app.engine.UseProfile(argument)
 	case "share":
 		err = app.shareCommand(argument)
+	case "diagnose":
+		app.openDiagnose(argument)
 	case "settings":
 		app.openSettings()
 	default:
@@ -858,13 +865,29 @@ func (app *App) openSettings() {
 
 // openSettingsAt 打开设置页并切到 page；page 为空时保持设置页当前的页面。action 不为空时切换后执行页面上的这个操作。
 func (app *App) openSettingsAt(page, action string) {
+	app.openSettingsWith(page, action, "")
+}
+
+// openDiagnose 打开网址诊断页；request 是命令行的「网址\x00视角」，有网址时立即诊断。
+func (app *App) openDiagnose(request string) {
+	address, perspective, _ := strings.Cut(request, "\x00")
+	if strings.TrimSpace(address) == "" {
+		app.openSettingsAt("diagnose", "")
+		return
+	}
+	argument, _ := json.Marshal(map[string]string{"url": address, "perspective": perspective})
+	app.openSettingsWith("diagnose", "diagnose", string(argument))
+}
+
+// openSettingsWith 和 openSettingsAt 一样，argument 是交给页面操作的参数。
+func (app *App) openSettingsWith(page, action, argument string) {
 	address, err := app.settings.Start()
 	if err != nil {
 		app.notify(Notice{Level: noticeError, Title: "无法打开设置", Text: err.Error()})
 		return
 	}
 	if page != "" {
-		app.settings.ShowPage(page, action)
+		app.settings.ShowPageWith(page, action, argument)
 		address += "#" + page
 	}
 	mode := "app"
