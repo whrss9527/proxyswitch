@@ -66,6 +66,11 @@ type SettingsBackend interface {
 	ClearConnections()
 	ResetTraffic()
 	CheckExit(direct bool) error
+	EnableSync(folder string) error
+	ResolveSync(choice string) error
+	DisableSync() error
+	SyncNow()
+	OpenSyncFolder() error
 	AllowShareFirewall() error
 	StartDiagnose(address, perspective string) (DiagnoseJob, error)
 	Diagnose() DiagnoseJob
@@ -115,6 +120,8 @@ type SettingsState struct {
 	Links LinksInfo `json:"links"`
 	// Groups 是策略组的节点来源和它们在内核里的状态。
 	Groups GroupsInfo `json:"groups"`
+	// Sync 是配置同步的情况。
+	Sync SyncInfo `json:"sync"`
 }
 
 // GroupsInfo 是策略组的情况：Source 是节点来源（正在使用的订阅配置的 id，没有已下载的订阅时为空），
@@ -331,6 +338,11 @@ func (settings *SettingsServer) Start() (string, error) {
 	mux.HandleFunc("POST /api/connections/clear", settings.handleClearConnections)
 	mux.HandleFunc("POST /api/traffic/reset", settings.handleResetTraffic)
 	mux.HandleFunc("POST /api/exit/check", settings.handleCheckExit)
+	mux.HandleFunc("POST /api/sync/enable", settings.handleEnableSync)
+	mux.HandleFunc("POST /api/sync/resolve", settings.handleResolveSync)
+	mux.HandleFunc("POST /api/sync/disable", settings.handleDisableSync)
+	mux.HandleFunc("POST /api/sync/now", settings.handleSyncNow)
+	mux.HandleFunc("POST /api/sync/open", settings.handleOpenSyncFolder)
 	mux.HandleFunc("POST /api/links/clash", settings.handleClashLinks)
 	mux.HandleFunc("GET /api/loopback", settings.handleLoopback)
 	mux.HandleFunc("GET /api/programs", settings.handlePrograms)
@@ -937,6 +949,41 @@ func (settings *SettingsServer) handleCheckExit(writer http.ResponseWriter, requ
 		return
 	}
 	writeJson(writer, http.StatusOK, settings.backend.Connections())
+}
+
+// ---------- 配置同步 ----------
+
+func (settings *SettingsServer) handleEnableSync(writer http.ResponseWriter, request *http.Request) {
+	var body struct {
+		Folder string `json:"folder"`
+	}
+	if !decodeJsonBody(writer, request, &body) {
+		return
+	}
+	settings.respondState(writer, request, settings.backend.EnableSync(body.Folder))
+}
+
+func (settings *SettingsServer) handleResolveSync(writer http.ResponseWriter, request *http.Request) {
+	var body struct {
+		Choice string `json:"choice"`
+	}
+	if !decodeJsonBody(writer, request, &body) {
+		return
+	}
+	settings.respondState(writer, request, settings.backend.ResolveSync(body.Choice))
+}
+
+func (settings *SettingsServer) handleDisableSync(writer http.ResponseWriter, request *http.Request) {
+	settings.respondState(writer, request, settings.backend.DisableSync())
+}
+
+func (settings *SettingsServer) handleSyncNow(writer http.ResponseWriter, request *http.Request) {
+	settings.backend.SyncNow()
+	settings.respondState(writer, request, nil)
+}
+
+func (settings *SettingsServer) handleOpenSyncFolder(writer http.ResponseWriter, request *http.Request) {
+	settings.respondState(writer, request, settings.backend.OpenSyncFolder())
 }
 
 // handleFlushDns 清除这台电脑的 DNS 缓存。

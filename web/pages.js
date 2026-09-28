@@ -1,6 +1,6 @@
 "use strict";
 
-// 各页面的内容：代理、分流规则、连接、局域网共享、网址诊断、自动切换、常规、系统集成、诊断、关于。每个函数根据 app 里的状态生成整页 HTML。
+// 各页面的内容：代理、分流规则、连接、局域网共享、网址诊断、自动切换、配置同步、常规、系统集成、诊断、关于。每个函数根据 app 里的状态生成整页 HTML。
 
 const pages = [
   { id: "proxies", label: "代理", icon: "globe" },
@@ -9,6 +9,7 @@ const pages = [
   { id: "share", label: "局域网共享", icon: "router" },
   { id: "diagnose", label: "网址诊断", icon: "stethoscope" },
   { id: "network", label: "自动切换", icon: "wifi" },
+  { id: "sync", label: "配置同步", icon: "cloud" },
   { id: "general", label: "常规", icon: "sliders" },
   { id: "system", label: "系统集成", icon: "windows" },
   { id: "diagnostics", label: "诊断", icon: "pulse" },
@@ -1448,6 +1449,105 @@ function networkPage() {
     </div>`;
 }
 
+// ---------- 配置同步 ----------
+
+// syncTimeText 把改动时间写成「今天 10:32」「昨天 18:05」「9月27日 18:05」。
+function syncTimeText(iso) {
+  const date = new Date(iso);
+  if (!iso || Number.isNaN(date.getTime())) {
+    return "";
+  }
+  const pad = (value) => String(value).padStart(2, "0");
+  const time = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  const today = new Date();
+  if (date.toDateString() === today.toDateString()) {
+    return `今天 ${time}`;
+  }
+  if (date.toDateString() === new Date(today.getTime() - 86400000).toDateString()) {
+    return `昨天 ${time}`;
+  }
+  const day = `${date.getMonth() + 1}月${date.getDate()}日 ${time}`;
+  return date.getFullYear() === today.getFullYear() ? day : `${date.getFullYear()}年${day}`;
+}
+
+function syncDeviceText(sync, device) {
+  return device === sync.this ? "这台电脑" : `「${device}」`;
+}
+
+function syncStatusView(sync) {
+  if (sync.pending) {
+    return "同步文件夹里已经有一份配置，选好怎么处理后开启";
+  }
+  if (!sync.enabled) {
+    return "配置只保存在这台电脑上";
+  }
+  if (sync.state === "error") {
+    return html`<span style="color:var(--danger)">${sync.message}</span>`;
+  }
+  if (sync.state === "synced") {
+    const when = syncTimeText(sync.updated);
+    return html`<span style="color:var(--success)">已同步</span>${sync.device ? ` · 最近的改动来自${syncDeviceText(sync, sync.device)}${when ? `，${when}` : ""}` : ""}`;
+  }
+  return html`<span class="muted" style="display:inline-flex;gap:6px;align-items:center"><span class="spinner" style="width:12px;height:12px"></span>正在同步</span>`;
+}
+
+// syncPendingView 是开启时同步文件夹里已经有另一份配置：三种处理方式。
+function syncPendingView(sync) {
+  const pending = sync.pending;
+  const when = syncTimeText(pending.updated);
+  const choices = [
+    ["folder", "download", "用同步文件夹里的", "这台电脑的代理配置、规则和设置换成同步文件夹里的"],
+    ["merge", "layers", "合并两边", "以同步文件夹里的为准，这台电脑独有的代理配置和规则加进去"],
+    ["local", "upload", "用这台电脑的", "同步文件夹里的换成这台电脑的，其他电脑跟着变"],
+  ];
+  return html`
+    <div class="infobar info" id="sync-pending">
+      ${icon("cloud")}
+      <div class="infobar-body">
+        <div class="infobar-title">同步文件夹里已经有一份配置</div>
+        <div style="margin-top:4px">来自「${pending.device || "另一台电脑"}」${when ? `，${when} 改动` : ""}，有 ${pending.profiles} 个代理配置；这台电脑有 ${pending.local_profiles} 个。两份不一样，要怎么处理？</div>
+        <div class="choices" style="margin-top:12px">
+          ${choices.map(([choice, iconName, title, description]) => html`<button class="choice" data-action="sync-resolve" data-choice="${choice}" ${app.busy ? raw("disabled") : ""}>${icon(iconName)}<strong>${title}</strong><span>${description}</span></button>`)}
+        </div>
+        <div class="infobar-actions"><button class="button subtle" data-action="sync-resolve" data-choice="cancel" ${app.busy ? raw("disabled") : ""}>先不开启</button></div>
+      </div>
+    </div>`;
+}
+
+function syncPage() {
+  if (!app.config) {
+    return html`${pageHeader("配置同步")}${configErrorView()}`;
+  }
+  const sync = app.state.sync;
+  const enabled = sync.enabled;
+  const folder = app.syncFolderDraft !== null ? app.syncFolderDraft : app.config.sync.folder;
+  let folderHint = html`<span class="mono selectable">${sync.folder}</span>`;
+  if (!enabled) {
+    folderHint = sync.default_folder
+      ? html`留空时用 OneDrive 里的 <span class="mono selectable">${sync.default_folder}</span>；也可以填坚果云、Dropbox、NAS 共享里的文件夹`
+      : "没有找到 OneDrive：填一个会在电脑之间同步的文件夹，例如坚果云、Dropbox、NAS 共享里的";
+  }
+  const folderControl = enabled
+    ? html`<button class="button" data-action="sync-open">${icon("folder")}打开</button><button class="button" data-action="sync-now" ${app.busy ? raw("disabled") : ""}>${icon("refresh")}立即同步</button>`
+    : html`<input class="input mono" style="width:300px" id="sync-folder" data-sync-folder value="${folder}" placeholder="${sync.default_folder || "例如 D:\\坚果云\\ProxySwitch"}" spellcheck="false" autocomplete="off" aria-label="同步文件夹">`;
+  return html`
+    ${pageHeader("配置同步")}
+    <p class="muted" style="margin:-12px 0 16px">在几台电脑之间同步代理配置、分流规则和设置：放在 OneDrive 或任意会同步的文件夹里，一台改了，其他几台几秒内跟着变。</p>
+    ${sync.pending ? syncPendingView(sync) : ""}
+    <div class="card card-group">
+      ${settingCard({ iconName: "cloud", title: "同步配置", description: syncStatusView(sync), control: html`<span class="switch-label">${enabled ? "开" : "关"}</span>${switchButton({ checked: enabled, action: "sync-toggle", label: "同步配置", disabled: app.busy || Boolean(sync.pending) })}` })}
+      ${settingCard({ iconName: "folder", title: "同步文件夹", description: folderHint, control: folderControl })}
+    </div>
+    <p class="caption faint" style="margin:8px 2px 0">${enabled ? "要换文件夹，先关掉同步再填新的。关掉同步不会删除同步文件夹里的文件，其他电脑照常同步。" : `每台电脑都在这里开启、选同一个文件夹。这台电脑的名字是「${sync.this}」。`}</p>
+
+    <div class="section-title">同步哪些</div>
+    <div class="card card-group">
+      ${settingCard({ iconName: "check", title: "一起同步", description: "代理配置（包括订阅地址和选中的节点）、策略组、自定义规则、规则集、其余流量的去向、自动切换规则，以及快捷键、托盘、通知、连接这些常规设置" })}
+      ${settingCard({ iconName: "monitor", title: "每台电脑各自的", description: "代理内核的位置和端口、TUN 模式、局域网共享、编辑器。订阅的节点和规则集由每台电脑自己下载" })}
+      ${settingCard({ iconName: "clock", title: "两台电脑都改了", description: "以改得晚的为准。OneDrive、Dropbox 留下的冲突副本会自动处理掉" })}
+    </div>`;
+}
+
 // ---------- 常规 ----------
 
 function hotkeyRecorder(setting, value) {
@@ -1942,6 +2042,7 @@ const pageRenderers = {
   share: sharePage,
   diagnose: diagnosePage,
   network: networkPage,
+  sync: syncPage,
   general: generalPage,
   system: systemPage,
   diagnostics: diagnosticsPage,
