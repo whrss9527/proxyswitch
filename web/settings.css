@@ -1763,6 +1763,111 @@ kbd.compact {
   min-width: 24px;
 }
 
+/* ---------- 网址诊断 ---------- */
+
+.diagnose-form {
+  padding: 16px 18px;
+}
+
+.diagnose-input {
+  display: flex;
+  gap: 8px;
+}
+
+.diagnose-input .input {
+  flex: 1;
+}
+
+.diagnose-perspective {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.diagnose-rows {
+  padding: 6px 16px;
+}
+
+.diagnose-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 0;
+}
+
+.diagnose-row + .diagnose-row {
+  border-top: 1px solid var(--divider);
+}
+
+.diagnose-mark {
+  display: inline-flex;
+  width: 18px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+
+.diagnose-mark .icon {
+  width: 18px;
+  height: 18px;
+}
+
+.diagnose-row.pending .diagnose-mark,
+.diagnose-row.skipped .diagnose-mark {
+  color: var(--text-3);
+}
+
+.diagnose-row.pass .diagnose-mark {
+  color: var(--success);
+}
+
+.diagnose-row.warn .diagnose-mark {
+  color: var(--warning);
+}
+
+.diagnose-row.fail .diagnose-mark {
+  color: var(--danger);
+}
+
+.diagnose-row-text {
+  min-width: 0;
+}
+
+.diagnose-row-title {
+  font-weight: 600;
+  line-height: 20px;
+}
+
+.diagnose-verdict {
+  padding: 16px 18px;
+}
+
+.diagnose-headline {
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 24px;
+}
+
+.diagnose-explanation {
+  margin: 6px 0 0;
+  color: var(--text-2);
+  line-height: 20px;
+}
+
+.diagnose-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.selectable {
+  user-select: text;
+}
+
 /* ---------- 订阅的节点 ---------- */
 
 /* 滚动节点列表时搜索栏停在对话框顶部。 */
