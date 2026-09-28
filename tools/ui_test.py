@@ -667,8 +667,10 @@ def run_flows(page, api, info, config_path):
     check(wait_until(lambda: len(custom_rules()) == 2 and custom_rules()[1] == {"type": "program", "value": "Telegram.exe", "policy": "direct"}), "添加按程序分流的规则")
     check(wait_until(lambda: "程序" in page.inner_text(".custom-rule-list")), "程序规则在列表里标出来")
     page.fill("[data-focus=custom-rule-value]", "a,b")
-    page.press("[data-focus=custom-rule-value]", "Enter")
-    check(wait_until(lambda: "写得不对" in page.inner_text("[data-custom-rule-error]")), "程序名不对时给出提示")
+    # 保存的结果回来时页面会重绘（开着内核时要等内核重新加载，可能正好在输入的时候），正在输入的框不能丢掉焦点。
+    page.evaluate("renderPage()")
+    page.keyboard.press("Enter")
+    check(wait_until(lambda: "写得不对" in page.inner_text("[data-custom-rule-error]")), "程序名不对时给出提示（页面重绘后焦点还在输入框）")
     page.evaluate("renderPage()")
     check("写得不对" in page.inner_text("[data-custom-rule-error]"), "页面随状态刷新后提示还在")
     page.fill("[data-focus=custom-rule-value]", "")
