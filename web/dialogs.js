@@ -1363,3 +1363,103 @@ function openRuleDialog(prefill = {}) {
     },
   });
 }
+
+// ---------- 商店应用 ----------
+
+// openLoopbackDialog 列出商店应用，勾选的可以连接本机的代理，保存时要管理员确认。
+function openLoopbackDialog() {
+  const info = app.loopback && app.loopback.info;
+  if (!info) {
+    return;
+  }
+  const view = { query: "", selected: new Set(info.apps.filter((item) => item.exempt).map((item) => item.sid)), saving: false };
+  const visible = () => {
+    const query = view.query.trim().toLowerCase();
+    return info.apps.filter((item) => !query || item.name.toLowerCase().includes(query) || item.package.toLowerCase().includes(query));
+  };
+  const list = () => {
+    const apps = visible();
+    if (apps.length === 0) {
+      return html`<p class="caption muted" style="padding:12px 10px">没有找到应用</p>`;
+    }
+    return apps.map((item) => html`
+      <label class="checkbox">
+        <input type="checkbox" data-loopback-sid="${item.sid}" ${view.selected.has(item.sid) ? raw("checked") : ""}>
+        <span class="checkbox-text">${item.name}<small class="mono">${item.package}</small></span>
+      </label>`);
+  };
+  const dialog = openDialog({
+    className: "wide",
+    render: () => html`
+      <div class="dialog-body">
+        <h2 class="dialog-title">让商店应用走代理</h2>
+        <p class="caption muted" style="margin:-8px 0 14px">勾选的应用可以连接本机的代理。保存时要管理员确认，重新打开这些应用后生效。</p>
+        <div class="nodes-toolbar">
+          <input class="input" type="search" data-focus="loopback-search" value="${view.query}" placeholder="搜索应用" aria-label="搜索应用" spellcheck="false" autocomplete="off">
+          <button class="button" data-action="loopback-select-all">全选</button>
+          <button class="button" data-action="loopback-select-none">全不选</button>
+        </div>
+        <div class="loopback-list" data-loopback-list>${list()}</div>
+      </div>
+      <div class="dialog-footer">
+        <div class="left"><span class="caption muted" data-loopback-selected>已选 ${view.selected.size} 个</span></div>
+        <button class="button accent" data-action="loopback-save" ${view.saving ? raw("disabled") : ""}>${view.saving ? html`<span class="spinner"></span>` : ""}保存</button>
+        <button class="button" data-action="dialog-cancel">取消</button>
+      </div>`,
+    onMount: (instance) => {
+      const element = instance.element;
+      const refreshList = () => {
+        setHtml(element.querySelector("[data-loopback-list]"), html`${list()}`);
+        setHtml(element.querySelector("[data-loopback-selected]"), html`已选 ${view.selected.size} 个`);
+      };
+      // 搜索和勾选时只重绘列表，不重建输入框，避免打断中文输入法。
+      element.addEventListener("input", (event) => {
+        if (event.target.dataset.focus === "loopback-search") {
+          view.query = event.target.value;
+          refreshList();
+        }
+      });
+      element.addEventListener("change", (event) => {
+        const sid = event.target.dataset.loopbackSid;
+        if (sid) {
+          if (event.target.checked) {
+            view.selected.add(sid);
+          } else {
+            view.selected.delete(sid);
+          }
+          setHtml(element.querySelector("[data-loopback-selected]"), html`已选 ${view.selected.size} 个`);
+        }
+      });
+      element.addEventListener("click", async (event) => {
+        const button = event.target.closest("[data-action]");
+        if (!button || button.disabled) {
+          return;
+        }
+        switch (button.dataset.action) {
+          case "loopback-select-all":
+            visible().forEach((item) => view.selected.add(item.sid));
+            refreshList();
+            break;
+          case "loopback-select-none":
+            visible().forEach((item) => view.selected.delete(item.sid));
+            refreshList();
+            break;
+          case "loopback-save":
+            view.saving = true;
+            dialog.render();
+            if (await saveLoopback([...view.selected])) {
+              instance.close(true);
+            } else if (!instance.closed) {
+              view.saving = false;
+              dialog.render();
+            }
+            break;
+          case "dialog-cancel":
+            instance.close(false);
+            break;
+        }
+      });
+    },
+  });
+  return dialog;
+}

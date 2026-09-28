@@ -383,6 +383,23 @@ def run_flows(page, api, info, config_path):
     check(wait_until(lambda: "机场网站的一键导入" not in page.inner_text(".page")), "关闭网页链接时不再显示一键导入")
     page.click("button.switch[data-setting=url_links]")
     check(wait_until(lambda: read_config(config_path)["url_links"] is True), "重新开启网页链接")
+    # 商店应用：显示已允许的个数，在对话框里勾选后保存（Windows 上要管理员确认），也可以一键全部允许。
+    check(wait_until(lambda: "已允许 1 / 4 个" in page.inner_text(".page")), "列出商店应用和已允许的个数")
+    page.click("[data-action=loopback-choose]")
+    page.wait_for_selector(".dialog [data-loopback-sid]")
+    page.fill(".dialog [data-focus=loopback-search]", "net")
+    check(page.locator(".dialog [data-loopback-sid]").count() == 1, "搜索商店应用")
+    page.check(".dialog [data-loopback-sid='S-1-15-2-1002']")
+    page.fill(".dialog [data-focus=loopback-search]", "")
+    check(page.locator(".dialog [data-loopback-sid]").count() == 4 and "已选 2 个" in page.inner_text(".dialog"), "清空搜索后勾选的还在")
+    shot(page, "08_loopback")
+    page.click(".dialog [data-action=loopback-save]")
+    page.wait_for_selector(".dialog", state="detached")
+    check(wait_until(lambda: "已允许 2 / 4 个" in page.inner_text(".page")), "保存勾选的商店应用")
+    loopback = api.call("GET", "/api/loopback")["apps"]
+    check([item["name"] for item in loopback if item["exempt"]] == ["Netflix", "Xbox"], "允许的是勾选的应用")
+    page.click("[data-action=loopback-all]")
+    check(wait_until(lambda: "已允许 4 / 4 个" in page.inner_text(".page") and page.locator("[data-action=loopback-all]").count() == 0), "一键允许全部商店应用")
     page.click("[data-page=general]")
 
     # ---------- 配置文件被手动修改 ----------

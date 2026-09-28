@@ -37,6 +37,8 @@ func TestStructSizes(t *testing.T) {
 		{"WINHTTP_PROXY_INFO", unsafe.Sizeof(winHttpProxyInfo{}), 24},
 		{"JOBOBJECT_EXTENDED_LIMIT_INFORMATION", unsafe.Sizeof(jobObjectExtendedLimitInformation{}), 144},
 		{"SHELLEXECUTEINFOW", unsafe.Sizeof(shellExecuteInfo{}), 112},
+		{"INET_FIREWALL_APP_CONTAINER", unsafe.Sizeof(inetFirewallAppContainer{}), 88},
+		{"SID_AND_ATTRIBUTES", unsafe.Sizeof(sidAndAttributes{}), 16},
 		{"SYSTEM_POWER_STATUS", unsafe.Sizeof(systemPowerStatus{}), 12},
 		{"MIB_IF_ROW2", unsafe.Sizeof(mibIfRow2{}), 1352},
 		{"MIB_IF_ROW2.InOctets", unsafe.Offsetof(mibIfRow2{}.inOctets), 1208},

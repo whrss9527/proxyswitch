@@ -294,6 +294,9 @@ function goto(pageId) {
   if (pageId === "share") {
     refreshShareActivity().catch(() => {});
   }
+  if (pageId === "system" && (!app.loopback || app.loopback.error)) {
+    refreshLoopback();
+  }
   if (pageId === "diagnose" && !app.diagnoseJob) {
     loadDiagnose();
   }
@@ -642,6 +645,37 @@ async function testShare() {
     app.shareTest = { result: { ok: false, message: error.message } };
   }
   renderPage();
+}
+
+// refreshLoopback 读取商店应用和它们能不能连接本机的代理（系统集成页）。
+async function refreshLoopback() {
+  app.loopback = { loading: true };
+  renderPage();
+  try {
+    app.loopback = { info: await api("GET", "/api/loopback") };
+  } catch (error) {
+    app.loopback = { error: error.message || "读不到应用" };
+  }
+  renderPage();
+}
+
+// saveLoopback 让 exempt 这些商店应用可以连接本机的代理（要管理员确认），成功时返回 true。
+async function saveLoopback(exempt) {
+  app.loopback = { ...app.loopback, saving: true };
+  renderPage();
+  try {
+    app.loopback = { info: await api("POST", "/api/loopback", { exempt }) };
+    toast("重新打开这些应用后生效", "success", "已修改商店应用的设置");
+    return true;
+  } catch (error) {
+    app.loopback = { ...app.loopback, saving: false };
+    if (error.status !== 0 && error.status !== 403) {
+      toast(error.message, "warning", "没有修改");
+    }
+    return false;
+  } finally {
+    renderPage();
+  }
 }
 
 async function allowShareFirewall() {
@@ -1022,6 +1056,9 @@ const actions = {
   },
   "share-test": () => testShare(),
   "share-firewall": () => allowShareFirewall(),
+  "loopback-refresh": () => refreshLoopback(),
+  "loopback-all": () => app.loopback && app.loopback.info && saveLoopback(app.loopback.info.apps.map((item) => item.sid)),
+  "loopback-choose": () => openLoopbackDialog(),
   "take-over-clash-links": () => runOperation("/api/links/clash", {}, "机场网站的「一键导入 Clash」现在会打开 ProxySwitch", "没有改过来"),
   "share-clear": async () => {
     try {
@@ -1300,6 +1337,9 @@ async function start() {
     }
     if (app.page === "share") {
       refreshShareActivity().catch(() => {});
+    }
+    if (app.page === "system") {
+      refreshLoopback();
     }
     // 窗口是为程序的请求打开的（地址里就是请求的页面），例如托盘菜单的「检查更新」：执行请求的操作。
     const requested = state.navigate && state.navigate.page === initialPage && state.navigate.action;

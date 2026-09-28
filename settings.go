@@ -65,6 +65,8 @@ type SettingsBackend interface {
 	Diagnose() DiagnoseJob
 	CancelDiagnose()
 	TakeOverClashLinks() error
+	LoopbackApps() (LoopbackInfo, error)
+	SetLoopback(exempt []string) (LoopbackInfo, error)
 }
 
 type SettingsState struct {
@@ -299,6 +301,8 @@ func (settings *SettingsServer) Start() (string, error) {
 	mux.HandleFunc("POST /api/share/clear", settings.handleShareClear)
 	mux.HandleFunc("POST /api/share/firewall", settings.handleShareFirewall)
 	mux.HandleFunc("POST /api/links/clash", settings.handleClashLinks)
+	mux.HandleFunc("GET /api/loopback", settings.handleLoopback)
+	mux.HandleFunc("POST /api/loopback", settings.handleSetLoopback)
 	mux.HandleFunc("GET /api/diagnose", settings.handleDiagnose)
 	mux.HandleFunc("POST /api/diagnose", settings.handleStartDiagnose)
 	mux.HandleFunc("POST /api/diagnose/cancel", settings.handleCancelDiagnose)
@@ -833,6 +837,33 @@ func (settings *SettingsServer) handleShareActivity(writer http.ResponseWriter, 
 func (settings *SettingsServer) handleShareClear(writer http.ResponseWriter, request *http.Request) {
 	settings.backend.ClearShareHistory()
 	writeJson(writer, http.StatusOK, settings.backend.ShareActivity())
+}
+
+// handleLoopback 列出微软商店应用和它们能不能连接本机的代理。
+func (settings *SettingsServer) handleLoopback(writer http.ResponseWriter, request *http.Request) {
+	info, err := settings.backend.LoopbackApps()
+	if err != nil {
+		writeError(writer, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJson(writer, http.StatusOK, info)
+}
+
+// handleSetLoopback 修改哪些商店应用可以连接本机的代理：exempt 是允许的应用，其余已安装的应用不允许。
+func (settings *SettingsServer) handleSetLoopback(writer http.ResponseWriter, request *http.Request) {
+	var body struct {
+		Exempt []string `json:"exempt"`
+	}
+	if !decodeJsonBody(writer, request, &body) {
+		return
+	}
+	info, err := settings.backend.SetLoopback(body.Exempt)
+	if err != nil {
+		slog.WarnContext(request.Context(), "修改商店应用的回环豁免失败", "err", err)
+		writeJson(writer, http.StatusConflict, map[string]any{"error": err.Error(), "loopback": info})
+		return
+	}
+	writeJson(writer, http.StatusOK, info)
 }
 
 // handleClashLinks 让机场网站的「一键导入 Clash」（clash:// 链接）改由 ProxySwitch 处理。
