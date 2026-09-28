@@ -1,10 +1,11 @@
 "use strict";
 
-// 各页面的内容：代理、局域网共享、自动切换、常规、诊断、关于。每个函数根据 app 里的状态生成整页 HTML。
+// 各页面的内容：代理、局域网共享、网址诊断、自动切换、常规、诊断、关于。每个函数根据 app 里的状态生成整页 HTML。
 
 const pages = [
   { id: "proxies", label: "代理", icon: "globe" },
   { id: "share", label: "局域网共享", icon: "router" },
+  { id: "diagnose", label: "网址诊断", icon: "stethoscope" },
   { id: "network", label: "自动切换", icon: "wifi" },
   { id: "general", label: "常规", icon: "sliders" },
   { id: "diagnostics", label: "诊断", icon: "pulse" },
@@ -421,8 +422,8 @@ function customRulesView() {
     <div class="card custom-rules">
       ${rows.length ? html`<div class="custom-rule-list">${rows}</div>` : html`<p class="muted custom-rules-empty">还没有自定义规则。可以让某个网站固定走节点，或者让公司内网、局域网里的服务直连。</p>`}
       <div class="custom-rule-add">
-        <input class="input mono" data-focus="custom-rule-value" placeholder="域名或 IP，例如 youtube.com、8.8.8.8、10.0.0.0/8" spellcheck="false" autocomplete="off" aria-label="域名或 IP">
-        <select class="select" data-focus="custom-rule-policy" aria-label="去向">${policyOptions("proxy")}</select>
+        <input class="input mono" data-focus="custom-rule-value" value="${app.customRuleDraft.value}" placeholder="域名或 IP，例如 youtube.com、8.8.8.8、10.0.0.0/8" spellcheck="false" autocomplete="off" aria-label="域名或 IP">
+        <select class="select" data-focus="custom-rule-policy" aria-label="去向">${policyOptions(app.customRuleDraft.policy)}</select>
         <button class="button" data-action="add-custom-rule">${icon("plus")}添加</button>
       </div>
       <div class="field-error" data-custom-rule-error></div>
@@ -498,6 +499,10 @@ function shareUpstreamText(upstream) {
       return "直接连接（PAC 没法转发）";
   }
   return "直接连接（本机没开代理）";
+}
+
+function isLoopbackIp(ip) {
+  return /^127\./.test(ip) || ip === "::1";
 }
 
 // shareUpstreamSummary 是代理页里局域网共享的一句话。
@@ -622,19 +627,18 @@ function shareActivityView() {
   const listening = Boolean(app.state.core.share && app.state.core.share.listening);
   const clients = activity.clients.map((client) => html`
     <div class="share-client">
-      ${icon("gamepad")}
+      ${icon(isLoopbackIp(client.ip) ? "monitor" : "gamepad")}
       <div class="share-client-text">
-        <div class="mono">${client.ip}</div>
+        <div class="mono">${client.ip}${isLoopbackIp(client.ip) ? html` <span class="caption faint">这台电脑（测试）</span>` : ""}</div>
         <div class="caption muted">${client.connections} 个连接 · ↑ ${formatBytes(client.upload)} ↓ ${formatBytes(client.download)}${client.last_host ? ` · 最近 ${client.last_host}` : ""}${client.last_outbound ? ` → ${client.last_outbound}` : ""}</div>
       </div>
     </div>`);
-  const canAddRule = hasSubscriptions();
   const recent = activity.recent.slice(0, 30).map((connection, index) => html`
     <div class="share-connection">
       <span class="mono share-connection-host" title="${connection.host}:${connection.port} · 来自 ${connection.client}">${connection.host}${connection.port && connection.port !== "443" && connection.port !== "80" ? `:${connection.port}` : ""}</span>
       <span class="caption faint share-connection-rule" title="${connection.rule}">${connection.rule}</span>
       <span class="share-connection-outbound ${connection.outbound === "DIRECT" ? "direct" : ""}">${connection.outbound === "DIRECT" ? "直连" : connection.outbound === "REJECT" ? "拦截" : connection.outbound}</span>
-      ${canAddRule && connection.host ? html`<button class="button subtle icon-only" data-action="share-rule-menu" data-index="${index}" title="为 ${connection.host} 添加自定义规则" aria-label="为 ${connection.host} 添加自定义规则">${icon("more")}</button>` : ""}
+      ${connection.host ? html`<button class="button subtle icon-only" data-action="share-rule-menu" data-index="${index}" title="诊断或者添加自定义规则" aria-label="${connection.host} 的更多操作">${icon("more")}</button>` : ""}
     </div>`);
   return html`
     <div class="section-title">正在使用的设备</div>
@@ -698,6 +702,77 @@ function sharePage() {
     </div>
 
     ${shareActivityView()}`;
+}
+
+// ---------- 网址诊断 ----------
+
+const diagnoseOutcomeIcons = { pending: "circle", pass: "success", warn: "warning", fail: "error", skipped: "minus" };
+
+function diagnoseRowView(row) {
+  const mark = row.outcome === "running"
+    ? html`<span class="spinner" style="width:16px;height:16px"></span>`
+    : icon(diagnoseOutcomeIcons[row.outcome] || "circle");
+  return html`
+    <div class="diagnose-row ${row.outcome}" data-row="${row.id}">
+      <span class="diagnose-mark">${mark}</span>
+      <div class="diagnose-row-text">
+        <div class="diagnose-row-title">${row.title}</div>
+        ${row.summary ? html`<div class="caption muted selectable">${row.summary}</div>` : ""}
+        ${row.detail ? html`<div class="caption faint selectable">${row.detail}</div>` : ""}
+      </div>
+    </div>`;
+}
+
+function diagnoseVerdictView(job) {
+  if (!job) {
+    return html`<p class="caption muted" style="margin:0">检查完会在这里告诉你原因和怎么修。</p>`;
+  }
+  if (job.running) {
+    return html`<p class="caption muted" style="margin:0;display:flex;gap:8px;align-items:center"><span class="spinner" style="width:14px;height:14px"></span>正在检查…</p>`;
+  }
+  if (!job.verdict) {
+    return html`<p class="caption muted" style="margin:0">诊断已停止。</p>`;
+  }
+  const verdict = job.verdict;
+  return html`
+    <div class="diagnose-headline" id="diagnose-headline">${verdict.headline}</div>
+    <p class="diagnose-explanation selectable">${verdict.explanation}</p>
+    <div class="diagnose-actions">
+      ${verdict.actions.map((action, index) => html`<button class="button ${index === 0 && action.kind !== "copy_report" ? "accent" : ""}" data-action="diagnose-action" data-index="${index}">${action.label}</button>`)}
+      <button class="button subtle" data-action="diagnose-start">${icon("refresh")}再测一次</button>
+    </div>`;
+}
+
+function diagnosePage() {
+  const job = app.diagnoseJob;
+  const running = Boolean(job && job.running);
+  const perspective = app.diagnosePerspective;
+  const perspectives = [["pc", "这台电脑"], ["device", "局域网设备（PS5 等）"]];
+  return html`
+    ${pageHeader("网址诊断")}
+    <p class="muted" style="margin:-12px 0 16px">某个网站打不开？把链路走一遍，告诉你卡在哪、怎么修。</p>
+    <div class="card diagnose-form">
+      <div class="diagnose-input">
+        <input class="input" id="diagnose-url" value="${app.diagnoseUrl}" placeholder="网址或域名，例如 youtube.com" spellcheck="false" autocomplete="off" aria-label="要诊断的网址">
+        ${running
+          ? html`<button class="button" data-action="diagnose-stop">${icon("close")}停止</button>`
+          : html`<button class="button accent" data-action="diagnose-start">${icon("search")}开始诊断</button>`}
+      </div>
+      <div class="diagnose-perspective">
+        <span class="caption muted">从谁的视角</span>
+        <div class="segmented" role="group" aria-label="从谁的视角">${perspectives.map(([value, label]) => html`<button type="button" data-action="diagnose-perspective" data-value="${value}" aria-pressed="${perspective === value}">${label}</button>`)}</div>
+      </div>
+      ${app.diagnoseError ? html`<div class="field-error" style="margin-top:8px">${app.diagnoseError}</div>` : ""}
+      <p class="caption faint" style="margin:10px 0 0">${perspective === "device"
+        ? "从局域网共享的入口走一遍，和 PS5 等设备走的路径完全一样：共享入口 → 规则 → 上游。"
+        : "按这台电脑现在的代理状态走一遍：本机代理、域名解析、直连、经代理、节点，逐项对比。"}</p>
+    </div>
+    <div class="section-title">检查结果${job ? html`<span class="caption faint mono">${job.url}</span>` : ""}</div>
+    <div class="card diagnose-rows">
+      ${job ? job.rows.map(diagnoseRowView) : html`<p class="caption muted" style="margin:0">填好网址点「开始诊断」。</p>`}
+    </div>
+    <div class="section-title">结论</div>
+    <div class="card diagnose-verdict">${diagnoseVerdictView(job)}</div>`;
 }
 
 // ---------- 自动切换 ----------
@@ -1096,6 +1171,7 @@ ProxySwitch.exe off             关闭代理
 ProxySwitch.exe toggle          开 / 关切换
 ProxySwitch.exe use 配置名       切换到指定配置并开启
 ProxySwitch.exe share [on|off]  开关局域网共享（不写表示切换）
+ProxySwitch.exe diagnose 网址    网址诊断，加 --device 从局域网设备的视角
 ProxySwitch.exe status          查看状态（退出码 0 开启，1 关闭）
 ProxySwitch.exe settings        打开设置</pre></div>
     <div class="section-title">文件位置</div>
@@ -1110,6 +1186,7 @@ ProxySwitch.exe settings        打开设置</pre></div>
 const pageRenderers = {
   proxies: proxiesPage,
   share: sharePage,
+  diagnose: diagnosePage,
   network: networkPage,
   general: generalPage,
   diagnostics: diagnosticsPage,

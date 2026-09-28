@@ -22,7 +22,16 @@ const app = {
   shareTest: null,
   shareInputError: "",
   shareFirewallBusy: false,
+  // 代理页里还没添加的自定义规则：页面重绘（例如刚保存的上一条返回了最新状态）时不丢。
+  customRuleDraft: { value: "", policy: "proxy" },
+  // 网址诊断页：输入的网址、视角、最近一次诊断的进度和结果。
+  diagnoseUrl: "",
+  diagnosePerspective: "pc",
+  diagnoseJob: null,
+  diagnoseError: "",
 };
+
+let diagnoseTimer = 0;
 
 const pollInterval = 2000;
 let pollTimer = 0;
@@ -49,7 +58,7 @@ function receiveState(state, options = {}) {
   app.navigateSerial = Math.max(app.navigateSerial, navigate.serial);
   if (requested) {
     goto(navigate.page);
-    runRequestedAction(navigate.action);
+    runRequestedAction(navigate.action, navigate.argument);
     return;
   }
   renderNav();
@@ -59,12 +68,20 @@ function receiveState(state, options = {}) {
   }
 }
 
-// 程序可以请求页面执行的操作，例如托盘菜单的「检查更新」。
+// 程序可以请求页面执行的操作，例如托盘菜单的「检查更新」、命令行的「diagnose 网址」（argument 是 JSON：url、perspective）。
 const requestableActions = new Set(["check-update"]);
 
-function runRequestedAction(action) {
+function runRequestedAction(action, argument = "") {
   if (requestableActions.has(action)) {
     actions[action]();
+  } else if (action === "diagnose") {
+    let request = {};
+    try {
+      request = JSON.parse(argument || "{}");
+    } catch (error) {
+      request = {};
+    }
+    startDiagnose(request.url || "", request.perspective || "pc");
   }
 }
 
@@ -213,10 +230,20 @@ function renderPage({ fromPoll = false, animate = false } = {}) {
   const active = document.activeElement;
   const focusId = active && page.contains(active) ? active.id || null : null;
   const focusAction = active && page.contains(active) && !focusId ? active.dataset.action + "|" + (active.dataset.id || active.dataset.name || active.dataset.page || active.dataset.index || "") : null;
+  // 正在输入的文字不能因为重绘丢掉（例如刚保存的另一项返回了最新状态）。
+  const typing = focusId && active.tagName === "INPUT" ? { value: active.value, start: active.selectionStart, end: active.selectionEnd } : null;
   setHtml(page, pageRenderers[app.page]());
   if (focusId) {
     const target = document.getElementById(focusId);
     if (target) {
+      if (typing && target.tagName === "INPUT" && target.value !== typing.value) {
+        target.value = typing.value;
+        try {
+          target.setSelectionRange(typing.start, typing.end);
+        } catch (error) {
+          // 有的输入框类型不支持选区。
+        }
+      }
       target.focus();
     }
   } else if (focusAction) {
@@ -241,6 +268,9 @@ function goto(pageId) {
   }
   if (pageId === "share") {
     refreshShareActivity().catch(() => {});
+  }
+  if (pageId === "diagnose" && !app.diagnoseJob) {
+    loadDiagnose();
   }
   if (location.hash !== `#${pageId}`) {
     history.replaceState(null, "", `/#${pageId}`);
@@ -439,6 +469,139 @@ function submitCustomRule() {
   }
   if (!problem) {
     input.value = "";
+    app.customRuleDraft.value = "";
+  }
+}
+
+// ---------- 网址诊断 ----------
+
+// loadDiagnose 读取最近一次诊断（例如刷新页面后），正在进行时继续跟进。
+async function loadDiagnose() {
+  try {
+    const job = await api("GET", "/api/diagnose");
+    if (job.serial) {
+      receiveDiagnose(job);
+    }
+  } catch (error) {
+    // 连接问题由 connectionLost 处理。
+  }
+}
+
+function receiveDiagnose(job) {
+  const changed = JSON.stringify(job) !== JSON.stringify(app.diagnoseJob);
+  app.diagnoseJob = job;
+  if (!app.diagnoseUrl) {
+    app.diagnoseUrl = job.url;
+  }
+  if (changed && app.page === "diagnose") {
+    renderPage({ fromPoll: true });
+  }
+  clearTimeout(diagnoseTimer);
+  if (job.running) {
+    diagnoseTimer = setTimeout(async () => {
+      try {
+        receiveDiagnose(await api("GET", "/api/diagnose"));
+      } catch (error) {
+        // 连接问题由 connectionLost 处理。
+      }
+    }, 400);
+  }
+}
+
+// startDiagnose 开始诊断网址（为空时用输入框里的），perspective 为空时保持当前的视角。
+async function startDiagnose(address = "", perspective = "") {
+  const input = document.getElementById("diagnose-url");
+  if (address) {
+    app.diagnoseUrl = address;
+  } else if (input) {
+    app.diagnoseUrl = input.value.trim();
+  }
+  if (perspective) {
+    app.diagnosePerspective = perspective;
+  }
+  if (app.page !== "diagnose") {
+    goto("diagnose");
+  }
+  if (document.activeElement && document.activeElement.blur) {
+    // 输入框有焦点时定时刷新不重绘页面，诊断的进度就显示不出来。
+    document.activeElement.blur();
+  }
+  if (!app.diagnoseUrl) {
+    app.diagnoseError = "请填写网址或域名，例如 youtube.com";
+    renderPage();
+    return;
+  }
+  app.diagnoseError = "";
+  try {
+    const job = await api("POST", "/api/diagnose", { url: app.diagnoseUrl, perspective: app.diagnosePerspective });
+    app.diagnoseUrl = job.url;
+    receiveDiagnose(job);
+    renderPage();
+  } catch (error) {
+    if (error.status !== 0 && error.status !== 403) {
+      app.diagnoseError = error.message;
+      renderPage();
+    }
+  }
+}
+
+async function stopDiagnose() {
+  try {
+    receiveDiagnose(await api("POST", "/api/diagnose/cancel"));
+    renderPage();
+  } catch (error) {
+    // 连接问题由 connectionLost 处理。
+  }
+}
+
+// runDiagnoseAction 执行结论里的操作，改动生效后再诊断一次。
+async function runDiagnoseAction(action) {
+  const job = app.diagnoseJob;
+  const again = () => setTimeout(() => startDiagnose(), 1500);
+  switch (action.kind) {
+    case "turn_on":
+      if (await runOperation("/api/use", { name: action.profile }, `已开启「${action.profile}」`)) {
+        again();
+      }
+      break;
+    case "pin_to_proxy": {
+      const problem = addCustomRule(action.host, "proxy");
+      if (problem) {
+        toast(problem, "warning", "没有添加");
+        return;
+      }
+      await saveQueue;
+      again();
+      break;
+    }
+    case "auto_select":
+      try {
+        await api("POST", `/api/subscriptions/${encodeURIComponent(job.subscription)}/select`, { node: "" });
+        toast("改为自动选择延迟最低的节点", "success", "已切换");
+        again();
+      } catch (error) {
+        toast(error.message, "danger", "没有切换成功");
+      }
+      break;
+    case "test_nodes":
+    case "open_nodes":
+      if (job.subscription && profileById(job.subscription)) {
+        openNodesDialog(job.subscription, { test: action.kind === "test_nodes" });
+      } else {
+        goto("proxies");
+      }
+      break;
+    case "open_share":
+      goto("share");
+      break;
+    case "open_proxies":
+      goto("proxies");
+      break;
+    case "copy_report":
+      if (await copyText(job.report)) {
+        toast("可以粘贴到问题反馈里，或者发给帮你排查的人", "success", "已复制诊断报告");
+      }
+      break;
   }
 }
 
@@ -474,7 +637,7 @@ async function allowShareFirewall() {
 
 function openShareRuleMenu(anchor, connection) {
   const host = connection.host;
-  openMenu(anchor, Object.entries(policyLabels).map(([policy, label]) => ({
+  const items = hasSubscriptions() ? Object.entries(policyLabels).map(([policy, label]) => ({
     label: `让 ${host} ${label}`,
     icon: policy === "reject" ? "close" : policy === "direct" ? "link" : "globe",
     action: () => {
@@ -483,7 +646,14 @@ function openShareRuleMenu(anchor, connection) {
         toast(problem, "warning", "没有添加");
       }
     },
-  })));
+  })) : [];
+  if (items.length) {
+    items.push({ separator: true });
+  }
+  const scheme = connection.port === "80" ? "http" : "https";
+  const port = connection.port && connection.port !== "80" && connection.port !== "443" ? `:${connection.port}` : "";
+  items.push({ label: `诊断 ${host}`, icon: "stethoscope", action: () => startDiagnose(`${scheme}://${host}${port}/`, "device") });
+  openMenu(anchor, items);
 }
 
 // saveShareInput 保存共享页里改过的允许的设备或端口；填错时在输入框下面说明，不保存。
@@ -835,6 +1005,23 @@ const actions = {
       // 连接问题由 connectionLost 处理。
     }
   },
+  "diagnose-start": () => startDiagnose(),
+  "diagnose-stop": () => stopDiagnose(),
+  "diagnose-perspective": (element) => {
+    app.diagnosePerspective = element.dataset.value;
+    const input = document.getElementById("diagnose-url");
+    if (input) {
+      app.diagnoseUrl = input.value.trim();
+    }
+    renderPage();
+  },
+  "diagnose-action": (element) => {
+    const job = app.diagnoseJob;
+    const action = job && job.verdict && job.verdict.actions[Number(element.dataset.index)];
+    if (action) {
+      runDiagnoseAction(action);
+    }
+  },
   "share-rule-menu": (element) => {
     const connection = app.shareActivity && app.shareActivity.recent[Number(element.dataset.index)];
     if (connection) {
@@ -968,6 +1155,10 @@ document.addEventListener("change", (event) => {
     }
     return;
   }
+  if (element.matches('[data-focus="custom-rule-policy"]')) {
+    app.customRuleDraft.policy = element.value;
+    return;
+  }
   if (element.dataset.customRule !== undefined) {
     const index = Number(element.dataset.customRule);
     const value = element.value;
@@ -992,9 +1183,19 @@ document.addEventListener("change", (event) => {
   }
 });
 
+document.addEventListener("input", (event) => {
+  if (event.target.matches('[data-focus="custom-rule-value"]')) {
+    app.customRuleDraft.value = event.target.value;
+  }
+});
+
 document.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && event.target.matches('[data-focus="custom-rule-value"]')) {
     submitCustomRule();
+    return;
+  }
+  if (event.key === "Enter" && event.target.matches("#diagnose-url")) {
+    startDiagnose();
     return;
   }
   if (event.key === "Enter" && event.target.matches(".page input.input")) {
@@ -1075,8 +1276,12 @@ async function start() {
       refreshShareActivity().catch(() => {});
     }
     // 窗口是为程序的请求打开的（地址里就是请求的页面），例如托盘菜单的「检查更新」：执行请求的操作。
-    if (state.navigate && state.navigate.page === initialPage) {
-      runRequestedAction(state.navigate.action);
+    const requested = state.navigate && state.navigate.page === initialPage && state.navigate.action;
+    if (requested) {
+      runRequestedAction(state.navigate.action, state.navigate.argument);
+    }
+    if (app.page === "diagnose" && !(requested && state.navigate.action === "diagnose")) {
+      loadDiagnose();
     }
     schedulePoll();
   } catch (error) {

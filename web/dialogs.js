@@ -1015,7 +1015,8 @@ function sortedNodes(view) {
   return [...nodes].sort((first, second) => rank(first) - rank(second));
 }
 
-function openNodesDialog(profileId) {
+// openNodesDialog 打开订阅的节点列表；options.test 为 true 时打开后立即全部测速。
+function openNodesDialog(profileId, options = {}) {
   const view = { loading: true, busy: "", list: null, error: "", query: "", sortByDelay: false };
   const dialog = openDialog({
     className: "wide",
@@ -1142,7 +1143,11 @@ function openNodesDialog(profileId) {
     await load();
   }
 
-  load();
+  load().then(() => {
+    if (options.test && !dialog.closed && view.list) {
+      run("test", () => api("POST", `/api/subscriptions/${profileId}/test`));
+    }
+  });
   return dialog;
 }
 
