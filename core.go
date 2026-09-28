@@ -630,6 +630,18 @@ func (core *Core) Connections() ([]CoreConnection, error) {
 	return result.Connections, err
 }
 
+// TrafficTotals 是内核这次启动以来经过它的累计收发字节数，内核没有运行时 ok 为 false。
+func (core *Core) TrafficTotals() (received, sent uint64, ok bool) {
+	var result struct {
+		DownloadTotal uint64 `json:"downloadTotal"`
+		UploadTotal   uint64 `json:"uploadTotal"`
+	}
+	if core.request(http.MethodGet, "/connections", nil, &result, time.Second) != nil {
+		return 0, 0, false
+	}
+	return result.DownloadTotal, result.UploadTotal, true
+}
+
 // NodeDelay 测订阅里一个节点的延迟（毫秒），连不上时返回 0（内核把测得 0 ms 也当作失败，真实的节点不会这么快）。
 func (core *Core) NodeDelay(profileId, node, testUrl string) int {
 	query := url.Values{"url": {testUrl}, "timeout": {strconv.Itoa(int(coreDelayTimeout / time.Millisecond))}}

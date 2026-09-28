@@ -356,7 +356,19 @@ def run_flows(page, api, info, config_path):
     check(wait_until(lambda: read_config(config_path)["disable_on_exit"] is True), "开关类设置立即保存")
     page.click("button.switch[data-action=autostart]")
     check(wait_until(lambda: api.call("GET", "/api/state")["autostart"]), "开机自启")
+    check(page.input_value("select[data-setting=speed_display]") == "system", "默认显示系统网络总速度")
     shot(page, "06_general")
+    # 实时网速：显示在开关卡片上，选「不显示」时隐藏。
+    page.click("[data-page=proxies]")
+    check(wait_until(lambda: page.locator(".hero-speed").count() == 1 and "↓" in page.inner_text(".hero-speed"), timeout=10), "开关卡片上显示实时网速")
+    page.click("[data-page=general]")
+    page.select_option("select[data-setting=speed_display]", "none")
+    check(wait_until(lambda: read_config(config_path)["speed_display"] == "none"), "修改网速的显示方式")
+    page.click("[data-page=proxies]")
+    check(wait_until(lambda: page.locator(".hero-speed").count() == 0, timeout=10), "不显示网速时开关卡片上没有网速")
+    api.call("PUT", "/api/config", {**api.call("GET", "/api/state")["config"], "speed_display": "system"})
+    check(wait_until(lambda: page.evaluate("app.config.speed_display") == "system", timeout=6), "页面同步到网速设置的修改")
+    page.click("[data-page=general]")
 
     # ---------- 配置文件被手动修改 ----------
     config = read_config(config_path)

@@ -191,6 +191,10 @@ func TestCoreTraceConnection(t *testing.T) {
 		t.Errorf("被拦截的网站：%+v %+v", probe, trace)
 	}
 
+	if received, sent, ok := core.TrafficTotals(); !ok || received == 0 || sent == 0 {
+		t.Errorf("应读到经过内核的累计流量：%d %d %v", received, sent, ok)
+	}
+
 	settings.Subscriptions[0].Node = "坏节点"
 	if err := core.Wait(core.Sync(settings), 30*time.Second); err != nil {
 		t.Fatal(err)

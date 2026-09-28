@@ -1163,6 +1163,12 @@ kbd.compact {
   gap: 8px;
 }
 
+.hero-speed {
+  display: inline-flex;
+  gap: 12px;
+  white-space: nowrap;
+}
+
 .hero-buttons {
   display: flex;
   gap: 8px;

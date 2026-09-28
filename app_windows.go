@@ -273,6 +273,11 @@ func (app *App) tooltipFor(status Status) string {
 			lines = append(lines, "局域网共享：没有连上局域网")
 		}
 	}
+	if app.subscriptionService != nil {
+		if speed := app.Speed().Text(); speed != "" {
+			lines = append(lines, speed)
+		}
+	}
 	return truncateRunes(strings.Join(lines, "\n"), 127)
 }
 

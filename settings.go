@@ -92,6 +92,8 @@ type SettingsState struct {
 	Core          CoreInfo                    `json:"core"`
 	// Share 是局域网共享的去向、这台电脑的局域网地址和防睡眠的状态，共享入口是否在监听见 Core.Share。
 	Share ShareInfo `json:"share"`
+	// Speed 是实时网速。
+	Speed SpeedInfo `json:"speed"`
 }
 
 // CoreInfo 是订阅使用的代理内核的情况。Custom 表示使用配置里指定的内核；InstalledVersion 是下载的内核的版本，
