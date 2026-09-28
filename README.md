@@ -454,7 +454,7 @@ go build -trimpath -ldflags="-H windowsgui -s -w" -o ProxySwitch.exe .
 | `*_windows.go` | Windows 实现：系统代理（WinINET）、PAC 执行（WinHTTP）、托盘、菜单、通知（系统通知用 WinRT 的 ToastNotificationManager）、快捷键、网络信息、监听端口、替换程序完成更新、内核进程随 ProxySwitch 退出（作业对象） |
 | `settings_dev.go` `dev_fakes.go` `memorysystem.go` | 开发模式和测试用的内存实现、假代理 |
 
-推送代码时 GitHub Actions 会在 Linux 上跑单元测试和界面测试，在 Windows 上跑包括读写系统代理在内的全部测试；推送 `v*` 标签会自动编译并发布 Release。发布时下载固定版本的官方内核，把它的 SHA-256 写进程序（`make core-sha256` 可以在本地算出这两个值），程序里下载内核时按它校验。
+推送代码时 GitHub Actions 会在 Linux 上跑单元测试和界面测试，在 Windows 上跑包括读写系统代理在内的全部测试；推送 `v*` 标签会自动编译并发布 Release；也可以在 Actions 页面手动运行 release 工作流，在 main 上填新的版本号（例如 `v2.1.0`）时先在 main 的最新提交上打这个标签再发布，填已有的标签则重新上传附件。发布时下载固定版本的官方内核，把它的 SHA-256 写进程序（`make core-sha256` 可以在本地算出这两个值），程序里下载内核时按它校验。
 
 ## 许可证
 
