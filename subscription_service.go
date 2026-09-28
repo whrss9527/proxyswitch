@@ -311,6 +311,7 @@ func (service *subscriptionService) fillState(state *SettingsState) {
 	state.Core.Downloadable = coreDownloadable()
 	state.Core.Installing = service.CoreInstalling()
 	state.Core.Share = status.Share
+	state.Core.Tun = status.Tun
 	if state.Config != nil {
 		state.Share.Addresses = localAddresses()
 	}

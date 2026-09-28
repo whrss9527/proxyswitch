@@ -54,6 +54,10 @@ func main() {
 			// 以管理员身份运行，设置商店应用的回环豁免（见 loopback_windows.go）。
 			os.Exit(runLoopbackHelper(value))
 		}
+		if argument == coreHostArgument {
+			// 以管理员身份运行，启动 TUN 模式的内核（见 core_tun_windows.go）。
+			os.Exit(runCoreHost(os.Args[index+2:]))
+		}
 		if isLink(argument) {
 			// 浏览器或脚本打开的 proxyswitch:// 或 clash:// 链接。
 			os.Exit(runLink(argument))

@@ -626,6 +626,16 @@ def run_flows(page, api, info, config_path):
     check("写得不对" in page.inner_text("[data-custom-rule-error]"), "程序名不对时给出提示")
     page.fill("[data-focus=custom-rule-value]", "")
     page.select_option("[data-focus=custom-rule-type]", "")
+    # TUN 模式：在常规页的代理内核里开关，没开订阅配置时说明什么时候生效。
+    page.click("[data-page=general]")
+    page.wait_for_selector("button.switch[data-setting='tun.enabled']")
+    check("不认系统代理的程序" in page.inner_text(".page"), "说明 TUN 模式的作用")
+    page.click("button.switch[data-setting='tun.enabled']")
+    check(wait_until(lambda: read_config(config_path)["tun"]["enabled"] is True), "开启 TUN 模式")
+    check(wait_until(lambda: "开启订阅配置后生效" in page.inner_text(".page")), "没开订阅配置时说明 TUN 什么时候生效")
+    page.click("button.switch[data-setting='tun.enabled']")
+    check(wait_until(lambda: read_config(config_path)["tun"]["enabled"] is False), "关闭 TUN 模式")
+    page.click("[data-page=proxies]")
     if CORE:
         check(wait_until(lambda: "5 个节点" in page.inner_text(card), timeout=10), "保存后下载订阅，列表显示节点数和流量")
         page.click(f"{card} [data-action=nodes]")

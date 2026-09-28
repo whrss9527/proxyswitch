@@ -70,6 +70,8 @@ type CoreSettings struct {
 	Subscriptions []CoreSubscription
 	// Share 是局域网共享，nil 表示没开。没有订阅时内核只为共享运行，本机的代理端口不监听。
 	Share *CoreShare
+	// Tun 表示开启 TUN 模式：虚拟网卡接管整台电脑的流量，内核要以管理员权限运行（见 core_tun_windows.go）。
+	Tun bool
 }
 
 // coreMixedPort 是内核在本机提供代理的端口：只为局域网共享运行时为 0（不监听）。
@@ -188,6 +190,48 @@ type coreSniffer struct {
 	Sniff               map[string]map[string]any `json:"sniff"`
 }
 
+// coreTun 是 TUN 模式的虚拟网卡：自动设置路由接管整台电脑的流量，DNS 查询交给内核。用 gVisor 协议栈，
+// 不需要 Windows 防火墙放行。
+type coreTun struct {
+	Enable              bool     `json:"enable"`
+	Device              string   `json:"device"`
+	Stack               string   `json:"stack"`
+	AutoRoute           bool     `json:"auto-route"`
+	AutoDetectInterface bool     `json:"auto-detect-interface"`
+	DnsHijack           []string `json:"dns-hijack"`
+}
+
+// coreDns 是 TUN 模式下内核的 DNS：fake-ip 让分流规则拿到域名，走节点的域名由节点解析，直连的用国内的 DoH 解析。
+// 局域网、系统联网检测、游戏机和时间同步的域名返回真实的 IP。
+type coreDns struct {
+	Enable            bool     `json:"enable"`
+	Ipv6              bool     `json:"ipv6"`
+	EnhancedMode      string   `json:"enhanced-mode"`
+	FakeIpRange       string   `json:"fake-ip-range"`
+	FakeIpFilter      []string `json:"fake-ip-filter"`
+	DefaultNameserver []string `json:"default-nameserver"`
+	Nameserver        []string `json:"nameserver"`
+}
+
+// coreTunDevice 是虚拟网卡的名字。测试时换成建不出来的名字（太长），内核只记一条日志，不会真的改路由。
+var coreTunDevice = "ProxySwitch"
+
+func coreTunConfig() (*coreTun, *coreDns) {
+	return &coreTun{
+			Enable: true, Device: coreTunDevice, Stack: "gvisor", AutoRoute: true, AutoDetectInterface: true,
+			DnsHijack: []string{"any:53", "tcp://any:53"},
+		}, &coreDns{
+			Enable: true, EnhancedMode: "fake-ip", FakeIpRange: "198.18.0.1/16",
+			FakeIpFilter: []string{
+				"*.lan", "*.local", "*.localdomain", "*.home.arpa", "localhost.ptlogin2.qq.com",
+				"+.msftconnecttest.com", "+.msftncsi.com", "time.windows.com", "+.pool.ntp.org", "time.*.com",
+				"+.srv.nintendo.net", "+.stun.playstation.net", "xbox.*.microsoft.com", "+.xboxlive.com", "stun.*.*",
+			},
+			DefaultNameserver: []string{"223.5.5.5", "119.29.29.29"},
+			Nameserver:        []string{"https://doh.pub/dns-query", "https://dns.alidns.com/dns-query"},
+		}
+}
+
 type coreRuleProvider struct {
 	Type     string `json:"type"`
 	Behavior string `json:"behavior"`
@@ -212,6 +256,8 @@ type coreConfigFile struct {
 	GeoxUrl            map[string]string           `json:"geox-url"`
 	LanAllowedIps      []string                    `json:"lan-allowed-ips,omitempty"`
 	Sniffer            coreSniffer                 `json:"sniffer"`
+	Tun                *coreTun                    `json:"tun,omitempty"`
+	Dns                *coreDns                    `json:"dns,omitempty"`
 	Listeners          []coreListener              `json:"listeners,omitempty"`
 	Proxies            []coreProxy                 `json:"proxies,omitempty"`
 	ProxyProviders     map[string]coreProvider     `json:"proxy-providers"`
@@ -296,6 +342,9 @@ func coreConfigText(settings CoreSettings, controller, secret string) []byte {
 	}
 	if !strings.HasPrefix(config.Rules[len(config.Rules)-1], "MATCH,") {
 		config.Rules = append(config.Rules, "MATCH,"+coreTopGroup)
+	}
+	if settings.Tun {
+		config.Tun, config.Dns = coreTunConfig()
 	}
 	addShare(&config, settings.Share)
 	data, _ := json.MarshalIndent(config, "", "  ")

@@ -50,13 +50,67 @@ func coreBinaryName() string {
 	return "mihomo"
 }
 
-// CoreStatus 是内核的运行状态，给设置页显示。Share 是局域网共享入口的状态。
+// CoreStatus 是内核的运行状态，给设置页显示。Share 是局域网共享入口的状态，Tun 是 TUN 模式的状态。
 type CoreStatus struct {
 	Running bool            `json:"running"`
 	Port    int             `json:"port,omitempty"`
 	Error   string          `json:"error,omitempty"`
 	Share   CoreShareStatus `json:"share"`
+	Tun     CoreTunStatus   `json:"tun"`
 }
+
+// CoreTunStatus 是 TUN 模式的状态：Active 表示虚拟网卡正在接管流量；要开却没开起来时 Error 说明原因
+// （没有获得管理员权限、不是 Windows 等）。
+type CoreTunStatus struct {
+	Active bool   `json:"active"`
+	Error  string `json:"error,omitempty"`
+}
+
+// coreProcess 是运行中的内核：ProxySwitch 直接启动的进程，或者 TUN 模式下以管理员身份运行的宿主进程
+// （见 core_windows.go），宿主退出时内核随之结束。
+type coreProcess interface {
+	Pid() int
+	// Wait 等它退出，只调用一次。
+	Wait() error
+	// Kill 立即结束它。
+	Kill() error
+	// Elevated 表示内核以管理员权限运行，可以开启 TUN 模式。
+	Elevated() bool
+}
+
+// localCoreProcess 是直接启动的内核进程，输出写在内核的日志里。
+type localCoreProcess struct {
+	command *exec.Cmd
+	logFile *os.File
+}
+
+func (process *localCoreProcess) Pid() int {
+	return process.command.Process.Pid
+}
+
+func (process *localCoreProcess) Wait() error {
+	err := process.command.Wait()
+	process.logFile.Close()
+	return err
+}
+
+func (process *localCoreProcess) Kill() error {
+	return process.command.Process.Kill()
+}
+
+func (process *localCoreProcess) Elevated() bool {
+	return false
+}
+
+// errTunDeclined 表示启动 TUN 模式的内核时用户没有同意以管理员身份运行。
+var errTunDeclined = errors.New("没有获得管理员权限，TUN 模式没有开启")
+
+var (
+	// coreTunSupported 表示可以开启 TUN 模式（以管理员身份运行内核），只有 Windows 版可以。
+	coreTunSupported = runtime.GOOS == "windows"
+	// startElevatedCore 以管理员身份启动内核（见 core_windows.go），测试时可以换掉。
+	startElevatedCore = startElevatedCoreProcess
+)
 
 // CoreShareStatus 是局域网共享入口的状态：Listening 表示正在 Port 上监听，没监听起来时 Error 说明原因。
 type CoreShareStatus struct {
@@ -93,7 +147,7 @@ type Core struct {
 	client     *http.Client
 
 	// 以下只由后台 goroutine 修改，读取时持有 mutex。
-	process    *exec.Cmd
+	process    coreProcess
 	exited     chan struct{}
 	controller string
 	secret     string
@@ -102,6 +156,9 @@ type Core struct {
 	lastError  string
 	crashes    []time.Time
 	share      CoreShareStatus
+	tun        CoreTunStatus
+	// tunDeclined 表示上次要以管理员身份启动时被拒绝了：TUN 模式关掉再打开（或代理关掉再开）之前不再询问。
+	tunDeclined bool
 }
 
 // newCore 创建内核管理器并启动后台 goroutine。onError 在内核启动失败或意外退出时调用（在后台 goroutine 里）。
@@ -156,22 +213,23 @@ func (core *Core) Stop() {
 // Kill 立即结束内核进程，不经过后台 goroutine，程序退出时调用：这时后台 goroutine 可能正等着 UI 线程。
 func (core *Core) Kill() {
 	core.mutex.Lock()
-	command := core.process
+	process := core.process
 	core.process = nil
 	core.mutex.Unlock()
-	if command != nil {
-		_ = command.Process.Kill()
+	if process != nil {
+		_ = process.Kill()
 	}
 }
 
 func (core *Core) Status() CoreStatus {
 	core.mutex.Lock()
 	defer core.mutex.Unlock()
-	status := CoreStatus{Running: core.process != nil, Error: core.lastError, Share: core.share}
+	status := CoreStatus{Running: core.process != nil, Error: core.lastError, Share: core.share, Tun: core.tun}
 	if status.Running {
 		status.Port = coreMixedPort(core.current)
 	} else {
 		status.Share.Listening = false
+		status.Tun.Active = false
 	}
 	return status
 }
@@ -254,14 +312,38 @@ func (core *Core) verifyShare(port int) string {
 func (core *Core) applyCore(settings CoreSettings) error {
 	if len(settings.Subscriptions) == 0 && settings.Share == nil {
 		core.stopProcess()
+		core.setTun(CoreTunStatus{})
 		return nil
 	}
-	if !core.running() || core.current.Binary != settings.Binary || core.current.BinaryStamp != settings.BinaryStamp || core.current.Dir != settings.Dir || coreMixedPort(core.current) != coreMixedPort(settings) {
+	// TUN 模式要内核以管理员权限运行：没有这样运行时重新启动（问一次管理员权限），被拒绝后先不开，
+	// 等 TUN 模式或者代理关掉再打开时再问。内核已经以管理员权限运行时，关掉 TUN 只是重新加载配置。
+	tunError := ""
+	if !settings.Tun {
+		core.tunDeclined = false
+	} else if !coreTunSupported {
+		settings.Tun, tunError = false, "TUN 模式只在 Windows 上可用"
+	} else if core.tunDeclined {
+		settings.Tun, tunError = false, errTunDeclined.Error()
+	}
+	elevate := settings.Tun && !core.runningElevated()
+	if elevate || !core.running() || core.current.Binary != settings.Binary || core.current.BinaryStamp != settings.BinaryStamp || core.current.Dir != settings.Dir || coreMixedPort(core.current) != coreMixedPort(settings) {
 		core.stopProcess()
 		if err := core.checkCrashes(); err != nil {
+			core.setTun(CoreTunStatus{Error: tunError})
 			return err
 		}
-		if err := core.start(settings); err != nil {
+		err := core.start(settings)
+		if err != nil && settings.Tun {
+			// 没能以管理员身份启动：这次不开 TUN，内核照常运行。
+			slog.Warn("TUN 模式没有开启", "err", err)
+			if errors.Is(err, errTunDeclined) {
+				core.tunDeclined = true
+			}
+			settings.Tun, tunError = false, err.Error()
+			err = core.start(settings)
+		}
+		if err != nil {
+			core.setTun(CoreTunStatus{Error: tunError})
 			return err
 		}
 	} else if text := coreConfigText(settings, core.controller, core.secret); !bytes.Equal(text, core.configText) {
@@ -280,13 +362,27 @@ func (core *Core) applyCore(settings CoreSettings) error {
 	core.mutex.Lock()
 	core.current = settings
 	core.mutex.Unlock()
+	core.setTun(CoreTunStatus{Active: settings.Tun, Error: tunError})
 	return core.applySelections(settings)
+}
+
+func (core *Core) setTun(status CoreTunStatus) {
+	core.mutex.Lock()
+	core.tun = status
+	core.mutex.Unlock()
 }
 
 func (core *Core) running() bool {
 	core.mutex.Lock()
 	defer core.mutex.Unlock()
 	return core.process != nil
+}
+
+// runningElevated 表示内核正以管理员权限运行。
+func (core *Core) runningElevated() bool {
+	core.mutex.Lock()
+	defer core.mutex.Unlock()
+	return core.process != nil && core.process.Elevated()
 }
 
 func (core *Core) revisionOf(profileId string) string {
@@ -347,26 +443,37 @@ func (core *Core) start(settings CoreSettings) error {
 	if err := os.WriteFile(configPath, text, 0o600); err != nil {
 		return fmt.Errorf("无法写入内核配置：%v", err)
 	}
-	logFile, err := os.Create(filepath.Join(settings.Dir, coreLogName))
+	logPath := filepath.Join(settings.Dir, coreLogName)
+	logFile, err := os.Create(logPath)
 	if err != nil {
 		return fmt.Errorf("无法创建内核日志：%v", err)
 	}
-	command := exec.Command(settings.Binary, "-d", settings.Dir, "-f", configPath)
-	command.Dir = settings.Dir
-	command.Stdout, command.Stderr = logFile, logFile
-	prepareCoreCommand(command)
-	if err := command.Start(); err != nil {
+	var process coreProcess
+	if settings.Tun {
+		// 宿主进程自己打开日志往后写。
 		logFile.Close()
-		return fmt.Errorf("无法启动代理内核：%v", err)
+		if process, err = startElevatedCore(settings.Binary, settings.Dir, configPath, logPath); err != nil {
+			return err
+		}
+	} else {
+		command := exec.Command(settings.Binary, "-d", settings.Dir, "-f", configPath)
+		command.Dir = settings.Dir
+		command.Stdout, command.Stderr = logFile, logFile
+		prepareCoreCommand(command)
+		if err := command.Start(); err != nil {
+			logFile.Close()
+			return fmt.Errorf("无法启动代理内核：%v", err)
+		}
+		attachCoreProcess(command.Process)
+		process = &localCoreProcess{command: command, logFile: logFile}
 	}
-	attachCoreProcess(command.Process)
 	exited := make(chan struct{})
 	core.mutex.Lock()
-	core.process, core.exited, core.controller, core.secret = command, exited, controller, secretText
+	core.process, core.exited, core.controller, core.secret = process, exited, controller, secretText
 	core.configText = nil
 	core.mutex.Unlock()
-	go core.watch(command, exited, logFile)
-	slog.Info("代理内核已启动", "pid", command.Process.Pid, "port", settings.Port)
+	go core.watch(process, exited)
+	slog.Info("代理内核已启动", "pid", process.Pid(), "port", settings.Port, "elevated", process.Elevated())
 
 	if err := core.waitReady(exited, settings); err != nil {
 		core.stopProcess()
@@ -379,12 +486,11 @@ func (core *Core) start(settings CoreSettings) error {
 }
 
 // watch 等待内核退出；不是 ProxySwitch 让它退出的，就记一次崩溃并让后台 goroutine 重新启动它。
-func (core *Core) watch(command *exec.Cmd, exited chan struct{}, logFile *os.File) {
-	err := command.Wait()
-	logFile.Close()
+func (core *Core) watch(process coreProcess, exited chan struct{}) {
+	err := process.Wait()
 	close(exited)
 	core.mutex.Lock()
-	unexpected := core.process == command
+	unexpected := core.process == process
 	if unexpected {
 		core.process = nil
 		core.crashes = append(core.crashes, time.Now())
@@ -569,13 +675,13 @@ func (core *Core) selectIn(group, name string) error {
 
 func (core *Core) stopProcess() {
 	core.mutex.Lock()
-	command, exited := core.process, core.exited
+	process, exited := core.process, core.exited
 	core.process, core.configText = nil, nil
 	core.mutex.Unlock()
-	if command == nil {
+	if process == nil {
 		return
 	}
-	_ = command.Process.Kill()
+	_ = process.Kill()
 	select {
 	case <-exited:
 	case <-time.After(5 * time.Second):

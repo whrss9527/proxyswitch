@@ -26,6 +26,7 @@ const (
 	menuUpdate
 	menuShare
 	menuShareCopy
+	menuTun
 	menuDiagnose
 	menuExit
 	menuTerminalBase = 50
@@ -280,6 +281,9 @@ func (app *App) tooltipFor(status Status) string {
 	default:
 		lines = append(lines, "已关闭，单击开启："+status.Profile.Name)
 	}
+	if app.subscriptionService != nil && app.subscriptionService.core.Status().Tun.Active {
+		lines = append(lines, "TUN 模式：接管全部流量")
+	}
 	if config != nil && config.Share.Enabled && app.subscriptionService != nil {
 		if address := app.shareAddress(); address != "" {
 			lines = append(lines, "局域网共享："+address)
@@ -384,6 +388,25 @@ func (app *App) runTrayAction(action string) {
 	}
 }
 
+// setTunFromUi 在托盘菜单里开关 TUN 模式，保存到配置文件。
+func (app *App) setTunFromUi(enabled bool) {
+	updated := app.engine.Config().Clone()
+	updated.Tun.Enabled = enabled
+	if err := app.engine.SaveConfig(updated); err != nil {
+		app.notify(Notice{Level: noticeError, Title: "保存配置失败", Text: err.Error()})
+		return
+	}
+	switch {
+	case !enabled:
+		app.notify(Notice{Level: noticeInfo, Title: "TUN 模式已关闭", Text: "只有跟随系统代理的程序经过代理"})
+	case app.engine.activeSubscriptionId() != "" && app.engine.Status().State == statusOn:
+		app.notify(Notice{Level: noticeInfo, Title: "TUN 模式已开启", Text: "内核要以管理员权限运行，请在弹出的确认框里点「是」", Page: "general"})
+	default:
+		app.notify(Notice{Level: noticeInfo, Title: "TUN 模式已开启", Text: "开启订阅配置时生效，到时内核会请求管理员权限", Page: "general"})
+	}
+	app.refresh()
+}
+
 // toggleOrSetup 开关代理；还没有配置时打开设置页添加。
 func (app *App) toggleOrSetup() {
 	config := app.engine.Config()
@@ -482,6 +505,9 @@ func (app *App) menuItems() []MenuItem {
 	}
 	if len(config.AutoSwitch.Rules) > 0 {
 		items = append(items, MenuItem{Id: menuAutoSwitch, Text: "按网络自动切换", Checked: config.AutoSwitch.Enabled})
+	}
+	if app.subscriptionService != nil && config.HasSubscriptions() {
+		items = append(items, MenuItem{Id: menuTun, Text: "TUN 模式（接管全部流量）", Checked: config.Tun.Enabled})
 	}
 	if app.subscriptionService != nil {
 		items = append(items, MenuItem{Id: menuShare, Text: "局域网共享（PS5 等设备）", Checked: config.Share.Enabled})
@@ -669,6 +695,8 @@ func (app *App) handleMenu(command uint32) {
 		app.testActiveProxy()
 	case command == menuShare && config != nil:
 		_ = app.setShareFromUi(!config.Share.Enabled)
+	case command == menuTun && config != nil:
+		app.setTunFromUi(!config.Tun.Enabled)
 	case command == menuShareCopy:
 		app.copyShareAddress()
 	case command == menuDiagnose:

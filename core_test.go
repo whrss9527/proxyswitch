@@ -83,7 +83,7 @@ func corePid(core *Core) int {
 	if core.process == nil {
 		return 0
 	}
-	return core.process.Process.Pid
+	return core.process.Pid()
 }
 
 func nodesYaml(nodes map[string]*countingProxy, order ...string) string {

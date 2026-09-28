@@ -89,8 +89,10 @@ type Engine struct {
 	core            ProxyCore
 	coreGeneration  int
 	downloadsNeeded func()
-	// syncedShare 是最近一次交给内核的局域网共享参数，用来判断本机代理变了之后要不要重新加载。
+	// syncedShare 和 syncedTun 是最近一次交给内核的局域网共享参数和 TUN 模式，用来判断本机代理变了之后要不要
+	// 重新加载。
 	syncedShare *CoreShare
+	syncedTun   bool
 	// ruleCache 按配置 id 缓存读过的分流规则，避免每次生成内核的设定都读文件。
 	ruleCache map[string]cachedRules
 
@@ -464,7 +466,7 @@ func (engine *Engine) finishOff() {
 	engine.saveState()
 	engine.resetHealth()
 	// 本机不再用代理，局域网共享的设备跟着改为直连。
-	engine.RefreshShare(engine.Status())
+	engine.RefreshCore(engine.Status())
 }
 
 func (engine *Engine) remember(profile *Profile, enabled bool) {

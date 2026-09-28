@@ -170,12 +170,15 @@ func (engine *Engine) coreShare(status Status, active string) *CoreShare {
 	return &CoreShare{Port: share.Port, Allowed: share.allowedPrefixes(), Upstream: engine.shareUpstream(status, active)}
 }
 
-// RefreshShare 在定时检查时调用：本机的代理被其他程序改了之后，共享的去向跟着变。去向变了才让内核重新加载。
-func (engine *Engine) RefreshShare(status Status) {
-	if engine.core == nil || engine.config == nil || !engine.config.Share.Enabled {
+// RefreshCore 在本机的代理状态变了之后（开关、换配置、其他程序改了系统代理）让内核跟上：局域网共享的设备跟着
+// 本机走，TUN 模式只在订阅配置开着时开。
+func (engine *Engine) RefreshCore(status Status) {
+	if engine.core == nil || engine.config == nil {
 		return
 	}
-	if share := engine.coreShare(status, engine.activeSubscriptionId()); !reflect.DeepEqual(share, engine.syncedShare) {
+	active := engine.activeSubscriptionId()
+	shareChanged := engine.config.Share.Enabled && !reflect.DeepEqual(engine.coreShare(status, active), engine.syncedShare)
+	if shareChanged || engine.tunWanted(status, active) != engine.syncedTun {
 		engine.syncCore()
 	}
 }

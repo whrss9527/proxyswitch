@@ -101,17 +101,25 @@ func (engine *Engine) coreSettings() CoreSettings {
 			settings.Rules, settings.RuleProviders = manifest.Rules, manifest.Providers
 		}
 	}
+	status := engine.Status()
 	if engine.config.Share.Enabled {
-		settings.Share = engine.coreShare(engine.Status(), settings.Active)
+		settings.Share = engine.coreShare(status, settings.Active)
 	}
+	settings.Tun = engine.tunWanted(status, settings.Active)
 	return settings
+}
+
+// tunWanted 表示内核应开启 TUN 模式：开启了 TUN，并且正开着订阅配置 active。代理关了或者换成别的配置时，
+// 虚拟网卡也关掉，免得接管不该走内核的流量。
+func (engine *Engine) tunWanted(status Status, active string) bool {
+	return engine.config.Tun.Enabled && active != "" && status.State == statusOn && status.Profile != nil && status.Profile.Id == active
 }
 
 // syncCore 把内核应处于的状态交给内核（异步生效），记下这次设定的序号，调用方可以用它等待生效。
 func (engine *Engine) syncCore() {
 	if engine.core != nil {
 		settings := engine.coreSettings()
-		engine.syncedShare = settings.Share
+		engine.syncedShare, engine.syncedTun = settings.Share, settings.Tun
 		engine.coreGeneration = engine.core.Sync(settings)
 	}
 }

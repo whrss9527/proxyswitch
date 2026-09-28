@@ -261,7 +261,8 @@ function heroView() {
     const server = profile.subscription
       ? html`<span>${status.node ? `订阅 · ${status.node}${profile.node ? "" : "（自动选择）"}` : describeServer(profile)}</span><span>${modeText(profile)}</span>`
       : html`<span class="mono">${describeServer(profile)}</span>`;
-    subtitle = html`<strong style="color:var(--text)">${profile.name}</strong>${server}<span class="chips">${status.applied.map((label) => html`<span class="chip">${label}</span>`)}</span>`;
+    const tun = app.state.core.tun && app.state.core.tun.active ? html`<span class="chip" title="TUN 模式：接管全部流量">TUN</span>` : "";
+    subtitle = html`<strong style="color:var(--text)">${profile.name}</strong>${server}<span class="chips">${status.applied.map((label) => html`<span class="chip">${label}</span>`)}${tun}</span>`;
     const latency = app.latency[profile.id];
     if (status.health === "down") {
       health = html`<span class="dot" style="background:var(--danger)"></span><span style="color:var(--danger)">连不上代理服务器：${status.health_message}</span>`;
@@ -1065,6 +1066,21 @@ function clashLinksCard() {
   return settingCard({ iconName: "download", title: "机场网站的一键导入", description: `${current}改由 ProxySwitch 处理后，${effect}`, control: html`<button class="button" data-action="take-over-clash-links">改由 ProxySwitch 处理</button>` });
 }
 
+// tunDescription 说明 TUN 模式的作用和现在的状态：正在接管、没开起来的原因，或者等订阅配置开启。
+function tunDescription(config) {
+  const tun = app.state.core.tun || {};
+  if (!config.tun.enabled) {
+    return "让不认系统代理的程序（游戏、部分命令行工具等）也走订阅的节点和分流规则。内核要以管理员权限运行，启动时确认一次";
+  }
+  if (tun.active) {
+    return html`<span style="color:var(--success)">正在接管这台电脑的全部流量</span>`;
+  }
+  if (tun.error) {
+    return html`<span style="color:var(--danger)" data-tun-error>${tun.error}</span>${tun.error.includes("管理员") ? "。关掉再打开可以重新确认" : ""}`;
+  }
+  return "开启订阅配置后生效，到时内核会请求管理员权限";
+}
+
 // coreSettingsView 是常规页里订阅使用的代理内核的设置：状态、本地端口、程序位置。
 function coreSettingsView(config) {
   const core = app.state.core;
@@ -1082,6 +1098,7 @@ function coreSettingsView(config) {
     ${coreNotice()}
     <div class="card card-group">
       ${settingCard({ iconName: "box", title: "mihomo 内核", description: html`${version} · <span class="mono">${core.path}</span>`, control: status })}
+      ${settingCard({ iconName: "layers", title: "TUN 模式（虚拟网卡）", description: tunDescription(config), control: html`<span class="switch-label">${config.tun.enabled ? "开" : "关"}</span>${switchButton({ checked: config.tun.enabled, setting: "tun.enabled", label: "TUN 模式" })}` })}
       ${settingCard({ iconName: "link", title: "本地代理端口", description: "订阅配置开启后，系统代理和环境变量指向 127.0.0.1 的这个端口（HTTP 和 SOCKS5 共用）", control: html`<input class="input mono numeric" style="width:96px" id="core-port" data-setting-number="core.port" value="${config.core.port}" inputmode="numeric" spellcheck="false">` })}
       ${settingCard({ iconName: "folder", title: "内核程序的位置", description: core.downloadable ? "留空使用 ProxySwitch 下载的内核；也可以填本机已有的 mihomo 程序" : "填本机 mihomo 程序的完整路径", control: html`<input class="input mono" style="width:280px" id="core-path" data-setting-text="core.path" value="${config.core.path}" placeholder="${core.downloadable ? "自动下载" : "例如 C:\\mihomo\\mihomo.exe"}" spellcheck="false">` })}
     </div>`;

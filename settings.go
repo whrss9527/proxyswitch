@@ -124,6 +124,7 @@ type CoreInfo struct {
 	Downloadable     bool             `json:"downloadable"`
 	Installing       *InstallProgress `json:"installing,omitempty"`
 	Share            CoreShareStatus  `json:"share"`
+	Tun              CoreTunStatus    `json:"tun"`
 }
 
 // NavigateInfo 是让已打开的设置页切换页面的请求，Serial 每次加一，页面发现变化时切到 Page；

@@ -132,24 +132,24 @@ func TestEngineShare(t *testing.T) {
 
 	// 其他程序改了系统代理：定时检查时跟着变，没变化时不打扰内核。
 	fixture.system.System = SystemProxyState{ProxyEnabled: true, Server: "socks=127.0.0.1:7891"}
-	engine.RefreshShare(engine.Status())
+	engine.RefreshCore(engine.Status())
 	if got := upstream(); got.Kind != shareUpstreamProxy || got.Proxy != "socks5://127.0.0.1:7891" {
 		t.Errorf("其他程序设置的代理也转发给它：%+v", got)
 	}
 	synced := len(core.history)
-	engine.RefreshShare(engine.Status())
+	engine.RefreshCore(engine.Status())
 	if len(core.history) != synced {
 		t.Error("去向没变时不应让内核重新加载")
 	}
 	fixture.system.System = SystemProxyState{PacEnabled: true, Pac: "http://10.0.0.1/proxy.pac"}
-	engine.RefreshShare(engine.Status())
+	engine.RefreshCore(engine.Status())
 	if got := upstream(); got.Kind != shareUpstreamUnsupported || !strings.Contains(got.Reason, "PAC") {
 		t.Errorf("PAC 没法转发：%+v", got)
 	}
 	// 指回共享入口自己的代理不能转发，否则绕圈。
 	for _, server := range []string{"127.0.0.1:17892", "localhost:17892"} {
 		fixture.system.System = SystemProxyState{ProxyEnabled: true, Server: server}
-		engine.RefreshShare(engine.Status())
+		engine.RefreshCore(engine.Status())
 		if got := upstream(); got.Kind != shareUpstreamDirect {
 			t.Errorf("%s 指回共享入口，应直连：%+v", server, got)
 		}
