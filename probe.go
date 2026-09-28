@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -477,11 +478,7 @@ func downloadPacScript(pacUrl string, timeout time.Duration) (string, TestResult
 		return "", TestResult{Message: "PAC 地址格式不对"}
 	}
 	if parsed.Scheme == "file" {
-		path := parsed.Path
-		if parsed.Host != "" {
-			path = "//" + parsed.Host + parsed.Path
-		}
-		body, err = os.ReadFile(strings.TrimPrefix(path, "/"))
+		body, err = os.ReadFile(fileUrlPath(parsed, runtime.GOOS == "windows"))
 		if err != nil {
 			return "", TestResult{Message: "读取 PAC 文件失败：" + err.Error()}
 		}

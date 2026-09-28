@@ -66,6 +66,12 @@ function profileKind(profile) {
 }
 
 // describeServer 是列表里显示的地址说明。
+// isSubscriptionAddress 表示可以用作订阅地址：http(s) 网址，或者本机文件的 file:// 地址或完整路径
+// （C:\…、\\服务器\…，保存时换成 file:// 地址）。
+function isSubscriptionAddress(text) {
+  return /^https?:\/\/\S+$/i.test(text) || /^file:\/\/\/?[^\s/]/i.test(text) || /^([a-z]:[\\/]|\\\\[^\\])/i.test(text);
+}
+
 function describeServer(profile) {
   const kind = profileKind(profile);
   if (kind === "subscription") {
@@ -274,8 +280,8 @@ function validateDraft(draft) {
     case "subscription":
       if (!draft.subscription.trim()) {
         errors.subscription = "请填写订阅地址";
-      } else if (!/^https?:\/\/\S+$/i.test(draft.subscription.trim())) {
-        errors.subscription = "订阅地址应以 http:// 或 https:// 开头";
+      } else if (!isSubscriptionAddress(draft.subscription.trim())) {
+        errors.subscription = "订阅地址应以 http:// 或 https:// 开头，本机的文件填完整的路径";
       }
       if (draft.mode === "rule" && draft.rulesChoice === "custom") {
         if (!draft.rules.trim()) {
@@ -791,7 +797,7 @@ function renderProfileEditor(draft, editing, errors) {
     case "subscription":
       kindFields = html`
         ${coreNotice()}
-        ${field({ label: "订阅地址", name: "subscription", value: draft.subscription, placeholder: "https://…", error: errors.subscription, mono: true, hint: "机场提供的订阅链接，Clash 和 V2Ray 格式都可以。点下面的「检查订阅」可以先看看有多少个节点" })}
+        ${field({ label: "订阅地址", name: "subscription", value: draft.subscription, placeholder: "https://…", error: errors.subscription, mono: true, hint: "机场提供的订阅链接，Clash 和 V2Ray 格式都可以；也可以填本机订阅文件的路径，文件改了会自动重新读取。点下面的「检查订阅」可以先看看有多少个节点" })}
         <div data-check-result>${renderCheckResult(draft.test)}</div>
         <div class="field">
           <span class="field-label">分流</span>

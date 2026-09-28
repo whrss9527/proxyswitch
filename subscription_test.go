@@ -6,8 +6,10 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -159,6 +161,104 @@ func TestFetchSubscription(t *testing.T) {
 	}
 	if _, err := fetchSubscription(server.URL, []string{deadProxy}); err == nil {
 		t.Error("所有路径都连不上时应报错")
+	}
+}
+
+// testFileAddress 是本机文件的 file:// 地址；Windows 上用粘贴路径时的换法。
+func testFileAddress(path string) string {
+	if runtime.GOOS == "windows" {
+		return normalizeSubscriptionAddress(path)
+	}
+	return "file://" + fileUrlEscaper.Replace(path)
+}
+
+func TestSubscriptionFileAddress(t *testing.T) {
+	// 粘贴的 Windows 路径换成 file:// 地址，空格和中文原样保留，# 和 ? 转义。
+	for text, want := range map[string]string{
+		"  https://sub.example.com/api?token=a  ": "https://sub.example.com/api?token=a",
+		`C:\Users\张三\订阅 1.yaml`:                   "file:///C:/Users/张三/订阅 1.yaml",
+		"d:/sub.yaml":                             "file:///d:/sub.yaml",
+		`\\nas\share\节点#2?.yaml`:                  "file://nas/share/节点%232%3F.yaml",
+		"file:///C:/a.yaml":                       "file:///C:/a.yaml",
+		"/home/a/sub.yaml":                        "/home/a/sub.yaml",
+		"C:sub.yaml":                              "C:sub.yaml",
+	} {
+		if got := normalizeSubscriptionAddress(text); got != want {
+			t.Errorf("%q 应换成 %q：%q", text, want, got)
+		}
+	}
+
+	// file:// 地址换回路径：Windows 上是 C:\… 和 \\server\…，其他系统只认本机的路径。
+	for _, item := range []struct {
+		address string
+		windows bool
+		want    string
+	}{
+		{"file:///C:/Users/张三/订阅 1.yaml", true, `C:\Users\张三\订阅 1.yaml`},
+		{"file:///C:/Users/%E5%BC%A0%E4%B8%89/a%23b.yaml", true, `C:\Users\张三\a#b.yaml`},
+		{"file://localhost/C:/a.yaml", true, `C:\a.yaml`},
+		{"file://nas/share/sub.yaml", true, `\\nas\share\sub.yaml`},
+		{"file:///", true, ""},
+		{"file:///home/a/sub.yaml", false, "/home/a/sub.yaml"},
+		{"file://localhost/home/a/sub.yaml", false, "/home/a/sub.yaml"},
+		{"file://nas/share/sub.yaml", false, ""},
+	} {
+		parsed, err := url.Parse(item.address)
+		if err != nil {
+			t.Fatalf("%s：%v", item.address, err)
+		}
+		if got := fileUrlPath(parsed, item.windows); got != item.want {
+			t.Errorf("%s（windows=%v）应是 %q：%q", item.address, item.windows, item.want, got)
+		}
+	}
+	original := `C:\订阅\a b%#?.yaml`
+	if parsed, err := url.Parse(normalizeSubscriptionAddress(original)); err != nil || fileUrlPath(parsed, true) != original {
+		t.Errorf("换成地址再换回来应是原来的路径：%v %v", parsed, err)
+	}
+
+	for _, address := range []string{`C:\订阅\a.yaml`, "file:///C:/a.yaml", "https://sub.example.com/a"} {
+		if err := validateSubscriptionUrl(address); err != nil {
+			t.Errorf("%q 应是可用的订阅地址：%v", address, err)
+		}
+	}
+	for _, address := range []string{"file://", "file:///", "ftp://sub.example.com/a", "sub.yaml", "C:sub.yaml"} {
+		if err := validateSubscriptionUrl(address); err == nil || !strings.Contains(err.Error(), "完整的路径") {
+			t.Errorf("%q 应报错并说明本机文件的写法：%v", address, err)
+		}
+	}
+}
+
+func TestFetchSubscriptionFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "我的节点.yaml")
+	if err := os.WriteFile(path, []byte(testClashSubscription), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result, err := fetchSubscription(testFileAddress(path), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Format != "clash" || result.Nodes != 3 || result.Name != "我的节点" || string(result.Content) != testClashSubscription {
+		t.Errorf("读取结果不对：%+v", result)
+	}
+	if runtime.GOOS == "windows" {
+		// 设置页检查订阅时直接粘贴的路径也能读。
+		if result, err := fetchSubscription(path, nil); err != nil || result.Nodes != 3 {
+			t.Errorf("粘贴的路径也应能读：%+v %v", result, err)
+		}
+	}
+
+	if _, err := fetchSubscription(testFileAddress(filepath.Join(dir, "没有.yaml")), nil); err == nil || !strings.Contains(err.Error(), "找不到订阅文件") {
+		t.Errorf("文件不存在时应说明：%v", err)
+	}
+	if _, err := fetchSubscription(testFileAddress(dir), nil); err == nil || !strings.Contains(err.Error(), "读不了订阅文件") {
+		t.Errorf("读的是文件夹时应报错：%v", err)
+	}
+	if err := os.WriteFile(path, []byte("<html>请先登录</html>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fetchSubscription(testFileAddress(path), nil); !errors.Is(err, errBadSubscription) {
+		t.Errorf("内容不对时应报错：%v", err)
 	}
 }
 

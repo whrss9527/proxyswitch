@@ -174,6 +174,12 @@ func (engine *Engine) subscriptionDue(profile *Profile, now time.Time) bool {
 		return true
 	}
 	attempted, _ := time.Parse(time.RFC3339Nano, info.Attempted)
+	if path, isFile := localFilePath(profile.Subscription); isFile {
+		// 本机的文件改过就重新读，不用等到每天更新的时候（修改时间在将来的不算，免得反复读）。
+		if stat, err := os.Stat(path); err == nil && stat.ModTime().After(attempted) && !stat.ModTime().After(now) {
+			return true
+		}
+	}
 	retry := now.Sub(attempted) >= subscriptionRetry || attempted.After(now)
 	if info.Updated == "" || !fileExists(engine.subscriptionPath(profile.Id)) {
 		return retry

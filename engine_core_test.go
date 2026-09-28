@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -276,6 +277,73 @@ func TestEngineSubscriptionExitAndResume(t *testing.T) {
 	restarted.PrepareExit()
 	if !fixture.system.System.ProxyEnabled || restarted.state.Resume != "" {
 		t.Error("普通配置退出时不应关闭代理")
+	}
+}
+
+func TestEngineFileSubscription(t *testing.T) {
+	fixture, core, _ := newSubscriptionFixture(t, subscriptionTestConfig)
+	engine := fixture.engine
+	now := time.Date(2026, 9, 24, 9, 0, 0, 0, time.Local)
+	engine.now = func() time.Time { return now }
+	path := filepath.Join(t.TempDir(), "节点.yaml")
+	if err := os.WriteFile(path, []byte(testSubscriptionContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, now.Add(-time.Hour), now.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Windows 上直接填路径，保存时换成 file:// 地址。
+	address := testFileAddress(path)
+	if runtime.GOOS == "windows" {
+		address = "  " + path + "  "
+	}
+	config := engine.Config().Clone()
+	config.FindProfile("机场").Subscription = address
+	if err := engine.SaveConfig(config); err != nil {
+		t.Fatal(err)
+	}
+	profile := *engine.Config().FindProfile("机场")
+	if profile.Subscription != testFileAddress(path) {
+		t.Errorf("保存的地址应是 file:// 地址：%q", profile.Subscription)
+	}
+	read := func() {
+		t.Helper()
+		result, err := fetchSubscription(profile.Subscription, nil)
+		if err := engine.RecordSubscription(profile.Id, profile.Subscription, result, err); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(engine.SubscriptionsDue()) != 1 {
+		t.Fatal("新的文件订阅应立即读取")
+	}
+	read()
+	if info := engine.subscriptionInfos()[profile.Id]; info.Nodes != 2 || len(core.last().Subscriptions) != 1 {
+		t.Errorf("读到的节点应交给内核：%+v", info)
+	}
+	if len(engine.SubscriptionsDue()) != 0 {
+		t.Error("文件没改不应再读")
+	}
+
+	// 文件改了：不用等一天，下次检查时重新读。
+	now = now.Add(10 * time.Minute)
+	if err := os.Chtimes(path, now.Add(-time.Minute), now.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if len(engine.SubscriptionsDue()) != 1 {
+		t.Error("文件改过应重新读")
+	}
+	read()
+	if len(engine.SubscriptionsDue()) != 0 {
+		t.Error("读过改过的文件后不应再读")
+	}
+
+	// 修改时间在将来（时钟不准）：不算改过，免得每次检查都读。
+	if err := os.Chtimes(path, now.Add(time.Hour), now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if len(engine.SubscriptionsDue()) != 0 {
+		t.Error("修改时间在将来时不应反复读")
 	}
 }
 
