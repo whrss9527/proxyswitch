@@ -48,6 +48,10 @@ var devDefaultNetwork = NetworkInfo{
 	Adapters: []NetworkAdapter{
 		{Name: "WLAN", DnsSuffix: "lan", Gateway: "192.168.1.1", GatewayMac: "a4-91-b1-0c-22-9e", Wireless: true},
 	},
+	Interfaces: []NetworkInterface{
+		{Name: "WLAN", Description: "Intel(R) Wi-Fi 6 AX201 160MHz"},
+		{Name: "vEthernet (WSL)", Description: "Hyper-V Virtual Ethernet Adapter"},
+	},
 }
 
 func newDevBackend(paths Paths, httpProxy, socks *fakeProxy) *devBackend {

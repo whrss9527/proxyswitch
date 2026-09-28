@@ -1101,12 +1101,13 @@ function renderNodes(profile, view) {
 
 // ---------- 添加自动切换规则 ----------
 
-const matchLabels = { ssid: "Wi-Fi 名称", dns_suffix: "DNS 后缀", gateway: "网关" };
+const matchLabels = { ssid: "Wi-Fi 名称", dns_suffix: "DNS 后缀", gateway: "网关", adapter: "网卡" };
 
 const matchHints = {
   ssid: "连接的 Wi-Fi 名称，不区分大小写",
   dns_suffix: "网络分配的 DNS 后缀，例如 corp.example.com，公司网络常见，有线网络也适用",
   gateway: "路由器的 MAC 地址（更可靠）或 IP 地址，有线网络也适用",
+  adapter: "网卡的名字或型号里包含的文字，不区分大小写，例如 WireGuard、Tailscale、AnyConnect：连上 VPN 时切换，断开后按其他规则",
 };
 
 function networkSuggestions(match) {
@@ -1114,6 +1115,8 @@ function networkSuggestions(match) {
   const values = new Set();
   if (match === "ssid") {
     network.ssids.forEach((ssid) => values.add(ssid));
+  } else if (match === "adapter") {
+    (network.interfaces || []).forEach((item) => values.add(item.name));
   } else if (match === "dns_suffix") {
     network.adapters.forEach((adapter) => adapter.dns_suffix && values.add(adapter.dns_suffix));
   } else {
@@ -1155,12 +1158,12 @@ function openRuleDialog(prefill = {}) {
         </div>
         <div class="field">
           <label class="field-label" for="rule-value">${matchLabels[draft.match]}</label>
-          <input class="input mono" id="rule-value" data-focus="rule-value" list="rule-suggestions" value="${draft.value}" placeholder="${draft.match === "ssid" ? "例如 Office-WiFi" : draft.match === "dns_suffix" ? "例如 corp.example.com" : "例如 a4-91-b1-0c-22-9e"}" spellcheck="false" autocomplete="off">
+          <input class="input mono" id="rule-value" data-focus="rule-value" list="rule-suggestions" value="${draft.value}" placeholder="${{ ssid: "例如 Office-WiFi", dns_suffix: "例如 corp.example.com", gateway: "例如 a4-91-b1-0c-22-9e", adapter: "例如 WireGuard" }[draft.match]}" spellcheck="false" autocomplete="off">
           <datalist id="rule-suggestions">${networkSuggestions(draft.match).map((value) => html`<option value="${value}">`)}</datalist>
           ${networkSuggestions(draft.match).length ? html`<div class="field-hint">当前网络：${networkSuggestions(draft.match).join("、")}</div>` : ""}
         </div>
         <div class="field">
-          <label class="field-label" for="rule-action">连上这个网络时</label>
+          <label class="field-label" for="rule-action">${draft.match === "adapter" ? "连上这块网卡时" : "连上这个网络时"}</label>
           <select class="select" id="rule-action" data-focus="rule-action">
             ${profiles.map((profile) => html`<option value="use:${profile.name}" ${draft.action === `use:${profile.name}` ? raw("selected") : ""}>使用「${profile.name}」</option>`)}
             <option value="off" ${draft.action === "off" ? raw("selected") : ""}>关闭代理</option>

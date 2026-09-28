@@ -369,6 +369,34 @@ def run_flows(page, api, info, config_path):
     page.wait_for_selector(".toast.danger")
     check(read_config(config_path)["auto_switch"]["rules"][1]["value"] == "corp.example.com", "规则的值清空时拒绝保存并提示")
 
+    # 按网卡：连上没有默认网关的 VPN 网卡时关闭代理（VPN 自己管路由）；WSL 这类虚拟网卡出现不算网络变化。
+    cafe = {"ssids": ["Cafe-WiFi"], "adapters": [{"name": "WLAN", "gateway": "192.168.9.1", "gateway_mac": "a4-91-b1-0c-99-01", "wireless": True}]}
+    with_vpn = {**cafe, "interfaces": [{"name": "WLAN", "description": "Intel(R) Wi-Fi 6 AX201"}, {"name": "公司 VPN", "description": "WireGuard Tunnel"}]}
+    api.call("POST", "/api/dev/network", with_vpn)
+    check(wait_until(lambda: page.locator(".network-chip:has-text('公司 VPN')").count() == 1), "列出没有默认网关的网卡（VPN）")
+    page.click(".network-chip:has-text('公司 VPN')")
+    page.wait_for_selector(".dialog #rule-value")
+    check(page.input_value(".dialog #rule-value") == "公司 VPN" and page.locator(".dialog [data-match=adapter][aria-pressed=true]").count() == 1, "点 VPN 网卡时按网卡添加规则")
+    page.fill(".dialog #rule-value", "wireguard")
+    page.select_option(".dialog #rule-action", "off")
+    page.click(".dialog [data-action=rule-save]")
+    page.wait_for_selector(".dialog", state="detached")
+    rule = read_config(config_path)["auto_switch"]["rules"][-1]
+    check(rule["match"] == "adapter" and rule["value"] == "wireguard" and rule["action"] == "off", "网卡规则写入配置")
+    check(page.locator(".rule >> nth=-1").inner_text().count("包含") == 1, "网卡规则写成「包含」")
+    api.call("POST", "/api/dev/network", with_vpn)
+    check(wait_until(lambda: api.call("GET", "/api/state")["status"]["state"] == "off"), "连上规则里的 VPN 网卡后按规则关闭代理")
+    check(api.call("GET", "/api/state")["auto_switch"]["match_index"] == len(read_config(config_path)["auto_switch"]["rules"]) - 1, "当前网络匹配网卡规则")
+    api.call("POST", "/api/use", {"name": "公司"})
+    with_wsl = {**with_vpn, "interfaces": with_vpn["interfaces"] + [{"name": "vEthernet (WSL)", "description": "Hyper-V Virtual Ethernet Adapter"}]}
+    api.call("POST", "/api/dev/network", with_wsl)
+    check(api.call("GET", "/api/state")["status"]["state"] == "on", "其他虚拟网卡出现时不覆盖手动的选择")
+    config = api.call("GET", "/api/state")["config"]
+    config["auto_switch"]["rules"] = [item for item in config["auto_switch"]["rules"] if item["match"] != "adapter"]
+    api.call("PUT", "/api/config", config)
+    api.call("POST", "/api/dev/network", {"ssids": [], "adapters": [{"name": "以太网", "dns_suffix": "corp.example.com", "gateway": "10.1.0.1", "gateway_mac": "00-1a-2b-3c-4d-5e"}]})
+    check(api.call("GET", "/api/state")["status"]["profile"] == "公司", "回到公司网络")
+
     # ---------- 常规 ----------
     page.click("[data-page=general]")
     page.wait_for_selector(".hotkey-recorder")

@@ -33,6 +33,54 @@ func TestRuleMatches(t *testing.T) {
 	}
 }
 
+func TestAdapterRuleMatches(t *testing.T) {
+	info := officeNetwork
+	info.Interfaces = []NetworkInterface{
+		{Name: "WLAN", Description: "Intel(R) Wi-Fi 6 AX201 160MHz"},
+		{Name: "以太网 3", Description: "Cisco AnyConnect Secure Mobility Client Virtual Miniport Adapter for Windows x64"},
+		{Name: "Tailscale", Description: "Tailscale Tunnel"},
+	}
+	cases := []struct {
+		value  string
+		wanted bool
+	}{
+		{"anyconnect", true},
+		{"TAILSCALE", true},
+		{"以太网 3", true},
+		{"WireGuard", false},
+		{" ", false},
+	}
+	for _, item := range cases {
+		if got := ruleMatches(NetRule{Match: "adapter", Value: item.value}, info); got != item.wanted {
+			t.Errorf("网卡规则 %q 匹配结果为 %v，应为 %v", item.value, got, item.wanted)
+		}
+	}
+	if describeRule(NetRule{Match: "adapter", Value: "Tailscale"}) != "网卡「Tailscale」" {
+		t.Error("网卡规则的描述不对")
+	}
+}
+
+func TestNetworkSignatureWithAdapterRules(t *testing.T) {
+	autoSwitch := AutoSwitch{Rules: []NetRule{{Match: "adapter", Value: "WireGuard", Action: "use", Profile: "公司"}}}
+	base := officeNetwork
+	base.Interfaces = []NetworkInterface{{Name: "WLAN"}}
+	// WSL、Hyper-V 这些虚拟网卡出现不改变特征。
+	withWsl := base
+	withWsl.Interfaces = append(append([]NetworkInterface{}, base.Interfaces...), NetworkInterface{Name: "vEthernet (WSL)", Description: "Hyper-V Virtual Ethernet Adapter"})
+	if networkSignature(base, autoSwitch) != networkSignature(withWsl, autoSwitch) {
+		t.Error("规则里没有的网卡出现时特征不应变化")
+	}
+	// 连上规则里的 VPN：特征变化。
+	withVpn := base
+	withVpn.Interfaces = append(append([]NetworkInterface{}, base.Interfaces...), NetworkInterface{Name: "公司", Description: "WireGuard Tunnel"})
+	if networkSignature(base, autoSwitch) == networkSignature(withVpn, autoSwitch) {
+		t.Error("连上规则里的网卡时特征应该变化")
+	}
+	if networkSignature(NetworkInfo{Interfaces: withVpn.Interfaces}, autoSwitch) != "" {
+		t.Error("断网时特征为空")
+	}
+}
+
 func TestDecideNetworkAction(t *testing.T) {
 	autoSwitch := AutoSwitch{
 		Rules: []NetRule{

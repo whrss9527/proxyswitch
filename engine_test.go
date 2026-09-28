@@ -448,6 +448,53 @@ func TestEngineAutoSwitch(t *testing.T) {
 	fixture.expectStatus(t, statusOn, "公司")
 }
 
+func TestEngineAutoSwitchByAdapter(t *testing.T) {
+	fixture := newEngineFixture(t, `{
+  "auto_switch": {
+    "enabled": true,
+    "rules": [
+      {"match": "adapter", "value": "WireGuard", "action": "use", "profile": "公司"},
+      {"match": "ssid", "value": "Home", "action": "off"}
+    ],
+    "default_action": "keep"
+  },
+  "profiles": [
+    {"name": "本机", "server": "127.0.0.1:7890"},
+    {"name": "公司", "server": "10.0.0.1:8080"}
+  ]
+}`)
+	engine := fixture.engine
+	home := NetworkInfo{Ssids: []string{"Home"}, Adapters: []NetworkAdapter{{Name: "WLAN", Gateway: "192.168.1.1"}}, Interfaces: []NetworkInterface{{Name: "WLAN"}}}
+	engine.UpdateNetwork(home)
+	engine.UpdateNetwork(home)
+	fixture.expectStatus(t, statusOff, "本机")
+	// 在家里手动打开本机代理；WSL 的虚拟网卡出现不算网络变化，不会改回。
+	if err := engine.UseProfile("本机"); err != nil {
+		t.Fatal(err)
+	}
+	withWsl := home
+	withWsl.Interfaces = []NetworkInterface{{Name: "WLAN"}, {Name: "vEthernet (WSL)", Description: "Hyper-V Virtual Ethernet Adapter"}}
+	engine.UpdateNetwork(withWsl)
+	engine.UpdateNetwork(withWsl)
+	fixture.expectStatus(t, statusOn, "本机")
+	// 连上 VPN（没有默认网关）：切到公司的代理。
+	withVpn := withWsl
+	withVpn.Interfaces = append(append([]NetworkInterface{}, withWsl.Interfaces...), NetworkInterface{Name: "公司 VPN", Description: "WireGuard Tunnel"})
+	engine.UpdateNetwork(withVpn)
+	engine.UpdateNetwork(withVpn)
+	fixture.expectStatus(t, statusOn, "公司")
+	if notice := fixture.lastNotice(t); !strings.Contains(notice.Text, "Wi-Fi「Home」") {
+		t.Errorf("自动切换通知不对：%+v", notice)
+	}
+	if state := engine.settingsState(); state.AutoSwitch.MatchIndex != 0 {
+		t.Errorf("应该命中网卡规则：%+v", state.AutoSwitch)
+	}
+	// 断开 VPN：回到家里的规则。
+	engine.UpdateNetwork(withWsl)
+	engine.UpdateNetwork(withWsl)
+	fixture.expectStatus(t, statusOff, "公司")
+}
+
 func TestEngineAutoSwitchTurnedOn(t *testing.T) {
 	fixture := newEngineFixture(t, `{
   "auto_switch": {"enabled": false, "rules": [{"match": "ssid", "value": "Office-5G", "action": "use", "profile": "公司"}]},
