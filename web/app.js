@@ -74,6 +74,14 @@ const requestableActions = new Set(["check-update"]);
 function runRequestedAction(action, argument = "") {
   if (requestableActions.has(action)) {
     actions[action]();
+  } else if (action === "import-subscription") {
+    let request = {};
+    try {
+      request = JSON.parse(argument || "{}");
+    } catch (error) {
+      request = {};
+    }
+    importSubscription(request.url || "", request.name || "");
   } else if (action === "diagnose") {
     let request = {};
     try {
@@ -83,6 +91,23 @@ function runRequestedAction(action, argument = "") {
     }
     startDiagnose(request.url || "", request.perspective || "pc");
   }
+}
+
+// importSubscription 处理机场网站的「一键导入」：打开添加订阅的对话框，填好地址并检查；已经添加过时提示是哪个配置。
+function importSubscription(url, name) {
+  if (!url) {
+    return;
+  }
+  if (!app.config) {
+    toast("配置文件有错误，改好后再导入", "warning", "没有导入订阅");
+    return;
+  }
+  const existing = app.config.profiles.find((profile) => profile.subscription === url);
+  if (existing) {
+    toast(`配置「${existing.name}」用的就是这个订阅`, "info", "已经添加过这个订阅");
+    return;
+  }
+  openProfileEditor({ subscription: url, name }, { kind: "subscription", check: true });
 }
 
 async function refreshState(fromPoll = false) {
@@ -997,6 +1022,7 @@ const actions = {
   },
   "share-test": () => testShare(),
   "share-firewall": () => allowShareFirewall(),
+  "take-over-clash-links": () => runOperation("/api/links/clash", {}, "机场网站的「一键导入 Clash」现在会打开 ProxySwitch", "没有改过来"),
   "share-clear": async () => {
     try {
       app.shareActivity = await api("POST", "/api/share/clear");

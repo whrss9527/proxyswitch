@@ -50,6 +50,10 @@ func main() {
 	command := ""
 	var arguments []string
 	for index, argument := range os.Args[1:] {
+		if isLink(argument) {
+			// 浏览器或脚本打开的 proxyswitch:// 或 clash:// 链接。
+			os.Exit(runLink(argument))
+		}
 		normalized := strings.ToLower(strings.TrimLeft(argument, "-/"))
 		if normalized == "autostart" {
 			autostarted = true
@@ -201,6 +205,16 @@ func runDiagnoseCommand(paths Paths, arguments []string) int {
 		}
 	}
 	return forwardOrStart("diagnose\x00" + address + "\x00" + perspective)
+}
+
+// runLink 把链接换成命令交给托盘程序；它没在运行时先在后台启动它。
+func runLink(link string) int {
+	request, err := parseLink(link)
+	if err != nil {
+		messageBox(0, err.Error(), appName, mbOk|mbIconWarning|mbSetForeground|mbTopmost)
+		return exitUsage
+	}
+	return forwardOrStart(request.Command + "\x00" + request.Argument)
 }
 
 // forwardOrStart 把要打开设置页的命令交给托盘程序；它没在运行时先在后台启动它。

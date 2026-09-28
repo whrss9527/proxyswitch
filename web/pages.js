@@ -1,6 +1,6 @@
 "use strict";
 
-// 各页面的内容：代理、局域网共享、网址诊断、自动切换、常规、诊断、关于。每个函数根据 app 里的状态生成整页 HTML。
+// 各页面的内容：代理、局域网共享、网址诊断、自动切换、常规、系统集成、诊断、关于。每个函数根据 app 里的状态生成整页 HTML。
 
 const pages = [
   { id: "proxies", label: "代理", icon: "globe" },
@@ -8,6 +8,7 @@ const pages = [
   { id: "diagnose", label: "网址诊断", icon: "stethoscope" },
   { id: "network", label: "自动切换", icon: "wifi" },
   { id: "general", label: "常规", icon: "sliders" },
+  { id: "system", label: "系统集成", icon: "windows" },
   { id: "diagnostics", label: "诊断", icon: "pulse" },
   { id: "about", label: "关于", icon: "info" },
 ];
@@ -984,6 +985,35 @@ function generalPage() {
     </div>`;
 }
 
+// ---------- 系统集成 ----------
+
+// systemPage 是和 Windows 打交道的设置：网页链接（proxyswitch:// 和机场网站的一键导入）等。
+function systemPage() {
+  if (!app.config) {
+    return html`${pageHeader("系统集成")}${configErrorView()}`;
+  }
+  const config = app.config;
+  return html`
+    ${pageHeader("系统集成", saveIndicator())}
+
+    <div class="section-title">网页链接</div>
+    <div class="card card-group">
+      ${settingCard({ iconName: "link", title: "网页链接", description: html`浏览器和脚本可以用链接操作 ProxySwitch，例如 <span class="mono">proxyswitch://toggle</span> 开关代理`, control: html`<span class="switch-label">${config.url_links ? "开" : "关"}</span>${switchButton({ checked: config.url_links, setting: "url_links", label: "网页链接" })}` })}
+      ${config.url_links ? clashLinksCard() : ""}
+    </div>`;
+}
+
+// clashLinksCard 说明机场网站的「一键导入 Clash」（clash:// 链接）由谁处理，别的程序在处理时可以接管。
+function clashLinksCard() {
+  const links = app.state.links || {};
+  const effect = "点机场网站上的「一键导入 Clash」会打开 ProxySwitch，填好订阅地址";
+  if (links.clash_ours) {
+    return settingCard({ iconName: "download", title: "机场网站的一键导入", description: effect, control: html`<span class="badge success">由 ProxySwitch 处理</span>` });
+  }
+  const current = links.clash ? `现在由「${links.clash}」处理。` : "现在没有程序处理。";
+  return settingCard({ iconName: "download", title: "机场网站的一键导入", description: `${current}改由 ProxySwitch 处理后，${effect}`, control: html`<button class="button" data-action="take-over-clash-links">改由 ProxySwitch 处理</button>` });
+}
+
 // coreSettingsView 是常规页里订阅使用的代理内核的设置：状态、本地端口、程序位置。
 function coreSettingsView(config) {
   const core = app.state.core;
@@ -1222,6 +1252,7 @@ const pageRenderers = {
   diagnose: diagnosePage,
   network: networkPage,
   general: generalPage,
+  system: systemPage,
   diagnostics: diagnosticsPage,
   about: aboutPage,
 };
