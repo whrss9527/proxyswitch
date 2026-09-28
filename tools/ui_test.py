@@ -871,7 +871,9 @@ def run_flows(page, api, info, config_path):
         active = ".connections >> nth=0"
         check(wait_until(lambda: test_host in page.inner_text(active), timeout=10), "正在进行的连接列出经内核的连接")
         row = f"{active} >> .connection:has-text('{test_host}')"
-        check("直连" in page.inner_text(row) and "本机" in page.inner_text(row) and "IPCIDR" in page.inner_text(row), "连接显示来源、命中的规则和走的出口")
+        # 隧道是这个测试程序（Python）开的，内核查到的程序名是解释器的文件名。
+        program = os.path.basename(os.path.realpath(sys.executable))
+        check("直连" in page.inner_text(row) and program in page.inner_text(row) and "IPCIDR" in page.inner_text(row), f"连接显示发起它的程序（{program}）、命中的规则和走的出口")
         check(wait_until(lambda: "直连" in page.inner_text(".traffic-list"), timeout=10), "按出口累计流量")
         page.fill("[data-focus=connections-filter]", "no-such-host.example")
         check(wait_until(lambda: "没有匹配的连接" in page.inner_text(active)), "筛选连接")
