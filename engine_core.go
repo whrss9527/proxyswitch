@@ -47,31 +47,89 @@ func (engine *Engine) geoReady() bool {
 	return true
 }
 
-// cachedRules 是读过的某个版本的分流规则。
+// cachedRules 是读过的某个版本的转换结果。
 type cachedRules struct {
 	revision string
 	manifest *ruleManifest
 }
 
-// loadedRules 返回订阅配置按当前规则地址下载好的规则；没填规则地址、还没下载好或读不出来时返回 nil。
-func (engine *Engine) loadedRules(profile *Profile) *ruleManifest {
-	if profile.Rules == "" {
-		return nil
-	}
-	info := engine.state.Rules[profile.Id]
-	if info == nil || info.Revision == "" || info.Source != subscriptionSource(profile.Rules) {
-		return nil
-	}
-	if cached, found := engine.ruleCache[profile.Id]; found && cached.revision == info.Revision {
+// ruleSetRetry 是规则集还没下载成功时重试的间隔：还没下载下来的规则集先跳过，要尽快补上。
+const ruleSetRetry = 10 * time.Minute
+
+// loadedManifest 返回完整配置类规则集转换好的规则，读不出来时返回 nil。
+func (engine *Engine) loadedManifest(set RuleSet, info *RuleSetInfo) *ruleManifest {
+	id := set.Id()
+	if cached, found := engine.ruleCache[id]; found && cached.revision == info.Revision {
 		return cached.manifest
 	}
-	manifest, err := readRuleManifest(engine.paths.Core, profile.Id, info.Revision)
+	manifest, err := readRuleManifest(engine.paths.Core, id, info.Revision)
 	if err != nil {
-		slog.Warn("读取分流规则失败", "profile", profile.Name, "err", err)
+		slog.Warn("读取分流规则失败", "rule_set", set.Name, "err", err)
 		return nil
 	}
-	engine.ruleCache[profile.Id] = cachedRules{info.Revision, manifest}
+	engine.ruleCache[id] = cachedRules{info.Revision, manifest}
 	return manifest
+}
+
+// composeRules 按规则集的顺序拼出内核的分流规则和其中的规则集文件，最后一条是 MATCH（其余流量）。内置的直接展开，纯列表交给
+// 内核的 rule-provider，完整配置用转换好的规则。这里不联网：还没下载好的规则集先跳过，后台下载好后内核重新加载。
+func (engine *Engine) composeRules() ([]string, map[string]CoreRuleProvider) {
+	groups := engine.config.GroupNames()
+	var rules []string
+	providers := map[string]CoreRuleProvider{}
+	fileFinal := ""
+	for _, set := range engine.config.RuleSets {
+		if set.Disabled {
+			continue
+		}
+		if set.IsBuiltin() {
+			rules = append(rules, builtinRules(set.Url, corePolicyTarget(policyOr(set.Policy, rulePolicyDirect), groups))...)
+			continue
+		}
+		info := engine.state.RuleSets[set.Id()]
+		if info == nil || info.Revision == "" {
+			continue
+		}
+		switch info.Kind {
+		case ruleSetProvider:
+			behavior := set.Behavior
+			if behavior == "" {
+				behavior = info.Behavior
+			}
+			providers[set.Id()] = CoreRuleProvider{Behavior: behavior, Format: info.Format, Path: ruleDir(set.Id()) + "/" + info.Revision, Optional: true}
+			rules = append(rules, "RULE-SET,"+set.Id()+","+corePolicyTarget(policyOr(set.Policy, rulePolicyProxy), groups))
+		case ruleSetConvert:
+			manifest := engine.loadedManifest(set, info)
+			if manifest == nil {
+				continue
+			}
+			for _, rule := range manifest.Rules {
+				rules = append(rules, rule.line(set.Policy, groups))
+			}
+			for name, provider := range manifest.Providers {
+				providers[name] = provider
+			}
+			// 跟随规则文件时用最后一个没改去向的完整配置的 FINAL。
+			if set.Policy == "" && manifest.Final != "" {
+				fileFinal = ruleSetTarget("", manifest.Final, manifest.FinalName, groups)
+			}
+		}
+	}
+	final := coreTopGroup
+	switch {
+	case engine.config.FinalPolicy != "":
+		final = corePolicyTarget(engine.config.FinalPolicy, groups)
+	case fileFinal != "":
+		final = fileFinal
+	}
+	return append(rules, "MATCH,"+final), providers
+}
+
+func policyOr(policy, fallback string) string {
+	if policy == "" {
+		return fallback
+	}
+	return policy
 }
 
 // coreSettings 按配置和已下载的订阅算出内核应处于的状态。正在使用的订阅是最近使用的配置（如果它是订阅），
@@ -97,9 +155,9 @@ func (engine *Engine) coreSettings() CoreSettings {
 	}
 	if selected := engine.selectedProfile(); selected != nil && selected.IsSubscription() && engine.subscriptionLoaded(selected) {
 		settings.Active, settings.Mode = selected.Id, selected.Mode
-		if manifest := engine.loadedRules(selected); manifest != nil && selected.Mode == "rule" {
-			settings.Rules, settings.RuleProviders = manifest.Rules, manifest.Providers
-		}
+	}
+	if settings.Mode == "rule" && len(settings.Subscriptions) > 0 {
+		settings.Rules, settings.RuleProviders = engine.composeRules()
 	}
 	if settings.GroupSource = engine.groupSource(); settings.GroupSource != "" {
 		settings.PolicyGroups = engine.config.PolicyGroups
@@ -304,7 +362,7 @@ func (engine *Engine) RecordSubscription(profileId, address string, result subsc
 	return nil
 }
 
-// forgetSubscriptions 删除已不在配置里的订阅的记录和文件，以及不再使用的分流规则。
+// forgetSubscriptions 删除已不在配置里的订阅的记录和文件，已删除的规则集的记录和文件，以及旧版按配置下载的分流规则。
 func (engine *Engine) forgetSubscriptions() {
 	changed := false
 	for profileId := range engine.state.Subscriptions {
@@ -315,10 +373,19 @@ func (engine *Engine) forgetSubscriptions() {
 		}
 	}
 	for profileId := range engine.state.Rules {
-		if profile := engine.config.FindProfileById(profileId); profile == nil || !profile.IsSubscription() || profile.Rules == "" {
-			delete(engine.state.Rules, profileId)
-			delete(engine.ruleCache, profileId)
-			removeRuleRevisions(engine.paths.Core, profileId, "")
+		removeRuleRevisions(engine.paths.Core, profileId, "")
+		changed = true
+	}
+	engine.state.Rules = nil
+	used := map[string]bool{}
+	for _, set := range engine.config.RuleSets {
+		used[set.Id()] = true
+	}
+	for id := range engine.state.RuleSets {
+		if !used[id] {
+			delete(engine.state.RuleSets, id)
+			delete(engine.ruleCache, id)
+			removeRuleRevisions(engine.paths.Core, id, "")
 			changed = true
 		}
 	}
@@ -327,71 +394,77 @@ func (engine *Engine) forgetSubscriptions() {
 	}
 }
 
-// RulesDue 返回该下载分流规则的订阅配置：新填的、地址改了的立即下载；下载成功后每天更新一次，
-// 失败或有规则列表没下载到时隔一段时间重试。按全局代理使用的也下载，切换模式时可以立即用上。
-func (engine *Engine) RulesDue() []Profile {
-	if engine.config == nil {
+// RuleSetsDue 返回该下载的规则集：启用的、不是内置的；新添加的立即下载，没下载成功的隔一会儿重试；下载成功后每天更新一次，
+// 有引用的列表没下载到时隔一段时间重试；本机的文件改过就重新读。没有订阅配置时不下载（用不上）。
+func (engine *Engine) RuleSetsDue() []RuleSet {
+	if engine.config == nil || !engine.config.HasSubscriptions() {
 		return nil
 	}
 	now := engine.now()
-	var due []Profile
-	for _, profile := range engine.config.Profiles {
-		if profile.IsSubscription() && profile.Rules != "" && engine.rulesDue(&profile, now) {
-			due = append(due, profile)
+	var due []RuleSet
+	for _, set := range engine.config.RuleSets {
+		if !set.Disabled && !set.IsBuiltin() && engine.ruleSetDue(set, now) {
+			due = append(due, set)
 		}
 	}
 	return due
 }
 
-func (engine *Engine) rulesDue(profile *Profile, now time.Time) bool {
-	info := engine.state.Rules[profile.Id]
-	if info == nil || info.Source != subscriptionSource(profile.Rules) {
+func (engine *Engine) ruleSetDue(set RuleSet, now time.Time) bool {
+	info := engine.state.RuleSets[set.Id()]
+	if info == nil {
 		return true
 	}
 	attempted, _ := time.Parse(time.RFC3339Nano, info.Attempted)
-	retry := now.Sub(attempted) >= subscriptionRetry || attempted.After(now)
-	if engine.loadedRules(profile) == nil {
-		return retry
+	if path, isFile := localFilePath(set.Url); isFile {
+		// 本机的文件改过就重新读（修改时间在将来的不算，免得反复读）。
+		if stat, err := os.Stat(path); err == nil && stat.ModTime().After(attempted) && !stat.ModTime().After(now) {
+			return true
+		}
+	}
+	if info.Revision == "" {
+		return now.Sub(attempted) >= ruleSetRetry || attempted.After(now)
 	}
 	updated, _ := time.Parse(time.RFC3339Nano, info.Updated)
+	retry := now.Sub(attempted) >= subscriptionRetry || attempted.After(now)
 	stale := now.Sub(updated) >= subscriptionInterval || updated.After(now) || info.FailedSets > 0
 	return stale && retry && !engine.UpdatesPaused()
 }
 
-// RecordRules 记下一次分流规则下载的结果：成功时换用新版本的规则、删除旧版本，内核随之重新加载。
-// address 是下载时的规则地址，下载期间地址被改掉或配置被删除时忽略这次结果。
-func (engine *Engine) RecordRules(profileId, address string, result rulesDownload, downloadErr error) error {
+// RecordRuleSet 记下一次规则集下载的结果：成功时换用新版本、删除旧版本，内核随之重新加载；失败时继续用上次下载的。
+// 下载期间规则集被删掉（或地址改了）时忽略这次结果。
+func (engine *Engine) RecordRuleSet(address string, result ruleSetDownload, downloadErr error) error {
 	if engine.config == nil {
 		return errNoConfig
 	}
-	profile := engine.config.FindProfileById(profileId)
-	if profile == nil || !profile.IsSubscription() || profile.Rules != address {
-		return errors.New("规则地址已经改了")
+	set := engine.config.FindRuleSet(address)
+	if set == nil {
+		return errors.New("这个规则集已经删除了")
 	}
-	if engine.state.Rules == nil {
-		engine.state.Rules = map[string]*RulesInfo{}
+	if engine.state.RuleSets == nil {
+		engine.state.RuleSets = map[string]*RuleSetInfo{}
 	}
-	info := engine.state.Rules[profileId]
-	source := subscriptionSource(address)
-	if info == nil || info.Source != source {
-		info = &RulesInfo{Source: source}
-		engine.state.Rules[profileId] = info
+	id := set.Id()
+	info := engine.state.RuleSets[id]
+	if info == nil {
+		info = &RuleSetInfo{}
+		engine.state.RuleSets[id] = info
 	}
 	now := engine.now()
 	info.Attempted = now.Format(time.RFC3339Nano)
 	if downloadErr != nil {
 		info.Error = downloadErr.Error()
 		engine.saveState()
-		slog.Warn("下载分流规则失败", "profile", profile.Name, "err", downloadErr)
+		slog.Warn("下载规则集失败", "rule_set", set.Name, "err", downloadErr)
 		return downloadErr
 	}
-	*info = RulesInfo{
-		Source: source, Updated: now.Format(time.RFC3339Nano), Attempted: info.Attempted, Revision: result.Revision,
-		Rules: result.Count, Sets: result.Sets, FailedSets: result.FailedSets, Skipped: result.Skipped, Final: result.Final, Geo: result.Geo,
+	*info = RuleSetInfo{
+		Updated: now.Format(time.RFC3339Nano), Attempted: info.Attempted, Kind: result.Kind, Revision: result.Revision, Format: result.Format, Behavior: result.Behavior,
+		Rules: result.Count, Sets: result.Sets, FailedSets: result.FailedSets, Skipped: result.Skipped, Final: result.Final, FinalName: result.FinalName, Geo: result.Geo,
 	}
 	engine.saveState()
-	removeRuleRevisions(engine.paths.Core, profileId, result.Revision)
-	slog.Info("分流规则已更新", "profile", profile.Name, "rules", result.Count, "sets", result.Sets, "failed_sets", result.FailedSets, "skipped", result.Skipped)
+	removeRuleRevisions(engine.paths.Core, id, result.Revision)
+	slog.Info("规则集已更新", "rule_set", set.Name, "kind", result.Kind, "rules", result.Count, "failed_sets", result.FailedSets, "skipped", result.Skipped)
 	engine.syncCore()
 	if engine.GeoDue() {
 		engine.requestDownloads()
@@ -459,20 +532,10 @@ func (engine *Engine) SelectGroupNode(name, node string) error {
 	return engine.SaveConfig(updated)
 }
 
-// GeoDue 表示需要下载地理数据：有按规则分流的订阅，用的是内置的大陆直连（包括自己的规则还没下载好时）或者规则里有 GEOIP，
+// GeoDue 表示需要下载地理数据：有按规则分流的订阅配置，启用了内置的国内直连或者用到 GEOIP / GEOSITE 的规则集，
 // 数据还没下载，并且离上次尝试已过了重试间隔。
 func (engine *Engine) GeoDue() bool {
-	if engine.config == nil {
-		return false
-	}
-	needed := false
-	for index := range engine.config.Profiles {
-		profile := &engine.config.Profiles[index]
-		if profile.IsSubscription() && profile.Mode == "rule" && (engine.loadedRules(profile) == nil || engine.state.Rules[profile.Id].Geo) {
-			needed = true
-		}
-	}
-	if !needed {
+	if engine.config == nil || !engine.geoNeeded() {
 		return false
 	}
 	now := engine.now()
@@ -481,6 +544,27 @@ func (engine *Engine) GeoDue() bool {
 		return false
 	}
 	return !engine.geoReady()
+}
+
+func (engine *Engine) geoNeeded() bool {
+	ruleMode := false
+	for index := range engine.config.Profiles {
+		if profile := &engine.config.Profiles[index]; profile.IsSubscription() && profile.Mode == "rule" {
+			ruleMode = true
+		}
+	}
+	if !ruleMode {
+		return false
+	}
+	for _, set := range engine.config.RuleSets {
+		if set.Disabled {
+			continue
+		}
+		if info := engine.state.RuleSets[set.Id()]; set.IsBuiltin() || info != nil && info.Geo {
+			return true
+		}
+	}
+	return false
 }
 
 // RecordGeoDownload 记下一次地理数据下载，成功时让内核用上大陆直连规则。
@@ -529,24 +613,47 @@ func (engine *Engine) subscriptionInfos() map[string]SubscriptionInfo {
 	return infos
 }
 
-// rulesInfos 给设置页的分流规则下载情况：只列出填了规则地址的订阅配置，地址改了还没重新下载的显示为空（正在下载）。
-func (engine *Engine) rulesInfos() map[string]RulesInfo {
-	infos := map[string]RulesInfo{}
+// RuleSetState 是设置页里一个规则集的情况：Id 是它在内核里的名字；Kind 是加载方式（下载前按地址猜，下载后以认出来的为准）；
+// Downloaded 表示已经下载好、正在使用；Count 是规则数（纯列表的数目在内核读进来后由内核报告）；其余见 RuleSetInfo。
+type RuleSetState struct {
+	Id         string `json:"id"`
+	Kind       string `json:"kind"`
+	Downloaded bool   `json:"downloaded"`
+	Updated    string `json:"updated,omitempty"`
+	Error      string `json:"error,omitempty"`
+	Behavior   string `json:"behavior,omitempty"`
+	Count      int    `json:"count,omitempty"`
+	Sets       int    `json:"sets,omitempty"`
+	FailedSets int    `json:"failed_sets,omitempty"`
+	Skipped    int    `json:"skipped,omitempty"`
+	Final      string `json:"final,omitempty"`
+	FinalName  string `json:"final_name,omitempty"`
+}
+
+// ruleSetStates 给设置页的规则集情况，按地址查。
+func (engine *Engine) ruleSetStates() map[string]RuleSetState {
+	states := map[string]RuleSetState{}
 	if engine.config == nil {
-		return infos
+		return states
 	}
-	for _, profile := range engine.config.Profiles {
-		if !profile.IsSubscription() || profile.Rules == "" {
-			continue
+	for _, set := range engine.config.RuleSets {
+		state := RuleSetState{Id: set.Id(), Kind: set.guessKind()}
+		if info := engine.state.RuleSets[set.Id()]; info != nil {
+			state.Updated, state.Error = info.Updated, info.Error
+			if info.Revision != "" {
+				state.Kind, state.Downloaded, state.Behavior, state.Count = info.Kind, true, info.Behavior, info.Rules
+				state.Sets, state.FailedSets, state.Skipped, state.Final, state.FinalName = info.Sets, info.FailedSets, info.Skipped, info.Final, info.FinalName
+			}
 		}
-		var copied RulesInfo
-		if info := engine.state.Rules[profile.Id]; info != nil && info.Source == subscriptionSource(profile.Rules) {
-			copied = *info
-			copied.Source, copied.Revision = "", ""
+		if set.IsBuiltin() {
+			state.Downloaded, state.Count = true, len(builtinRules(set.Url, ""))
 		}
-		infos[profile.Id] = copied
+		if set.Behavior != "" {
+			state.Behavior = set.Behavior
+		}
+		states[set.Url] = state
 	}
-	return infos
+	return states
 }
 
 // coreInfo 给设置页的内核情况中与平台无关的部分；是否在运行、能否下载由调用方补上。

@@ -30,7 +30,7 @@ type subscriptionService struct {
 
 	mutex      sync.Mutex
 	installing *InstallProgress
-	// rulesMutex 让分流规则同一时间只下载一份：每次下载成功都会删掉其他版本的文件，并发下载会删掉对方刚写的文件。
+	// rulesMutex 让规则集同一时间只下载一个：每次下载成功都会删掉其他版本的文件，并发下载同一个会删掉对方刚写的文件。
 	rulesMutex sync.Mutex
 	// shares 记下经局域网共享入口的连接；diagnose 是最近一次网址诊断；speed 是实时网速。
 	shares     shareHistory
@@ -79,12 +79,13 @@ func (service *subscriptionService) downloadDue() {
 		result, err := fetchSubscription(profile.Subscription, paths)
 		_ = service.onEngine(func() { _ = service.engine.RecordSubscription(profile.Id, profile.Subscription, result, err) })
 	}
-	// 订阅下载后内核可能已经可用，分流规则和地理数据可以经内核下载。
-	if service.onEngine(func() { due, paths = service.engine.RulesDue(), service.engine.DownloadPaths() }) != nil {
+	// 订阅下载后内核可能已经可用，规则集和地理数据可以经内核下载。
+	var sets []RuleSet
+	if service.onEngine(func() { sets, paths = service.engine.RuleSetsDue(), service.engine.DownloadPaths() }) != nil {
 		return
 	}
-	for _, profile := range due {
-		_ = service.updateRules(profile, paths)
+	for _, set := range sets {
+		_ = service.updateRuleSet(set, paths)
 	}
 	geoDue := false
 	if service.onEngine(func() { geoDue, paths = service.engine.GeoDue(), service.engine.DownloadPaths() }) != nil || !geoDue {
@@ -94,13 +95,13 @@ func (service *subscriptionService) downloadDue() {
 	_ = service.onEngine(func() { service.engine.RecordGeoDownload(err) })
 }
 
-// updateRules 下载订阅配置的分流规则并记下结果。规则一般放在 GitHub 上，先经代理下载。
-func (service *subscriptionService) updateRules(profile Profile, paths []string) error {
+// updateRuleSet 下载规则集并记下结果。规则一般放在 GitHub 上，先经代理下载。
+func (service *subscriptionService) updateRuleSet(set RuleSet, paths []string) error {
 	service.rulesMutex.Lock()
 	defer service.rulesMutex.Unlock()
-	result, err := fetchRules(service.engine.paths.Core, profile.Id, profile.Rules, proxiesFirst(paths))
+	result, err := fetchRuleSet(service.engine.paths.Core, set, proxiesFirst(paths))
 	var recordErr error
-	if runErr := service.onEngine(func() { recordErr = service.engine.RecordRules(profile.Id, profile.Rules, result, err) }); runErr != nil {
+	if runErr := service.onEngine(func() { recordErr = service.engine.RecordRuleSet(set.Url, result, err) }); runErr != nil {
 		return runErr
 	}
 	return recordErr
@@ -203,32 +204,80 @@ func (service *subscriptionService) UpdateSubscription(profileId string) error {
 	return service.core.Wait(generation, coreWaitTimeout)
 }
 
-// UpdateRules 立即重新下载订阅配置的分流规则，等内核用上新规则后返回。
-func (service *subscriptionService) UpdateRules(profileId string) error {
-	profile, paths, err := service.subscriptionProfile(profileId)
+// UpdateRuleSet 立即重新下载一个规则集（按流量计费的网络上也下载），等内核用上后返回。下载好了就算更新成功：
+// 内核自己的问题（例如还没下载内核）在设置页和通知里另外提示，规则等内核能用时自动生效。
+func (service *subscriptionService) UpdateRuleSet(address string) error {
+	var set RuleSet
+	var paths []string
+	var err error
+	if runErr := service.onEngine(func() {
+		config := service.engine.Config()
+		if config == nil {
+			err = errNoConfig
+			return
+		}
+		found := config.FindRuleSet(address)
+		switch {
+		case found == nil:
+			err = errors.New("没有这个规则集")
+		case found.IsBuiltin():
+			err = errors.New("内置的规则不用下载")
+		default:
+			set, paths = *found, service.engine.DownloadPaths()
+		}
+	}); runErr != nil {
+		return runErr
+	}
 	if err != nil {
 		return err
 	}
-	if profile.Rules == "" {
-		return errors.New("这个配置使用内置的大陆直连规则，不需要下载")
-	}
-	if err := service.updateRules(profile, paths); err != nil {
+	if err := service.updateRuleSet(set, paths); err != nil {
 		return err
 	}
+	return service.waitRuleSets()
+}
+
+// waitRuleSets 等内核用上新下载的规则集，内核出错不算规则集没更新成功（见 UpdateRuleSet）。
+func (service *subscriptionService) waitRuleSets() error {
 	var generation int
 	if err := service.onEngine(func() { generation = service.engine.CoreGeneration() }); err != nil {
 		return err
 	}
-	return service.core.Wait(generation, coreWaitTimeout)
+	_ = service.core.Wait(generation, coreWaitTimeout)
+	return nil
 }
 
-// CheckRules 下载规则配置检查地址是否可用，给编辑配置的对话框显示规则数，不保存。
-func (service *subscriptionService) CheckRules(address string) (RulesCheck, error) {
+// RuleSetsUpdate 是「全部更新」的结果：更新了几个规则集，失败的是哪些（名字和原因）。
+type RuleSetsUpdate struct {
+	Updated int      `json:"updated"`
+	Failed  []string `json:"failed,omitempty"`
+}
+
+// UpdateAllRuleSets 立即重新下载所有启用的规则集，等内核用上后返回（内核出错不算失败，见 UpdateRuleSet）。
+func (service *subscriptionService) UpdateAllRuleSets() (RuleSetsUpdate, error) {
+	var sets []RuleSet
 	var paths []string
-	if err := service.onEngine(func() { paths = service.engine.DownloadPaths() }); err != nil {
-		return RulesCheck{}, err
+	if err := service.onEngine(func() {
+		if config := service.engine.Config(); config != nil {
+			for _, set := range config.RuleSets {
+				if !set.Disabled && !set.IsBuiltin() {
+					sets = append(sets, set)
+				}
+			}
+		}
+		paths = service.engine.DownloadPaths()
+	}); err != nil {
+		return RuleSetsUpdate{}, err
 	}
-	return checkRuleConfig(address, proxiesFirst(paths))
+	var result RuleSetsUpdate
+	for _, set := range sets {
+		if err := service.updateRuleSet(set, paths); err != nil {
+			result.Failed = append(result.Failed, set.Name+"："+err.Error())
+		} else {
+			result.Updated++
+		}
+	}
+	return result, service.waitRuleSets()
 }
 
 // SelectGroupNode 给手动选择的策略组选中成员（见 PolicyGroup.Node）：记在配置文件里，等内核切换后返回。
@@ -334,6 +383,17 @@ func (service *subscriptionService) fillState(state *SettingsState) {
 	state.Speed = service.Speed()
 	if state.Config != nil && status.Running && state.Groups.Source != "" {
 		state.Groups.States, _ = service.core.GroupStates(state.Config.PolicyGroups, state.Groups.Source, coreApiTimeout)
+	}
+	// 纯列表的规则数由内核报告（读进来之后才知道）。
+	if status.Running && len(state.RuleSets) > 0 {
+		if counts, err := service.core.RuleProviderCounts(coreApiTimeout); err == nil {
+			for address, set := range state.RuleSets {
+				if count, found := counts[set.Id]; found && set.Kind == ruleSetProvider {
+					set.Count = count
+					state.RuleSets[address] = set
+				}
+			}
+		}
 	}
 	if state.Status.State != statusOn || state.Config == nil || !status.Running {
 		return

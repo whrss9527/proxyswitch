@@ -1,9 +1,10 @@
 "use strict";
 
-// 各页面的内容：代理、局域网共享、网址诊断、自动切换、常规、系统集成、诊断、关于。每个函数根据 app 里的状态生成整页 HTML。
+// 各页面的内容：代理、分流规则、局域网共享、网址诊断、自动切换、常规、系统集成、诊断、关于。每个函数根据 app 里的状态生成整页 HTML。
 
 const pages = [
   { id: "proxies", label: "代理", icon: "globe" },
+  { id: "rules", label: "分流规则", icon: "signpost" },
   { id: "share", label: "局域网共享", icon: "router" },
   { id: "diagnose", label: "网址诊断", icon: "stethoscope" },
   { id: "network", label: "自动切换", icon: "wifi" },
@@ -176,48 +177,31 @@ function coreNotice(purpose = "使用订阅") {
   return html``;
 }
 
-// rulePresetFor 返回规则地址对应的预设（设置页里可以直接选的规则），不是预设时返回 null。
-function rulePresetFor(url) {
-  return (app.state.rule_presets || []).find((preset) => preset.url === url) || null;
+// enabledRuleSets 是启用的规则集。
+function enabledRuleSets() {
+  return ((app.config && app.config.rule_sets) || []).filter((set) => !set.disabled);
 }
 
-// rulesName 是分流规则的简短说明：内置的大陆直连、预设的名字或「自定义规则」。
-function rulesName(rules) {
-  if (!rules) {
-    return "大陆直连";
+// rulesSummary 与程序里的同名函数一致：只启用了一个规则集时是它的名字，否则是启用的个数。
+function rulesSummary() {
+  const sets = enabledRuleSets();
+  if (sets.length === 0) {
+    return "没有启用规则集";
   }
-  const preset = rulePresetFor(rules);
-  return preset ? preset.name : "自定义规则";
+  return sets.length === 1 ? sets[0].name : `${sets.length} 个规则集`;
 }
 
-// modeText 是订阅配置的分流方式，例如「按规则分流 · 黑名单 + 去广告」或「全局代理」。
+// modeText 是订阅配置的分流方式，例如「按规则分流 · 国内直连」或「全局代理」。
 function modeText(profile) {
-  return profile.mode === "global" ? "全局代理" : `按规则分流 · ${rulesName(profile.rules)}`;
+  return profile.mode === "global" ? "全局代理" : `按规则分流 · ${rulesSummary()}`;
 }
 
-const finalTexts = { proxy: "其余网站走节点", direct: "其余网站直连", reject: "其余网站被拦截" };
-
-// rulesMeta 是订阅配置的分流方式在列表里的说明，带上规则的下载状态：下载中、没下载成功时暂时按大陆直连分流。
+// rulesMeta 是订阅配置的分流方式在列表里的说明，有规则集下载失败时标出来。
 function rulesMeta(profile) {
-  if (profile.mode === "global" || !profile.rules) {
-    return html`<span>${modeText(profile)}</span>`;
-  }
-  const info = (app.state.rules || {})[profile.id] || {};
-  const name = rulesName(profile.rules);
-  if (!info.updated) {
-    if (info.error) {
-      return html`<span style="color:var(--danger)" title="${info.error}">分流规则「${name}」没有下载成功，暂时按大陆直连分流</span>`;
-    }
-    return html`<span><span class="spinner" style="width:10px;height:10px;border-width:1.5px;vertical-align:-1px"></span> 正在下载分流规则「${name}」…</span>`;
-  }
-  const details = [`${(info.rules || 0).toLocaleString()} 条规则`, finalTexts[info.final]];
-  if (info.skipped) {
-    details.push(`${info.skipped} 条内核不支持，已跳过`);
-  }
+  const failed = profile.mode === "global" ? [] : enabledRuleSets().filter((set) => ruleSetState(set).error);
   return html`
-    <span title="${details.join("，")}">${modeText(profile)} · ${(info.rules || 0).toLocaleString()} 条</span>
-    ${info.failed_sets ? html`<span class="badge warning" title="下次更新时再试">${info.failed_sets} 个规则列表没下载到</span>` : ""}
-    ${info.error ? html`<span class="badge warning" title="${info.error}">规则更新失败，仍在使用上次的规则</span>` : ""}`;
+    <span>${modeText(profile)}</span>
+    ${failed.length ? html`<span class="badge warning" title="${failed.map((set) => `${set.name}：${ruleSetState(set).error}`).join("\n")}">${failed.length} 个规则集下载失败</span>` : ""}`;
 }
 
 // subscriptionMeta 是订阅配置在列表里的说明：节点数、选中的节点、流量和到期时间、分流方式，或下载状态。
@@ -474,12 +458,8 @@ function ruleTargetProblem(value) {
   return `认不出「${value}」：填域名（例如 youtube.com）或 IP / 网段（例如 8.8.8.8、10.0.0.0/8）`;
 }
 
-// customRulesView 是代理页的自定义规则：域名、IP 或者程序固定走节点、直连或被拦截。只对订阅配置起作用，
-// 没有订阅配置时不显示。
+// customRulesView 是分流规则页的自定义规则：域名、IP 或者程序固定走节点、直连、被拦截或者走某个策略组。
 function customRulesView() {
-  if (!app.config.profiles.some((profile) => profile.subscription)) {
-    return "";
-  }
   const rules = app.config.custom_rules || [];
   const draft = app.customRuleDraft;
   const program = draft.type === "program";
@@ -491,9 +471,9 @@ function customRulesView() {
       <button class="button subtle icon-only" data-action="custom-rule-delete" data-index="${index}" title="删除" aria-label="删除「${rule.value}」">${icon("trash")}</button>
     </div>`);
   return html`
-    <div class="section-title">自定义规则<span class="caption faint">排在分流规则前面，全局代理时也生效</span></div>
+    <div class="section-title">自定义规则<span class="caption faint">最先匹配，全局代理时也生效</span></div>
     <div class="card custom-rules">
-      ${rows.length ? html`<div class="custom-rule-list">${rows}</div>` : html`<p class="muted custom-rules-empty">还没有自定义规则。可以让某个网站固定走节点，或者让公司内网、局域网里的服务直连。</p>`}
+      ${rows.length ? html`<div class="custom-rule-list">${rows}</div>` : html`<p class="muted custom-rules-empty">还没有自定义规则。可以让某个网站固定走节点、走某个策略组，或者让公司内网、局域网里的服务直连。</p>`}
       <div class="custom-rule-add">
         <select class="select" data-focus="custom-rule-type" aria-label="按什么分流">${[["", "网站或 IP"], ["program", "程序"]].map(([value, label]) => html`<option value="${value}" ${value === draft.type ? raw("selected") : ""}>${label}</option>`)}</select>
         <input class="input mono" data-focus="custom-rule-value" value="${draft.value}" placeholder="${program ? "程序名，例如 WeChat.exe，也可以填完整路径" : "域名或 IP，例如 youtube.com、8.8.8.8、10.0.0.0/8"}" spellcheck="false" autocomplete="off" aria-label="${program ? "程序名" : "域名或 IP"}" ${program ? raw('list="running-programs"') : ""}>
@@ -502,8 +482,198 @@ function customRulesView() {
       </div>
       ${program ? html`<datalist id="running-programs">${(app.programs || []).map((name) => html`<option value="${name}"></option>`)}</datalist>` : ""}
       <div class="field-error" data-custom-rule-error>${draft.error || ""}</div>
-      <p class="caption faint" style="margin:6px 0 0">${program ? "按连接来自哪个程序分流，输入时可以从正在运行的程序里选。" : "域名包括它的子域名。"}只对订阅配置（内置的代理内核）起作用。</p>
+      <p class="caption faint" style="margin:6px 0 0">${program ? "按连接来自哪个程序分流，输入时可以从正在运行的程序里选。" : "域名包括它的子域名。"}改了立即生效，不用重启内核；局域网共享给其他设备的流量同样遵守。</p>
     </div>`;
+}
+
+// ---------- 分流规则 ----------
+
+// ruleListExtensions 与程序里的一致：这些扩展名的是纯规则列表，交给内核加载；其余的当完整配置转换后并入。
+const ruleListExtensions = ["list", "txt", "text", "yaml", "yml", "mrs"];
+
+const ruleSetKinds = {
+  builtin: { title: "内置", detail: "内置的规则，不用下载" },
+  provider: { title: "规则列表", detail: "纯规则列表，由内核直接加载，更新不用重启内核" },
+  convert: { title: "完整配置", detail: "小火箭、Surge 或 Clash 的完整配置，转换后并入，默认按文件里写的策略" },
+};
+
+const behaviorTitles = { classical: "规则", domain: "域名", ipcidr: "IP 段" };
+
+// guessRuleSetKind 与程序里的 guessKind 一致：没下载前按地址猜加载方式。下载后以程序认出来的为准。
+function guessRuleSetKind(url) {
+  if (/^builtin:\/\//i.test(url)) {
+    return "builtin";
+  }
+  let path = url;
+  try {
+    path = new URL(url).pathname;
+  } catch (error) {
+    // 不是完整的地址时直接看扩展名。
+  }
+  const match = /\.([a-z0-9]+)$/i.exec(path);
+  return match && ruleListExtensions.includes(match[1].toLowerCase()) ? "provider" : "convert";
+}
+
+// ruleSetState 是规则集的下载情况（程序按地址给出）；刚添加、还没保存好时按地址猜。
+function ruleSetState(set) {
+  return (app.state.rule_sets || {})[set.url] || { kind: guessRuleSetKind(set.url), downloaded: false };
+}
+
+// ruleSetPolicy 是规则集实际的去向：没选时完整配置按文件里的（空），纯列表走节点，内置的直连。
+function ruleSetPolicy(set, state) {
+  if (set.policy) {
+    return set.policy;
+  }
+  return { builtin: "direct", provider: "proxy" }[state.kind] || "";
+}
+
+// ruleSetDetail 是规则集的情况：规则数、更新时间和引用的列表，或者正在下载、没下载成功的原因。
+function ruleSetDetail(set, state) {
+  if (app.ruleSetUpdating[set.url]) {
+    return html`<span class="spinner inline-spinner"></span>正在下载…`;
+  }
+  if (state.kind === "builtin") {
+    const geo = app.state.core && app.state.core.geo_ready;
+    return html`<span>国内的域名和 IP，不用下载规则${geo || set.disabled ? "" : "（地理数据下载好后生效）"}</span>`;
+  }
+  if (!state.downloaded) {
+    if (set.disabled) {
+      return html`<span>已停用</span>`;
+    }
+    if (state.error) {
+      return html`<span class="rule-set-problem" title="${state.error}">没有下载成功：${state.error}。稍后自动重试，也可以点右边的按钮重新下载</span>`;
+    }
+    if (!hasSubscriptions()) {
+      return html`<span>添加订阅后下载</span>`;
+    }
+    return html`<span class="spinner inline-spinner"></span>正在下载…`;
+  }
+  const parts = [];
+  if (state.count) {
+    parts.push(`${state.count.toLocaleString()} 条`);
+  }
+  if (state.sets) {
+    parts.push(`引用 ${state.sets} 个规则列表`);
+  }
+  if (state.updated) {
+    parts.push(`${relativeTime(state.updated)}更新`);
+  }
+  if (state.skipped) {
+    parts.push(`${state.skipped} 条内核不支持，已跳过`);
+  }
+  return html`
+    <span>${parts.join(" · ")}</span>
+    ${state.failed_sets ? html`<span class="rule-set-problem">${state.failed_sets} 个引用的列表没下载到，下次更新时再试</span>` : ""}
+    ${state.error ? html`<span class="rule-set-problem" title="${state.error}">更新失败，仍在用上次下载的：${state.error}</span>` : ""}`;
+}
+
+// ruleSetRow 是规则集列表的一行：开关、名字和情况、去向、重新下载、更多。
+function ruleSetRow(set, index) {
+  const state = ruleSetState(set);
+  const kind = ruleSetKinds[state.kind] || ruleSetKinds.convert;
+  const kindTitle = state.kind === "provider" && behaviorTitles[state.behavior] ? `${kind.title} · ${behaviorTitles[state.behavior]}` : kind.title;
+  const policy = ruleSetPolicy(set, state);
+  const choices = [...(state.kind === "convert" ? [["", "按文件里的"]] : []), ...policyChoices().map((value) => [value, policyLabel(value)])];
+  const updating = Boolean(app.ruleSetUpdating[set.url]);
+  return html`
+    <div class="rule-set ${set.disabled ? "disabled" : ""}">
+      <button class="switch" role="switch" aria-checked="${!set.disabled}" data-action="rule-set-toggle" data-index="${index}" aria-label="启用「${set.name}」" title="${set.disabled ? "已停用" : "已启用"}"></button>
+      <div class="rule-set-text">
+        <div class="rule-set-name"><span>${set.name}</span><span class="badge" title="${kind.detail}">${kindTitle}</span></div>
+        ${state.kind === "builtin" ? "" : html`<div class="caption faint mono rule-set-url" title="${set.url}">${set.url}</div>`}
+        <div class="caption muted rule-set-detail">${ruleSetDetail(set, state)}</div>
+      </div>
+      <select class="select" data-rule-set-policy="${index}" aria-label="「${set.name}」的去向" ${set.disabled ? raw("disabled") : ""}>${choices.map(([value, label]) => html`<option value="${value}" ${value === policy ? raw("selected") : ""}>${label}</option>`)}</select>
+      ${state.kind === "builtin"
+        ? html`<span class="rule-set-tool-spacer"></span>`
+        : html`<button class="button subtle icon-only" data-action="rule-set-update" data-index="${index}" title="重新下载" aria-label="重新下载「${set.name}」" ${updating || set.disabled ? raw("disabled") : ""}>${icon("refresh")}</button>`}
+      <button class="button subtle icon-only" data-action="rule-set-menu" data-index="${index}" title="更多" aria-label="「${set.name}」的更多操作">${icon("more")}</button>
+    </div>`;
+}
+
+// ruleSetAddView 是规则集列表下面添加的一行：名字（可选）、地址、去向。
+function ruleSetAddView() {
+  const draft = app.ruleSetDraft;
+  const choices = [["", "默认去向"], ...policyChoices().map((value) => [value, policyLabel(value)])];
+  return html`
+    <div class="rule-set-add">
+      <input class="input rule-set-add-name" data-focus="rule-set-name" value="${draft.name}" placeholder="名字（可选）" spellcheck="false" autocomplete="off" aria-label="规则集的名字">
+      <input class="input mono" data-focus="rule-set-url" value="${draft.url}" placeholder="规则地址：.list、.yaml、.mrs 列表或者 .conf 完整配置" spellcheck="false" autocomplete="off" aria-label="规则地址">
+      <select class="select" data-focus="rule-set-policy" aria-label="去向" title="默认去向：完整配置按文件里写的策略，纯规则列表走节点">${choices.map(([value, label]) => html`<option value="${value}" ${value === draft.policy ? raw("selected") : ""}>${label}</option>`)}</select>
+      <button class="button" data-action="add-rule-set">${icon("plus")}添加</button>
+    </div>
+    <div class="field-error" data-rule-set-error>${draft.error || ""}</div>`;
+}
+
+// finalView 是「其余流量」：没被任何规则命中的流量的去向。
+function finalView() {
+  const value = app.config.final_policy || "";
+  // 跟随规则文件时用最后一个按文件里的策略分流的完整配置的 FINAL，写的是策略组的名字时走那个组（和程序里一样）。
+  const fileFinal = enabledRuleSets().map((set) => ({ set, state: ruleSetState(set) })).filter(({ set, state }) => state.kind === "convert" && !set.policy && state.final).pop();
+  let following = "现在没有完整配置写了 FINAL，其余流量走节点";
+  if (fileFinal) {
+    const name = (fileFinal.state.final_name || "").toLowerCase();
+    const group = name && (app.config.policy_groups || []).find((item) => item.name.toLowerCase() === name);
+    following = `现在按「${fileFinal.set.name}」里的 FINAL：${group ? policyLabel(`group:${group.name}`) : policyLabel(fileFinal.state.final)}`;
+  }
+  const choices = [["", "跟随规则文件"], ...policyChoices().map((policy) => [policy, policyLabel(policy)])];
+  return html`
+    <div class="section-title">其余流量</div>
+    <div class="card">
+      ${settingCard({
+        iconName: "signpost",
+        title: "没被任何规则命中的流量",
+        description: value ? "相当于 Quantumult X 的 final、Clash 的 MATCH" : following,
+        control: html`<select class="select" data-final-policy aria-label="其余流量的去向">${choices.map(([optionValue, label]) => html`<option value="${optionValue}" ${optionValue === value ? raw("selected") : ""}>${label}</option>`)}</select>`,
+      })}
+    </div>
+    <p class="caption faint" style="margin:10px 4px 0">小火箭、Surge 的完整配置里有自己的 FINAL：黑名单类的是直连，白名单类的是走节点。「跟随规则文件」用最后一个按文件里的策略分流的完整配置的 FINAL；都是纯规则列表时其余流量走节点。</p>`;
+}
+
+function rulesPage() {
+  if (!app.config) {
+    return html`${pageHeader("分流规则")}${configErrorView()}`;
+  }
+  const sets = app.config.rule_sets || [];
+  const notices = [];
+  if (!hasSubscriptions()) {
+    notices.push(html`
+      <div class="infobar info">${icon("info")}<div class="infobar-body"><div class="infobar-title">分流规则只对订阅配置起作用</div>
+        订阅配置用内置的代理内核连接机场的节点，按这里的规则决定哪些网站走节点。本机代理软件、PAC 这类配置由它们自己分流。
+        <div class="infobar-actions"><button class="button" data-action="add-subscription">${icon("plus")}添加机场订阅</button></div></div></div>`);
+  }
+  if (hasSubscriptions()) {
+    const notice = coreNotice("使用分流规则");
+    if (notice.text) {
+      notices.push(notice);
+    }
+  }
+  const status = app.state.status;
+  const active = status.state === "on" ? findProfile(status.profile) : null;
+  if (active && active.subscription && active.mode === "global") {
+    notices.push(html`
+      <div class="infobar warning">${icon("warning")}<div class="infobar-body"><div class="infobar-title">「${active.name}」现在是全局代理</div>
+        所有网站都经过节点，规则集和「其余流量」暂时不生效；自定义规则和局域网地址照常生效。
+        <div class="infobar-actions"><button class="button" data-action="rules-mode-rule" data-id="${active.id}">${icon("swap")}切回按规则分流</button></div></div></div>`);
+  }
+  const downloadable = sets.some((set) => !set.disabled && guessRuleSetKind(set.url) !== "builtin");
+  return html`
+    ${pageHeader("分流规则", saveIndicator())}
+    <p class="muted" style="margin:-12px 0 16px">哪些网站走节点、哪些直连、哪些拦截：自定义规则最先匹配，然后按规则集从上到下的顺序，都没命中的按「其余流量」。所有订阅配置共用这些规则。</p>
+    ${notices}
+    <div class="section-title">规则集<span class="caption faint">靠上的先匹配</span>
+      <div class="actions">
+        <button class="button subtle" data-action="rule-sets-update-all" ${app.ruleSetsUpdatingAll || !downloadable ? raw("disabled") : ""}>${app.ruleSetsUpdatingAll ? html`<span class="spinner"></span>` : icon("refresh")}全部更新</button>
+        <button class="button accent" data-action="rule-library">${icon("layers")}从规则库添加</button>
+      </div>
+    </div>
+    <div class="card rule-sets">
+      ${sets.length ? html`<div class="rule-set-list">${sets.map((set, index) => ruleSetRow(set, index))}</div>` : html`<p class="muted rule-sets-empty">还没有规则集。从规则库里挑几条，或者把规则地址粘到下面。</p>`}
+      ${ruleSetAddView()}
+      <p class="caption faint" style="margin:6px 0 0">纯规则列表由内核直接加载；小火箭、Surge 的完整配置转换后并入，默认按文件里写的策略走，也可以改成统一的去向。规则集每天自动更新，GitHub 上的规则直连下载不了时会经节点或 jsDelivr 镜像下载；还没下载好的先跳过，下好了自动生效。</p>
+    </div>
+    ${customRulesView()}
+    ${finalView()}`;
 }
 
 // ---------- 策略组 ----------
@@ -586,7 +756,7 @@ function policyGroupsView() {
       <div class="actions"><button class="button subtle" data-action="group-add">${icon("plus")}添加策略组</button></div>
     </div>
     <div class="card policy-groups">
-      ${rows.length ? html`<div class="policy-group-list">${rows}</div>` : html`<p class="muted policy-groups-empty">还没有策略组。比如建一个「流媒体」组，在下面的自定义规则里把 netflix.com 指到它，就能单独给它选节点。相当于 Quantumult X 的策略组（policy）。</p>`}
+      ${rows.length ? html`<div class="policy-group-list">${rows}</div>` : html`<p class="muted policy-groups-empty">还没有策略组。比如建一个「流媒体」组，在「分流规则」页把 netflix.com 或者 Netflix 的规则集指到它，就能单独给它选节点。相当于 Quantumult X 的策略组（policy）。</p>`}
     </div>`;
 }
 
@@ -642,8 +812,7 @@ function proxiesPage() {
       </div>
       <div class="stack">${profiles.map((profile, index) => profileRow(profile, index))}</div>
       <p class="caption faint" style="margin:14px 2px 0">单击托盘图标开关代理，右键托盘图标可以快速切换配置。</p>
-      ${policyGroupsView()}
-      ${customRulesView()}`}`;
+      ${policyGroupsView()}`}`;
 }
 
 // ---------- 局域网共享 ----------
@@ -1520,6 +1689,7 @@ ProxySwitch.exe settings        打开设置</pre></div>
 
 const pageRenderers = {
   proxies: proxiesPage,
+  rules: rulesPage,
   share: sharePage,
   diagnose: diagnosePage,
   network: networkPage,

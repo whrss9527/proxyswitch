@@ -22,8 +22,12 @@ const app = {
   shareTest: null,
   shareInputError: "",
   shareFirewallBusy: false,
-  // 代理页里还没添加的自定义规则：页面重绘（例如刚保存的上一条返回了最新状态）时不丢。
+  // 分流规则页里还没添加的自定义规则和规则集：页面重绘（例如刚保存的上一条返回了最新状态）时不丢。
   customRuleDraft: { value: "", policy: "proxy", type: "", error: "" },
+  ruleSetDraft: { name: "", url: "", policy: "", error: "" },
+  // 正在重新下载的规则集（按地址），以及是否正在「全部更新」。
+  ruleSetUpdating: {},
+  ruleSetsUpdatingAll: false,
   // 正在给策略组切换节点，期间禁用下拉框。
   groupSelecting: false,
   // 网址诊断页：输入的网址、视角、最近一次诊断的进度和结果。
@@ -250,9 +254,14 @@ function renderNav() {
     ${navStatus()}`);
 }
 
+// isEditing 表示正在页面里输入或选择。空的输入框不算（例如刚添加完一条规则，焦点还在输入框里）：
+// 没有要保护的文字，重绘后焦点也会放回去，规则的下载情况这类后台的变化能及时显示出来。
 function isEditing() {
   const active = document.activeElement;
-  return active && active.closest(".page") && active.matches("input, textarea, select");
+  if (!active || !active.closest(".page") || !active.matches("input, textarea, select")) {
+    return false;
+  }
+  return !(active.matches("input.input") && active.value === "");
 }
 
 // renderPage 重绘当前页面。定时刷新时如果正在输入，就先不重绘，避免打断输入。
@@ -367,8 +376,9 @@ async function runOperation(path, body, successMessage, failureTitle = "部分�
   }
 }
 
-// saveConfig 修改配置并立即保存；多次修改按顺序保存。
-function saveConfig(mutate, successMessage = "") {
+// saveConfig 修改配置并立即保存；多次修改按顺序保存。返回的 Promise 在保存完成后给出是否保存成功；
+// 没保存成功时提示原因，给了 onError 时交给它显示。
+function saveConfig(mutate, successMessage = "", { onError = null } = {}) {
   const next = clone(app.config);
   mutate(next);
   app.config = next;
@@ -382,13 +392,19 @@ function saveConfig(mutate, successMessage = "") {
       if (successMessage) {
         toast(successMessage);
       }
+      return true;
     } catch (error) {
       app.saving = false;
       app.config = clone(app.state.config);
-      renderPage();
       if (error.status !== 0 && error.status !== 403) {
-        toast(error.message, "danger", "没有保存");
+        if (onError) {
+          onError(error.message);
+        } else {
+          toast(error.message, "danger", "没有保存");
+        }
       }
+      renderPage();
+      return false;
     }
   });
   return saveQueue;
@@ -470,23 +486,60 @@ async function updateSubscription(profile) {
   }
 }
 
-async function updateRules(profile) {
+// updateRuleSet 立即重新下载一个规则集，等内核用上后刷新。
+async function updateRuleSet(set) {
+  app.ruleSetUpdating[set.url] = true;
+  renderPage();
   try {
-    receiveState(await api("POST", `/api/subscriptions/${profile.id}/rules`), { force: true });
-    const info = (app.state.rules || {})[profile.id] || {};
-    toast(`共 ${(info.rules || 0).toLocaleString()} 条规则`, "success", `「${profile.name}」的分流规则已更新`);
+    receiveState(await api("POST", "/api/rulesets/update", { url: set.url }), { force: true });
+    const state = ruleSetState(set);
+    toast(state.count ? `共 ${state.count.toLocaleString()} 条规则` : "已经用上新下载的规则", "success", `「${set.name}」已更新`);
+  } catch (error) {
+    if (error.state) {
+      receiveState(error.state, { force: true });
+    }
+    toast(error.message, "danger", `「${set.name}」没有更新成功`);
+  }
+  delete app.ruleSetUpdating[set.url];
+  renderPage();
+}
+
+// updateAllRuleSets 立即重新下载所有启用的规则集（分流规则页的「全部更新」、订阅配置菜单里的「更新分流规则」）。
+async function updateAllRuleSets() {
+  if (app.ruleSetsUpdatingAll) {
+    return;
+  }
+  app.ruleSetsUpdatingAll = true;
+  for (const set of enabledRuleSets()) {
+    if (guessRuleSetKind(set.url) !== "builtin") {
+      app.ruleSetUpdating[set.url] = true;
+    }
+  }
+  renderPage();
+  try {
+    const { result, state } = await api("POST", "/api/rulesets/update-all");
+    receiveState(state, { force: true });
+    const failed = result.failed || [];
+    if (failed.length) {
+      toast(`${failed.join("\n")}${result.updated ? `\n其余 ${result.updated} 个已更新` : ""}`, "warning", `${failed.length} 个规则集没有更新成功`);
+    } else {
+      toast(`更新了 ${result.updated} 个规则集`, "success", "分流规则已更新");
+    }
   } catch (error) {
     if (error.state) {
       receiveState(error.state, { force: true });
     }
     toast(error.message, "danger", "分流规则没有更新成功");
   }
+  app.ruleSetsUpdatingAll = false;
+  app.ruleSetUpdating = {};
+  renderPage();
 }
 
 async function setMode(profile, mode) {
   try {
     receiveState(await api("POST", `/api/subscriptions/${profile.id}/mode`, { mode }), { force: true });
-    toast(mode === "global" ? "所有网站都经过节点" : `分流规则：${rulesName(profile.rules)}`, "success", mode === "global" ? "已切换到全局代理" : "已切换到按规则分流");
+    toast(mode === "global" ? "所有网站都经过节点" : `分流规则：${rulesSummary()}`, "success", mode === "global" ? "已切换到全局代理" : "已切换到按规则分流");
   } catch (error) {
     if (error.state) {
       receiveState(error.state, { force: true });
@@ -554,10 +607,22 @@ function openGroupMenu(anchor, index) {
       icon: "trash",
       danger: true,
       action: async () => {
-        const count = (app.config.custom_rules || []).filter((rule) => rule.policy === `group:${group.name}`).length;
+        const target = `group:${group.name}`;
+        const users = [];
+        const rules = (app.config.custom_rules || []).filter((rule) => rule.policy === target).length;
+        const sets = (app.config.rule_sets || []).filter((set) => set.policy === target).length;
+        if (rules) {
+          users.push(`${rules} 条自定义规则`);
+        }
+        if (sets) {
+          users.push(`${sets} 个规则集`);
+        }
+        if (app.config.final_policy === target) {
+          users.push("「其余流量」");
+        }
         const confirmed = await confirmDialog({
           title: `删除策略组「${group.name}」？`,
-          message: count ? `指向它的 ${count} 条自定义规则会改为走节点。` : "没有自定义规则指向它。",
+          message: users.length ? `指向它的 ${users.join("、")}会改为走节点。` : "没有规则指向它。",
           confirmText: "删除",
           danger: true,
         });
@@ -592,16 +657,120 @@ function submitCustomRule() {
   if (!input || !policy) {
     return;
   }
-  const problem = addCustomRule(input.value, policy.value, app.customRuleDraft.type);
+  const type = app.customRuleDraft.type;
+  const program = type === "program";
+  const value = program ? normalizeProgramTarget(input.value) : normalizeRuleTarget(input.value);
+  const problem = program ? programTargetProblem(value) : ruleTargetProblem(value);
   // 提示记在草稿里：页面随状态刷新时重新画出来，不会一闪就没了。
   app.customRuleDraft.error = problem;
   if (error) {
     error.textContent = problem;
   }
-  if (!problem) {
-    input.value = "";
-    app.customRuleDraft.value = "";
+  if (problem) {
+    return;
   }
+  // 先清空输入框再保存：保存时页面会重绘，重绘会保留输入框里正在输入的文字。
+  const text = input.value;
+  input.value = "";
+  app.customRuleDraft.value = "";
+  addCustomRule(text, policy.value, type);
+}
+
+// ruleSetProblem 检查要添加的规则集，没有问题时返回空；程序保存时还会再检查一遍（例如地址整理后重复了）。
+function ruleSetProblem(url, name) {
+  if (!url) {
+    return "请填写规则地址";
+  }
+  if (!isSubscriptionAddress(url) && !/^builtin:\/\//i.test(url)) {
+    return "规则地址应以 http:// 或 https:// 开头，本机的文件填完整的路径";
+  }
+  if ((app.config.rule_sets || []).some((set) => set.url === url)) {
+    return "这个规则集已经添加过了";
+  }
+  if ([...name].length > 40) {
+    return "名字最多 40 个字";
+  }
+  return "";
+}
+
+function showRuleSetError(problem) {
+  // 提示记在草稿里：页面随状态刷新时重新画出来，不会一闪就没了。
+  app.ruleSetDraft.error = problem;
+  const error = document.querySelector("[data-rule-set-error]");
+  if (error) {
+    error.textContent = problem;
+  }
+}
+
+// addRuleSet 把规则集加到列表最后并保存；保存后程序在后台下载（有订阅配置时）。成功时 Promise 给出 true。
+// quiet 时不提示已添加（规则库里的按钮会变成「已添加」）。
+function addRuleSet(set, onError = null, { quiet = false } = {}) {
+  return saveConfig((config) => {
+    config.rule_sets = [...(config.rule_sets || []), set];
+  }, "", { onError }).then((saved) => {
+    if (saved && !quiet) {
+      const added = app.config.rule_sets[app.config.rule_sets.length - 1];
+      toast(hasSubscriptions() ? "正在下载，下好了自动生效。去向可以在列表里改" : "添加订阅配置后下载", "success", `已添加规则集「${added.name}」`);
+    }
+    return saved;
+  });
+}
+
+// submitRuleSet 添加分流规则页填的规则集；有问题时在输入框下面提示，填的内容保留。
+function submitRuleSet() {
+  const draft = app.ruleSetDraft;
+  const url = draft.url.trim();
+  const name = draft.name.trim();
+  const problem = ruleSetProblem(url, name);
+  showRuleSetError(problem);
+  if (problem) {
+    return;
+  }
+  const set = { name, url };
+  if (draft.policy) {
+    set.policy = draft.policy;
+  }
+  // 先清空输入框再保存：保存时页面会重绘，重绘会保留输入框里正在输入的文字。
+  for (const input of document.querySelectorAll('[data-focus="rule-set-name"], [data-focus="rule-set-url"]')) {
+    input.value = "";
+  }
+  app.ruleSetDraft = { name: "", url: "", policy: draft.policy, error: "" };
+  addRuleSet(set, (message) => {
+    // 没保存成功：填的内容放回去，原因显示在输入框下面。
+    app.ruleSetDraft = { ...app.ruleSetDraft, name, url, error: message };
+  });
+}
+
+// openRuleSetMenu 是规则集的「更多」菜单：上移、下移、复制地址、删除。
+function openRuleSetMenu(anchor, index) {
+  const sets = app.config.rule_sets || [];
+  const set = sets[index];
+  if (!set) {
+    return;
+  }
+  const builtin = guessRuleSetKind(set.url) === "builtin";
+  openMenu(anchor, [
+    { label: "上移", icon: "up", disabled: index === 0, action: () => saveConfig((config) => moveItem(config.rule_sets, index, -1)) },
+    { label: "下移", icon: "down", disabled: index === sets.length - 1, action: () => saveConfig((config) => moveItem(config.rule_sets, index, 1)) },
+    ...(builtin ? [] : [{
+      label: "复制地址",
+      icon: "copy",
+      action: async () => {
+        if (await copyText(set.url)) {
+          toast(set.url, "success", "已复制规则地址");
+        }
+      },
+    }]),
+    { separator: true },
+    {
+      label: "删除规则集",
+      icon: "trash",
+      danger: true,
+      action: () => saveConfig((config) => {
+        config.rule_sets = config.rule_sets.filter((item) => item.url !== set.url);
+      }, `已删除规则集「${set.name}」`),
+    },
+  ]);
 }
 
 // ---------- 网址诊断 ----------
@@ -985,7 +1154,7 @@ function openProfileMenu(anchor, profile) {
       ? { label: "切换到按规则分流", icon: "swap", action: () => setMode(profile, "rule") }
       : { label: "切换到全局代理", icon: "swap", action: () => setMode(profile, "global") },
     { label: "更新订阅", icon: "refresh", action: () => updateSubscription(profile) },
-    ...(profile.rules ? [{ label: "更新分流规则", icon: "refresh", action: () => updateRules(profile) }] : []),
+    ...(profile.mode !== "global" && enabledRuleSets().some((set) => guessRuleSetKind(set.url) !== "builtin") ? [{ label: "更新分流规则", icon: "refresh", action: () => updateAllRuleSets() }] : []),
   ] : [];
   openMenu(anchor, [
     ...subscriptionItems,
@@ -1214,6 +1383,26 @@ const actions = {
   "rule-down": (element) => saveConfig((config) => moveItem(config.auto_switch.rules, Number(element.dataset.index), 1)),
   "rule-delete": (element) => saveConfig((config) => config.auto_switch.rules.splice(Number(element.dataset.index), 1), "已删除规则"),
   "add-custom-rule": () => submitCustomRule(),
+  "add-rule-set": () => submitRuleSet(),
+  "rule-library": () => openRuleLibrary(),
+  "rule-sets-update-all": () => updateAllRuleSets(),
+  "rule-set-toggle": (element) => saveConfig((config) => {
+    const set = config.rule_sets[Number(element.dataset.index)];
+    set.disabled = !set.disabled;
+  }),
+  "rule-set-update": (element) => {
+    const set = app.config.rule_sets[Number(element.dataset.index)];
+    if (set) {
+      updateRuleSet(set);
+    }
+  },
+  "rule-set-menu": (element) => openRuleSetMenu(element, Number(element.dataset.index)),
+  "rules-mode-rule": (element) => {
+    const profile = profileById(element.dataset.id);
+    if (profile) {
+      setMode(profile, "rule");
+    }
+  },
   "group-add": () => openGroupEditor(),
   "group-edit": (element) => openGroupEditor(Number(element.dataset.index)),
   "group-menu": (element) => openGroupMenu(element, Number(element.dataset.index)),
@@ -1427,6 +1616,30 @@ document.addEventListener("change", (event) => {
     }
     return;
   }
+  if (element.matches('[data-focus="rule-set-policy"]')) {
+    app.ruleSetDraft.policy = element.value;
+    return;
+  }
+  if (element.dataset.ruleSetPolicy !== undefined) {
+    const index = Number(element.dataset.ruleSetPolicy);
+    const value = element.value;
+    saveConfig((config) => {
+      const set = config.rule_sets[index];
+      if (value) {
+        set.policy = value;
+      } else {
+        delete set.policy;
+      }
+    });
+    return;
+  }
+  if (element.dataset.finalPolicy !== undefined) {
+    const value = element.value;
+    saveConfig((config) => {
+      config.final_policy = value;
+    });
+    return;
+  }
   if (element.dataset.groupSelect !== undefined) {
     selectGroupNode(element.dataset.groupSelect, element.value);
     return;
@@ -1456,6 +1669,13 @@ document.addEventListener("change", (event) => {
 });
 
 document.addEventListener("input", (event) => {
+  if (event.target.matches('[data-focus="rule-set-name"], [data-focus="rule-set-url"]')) {
+    app.ruleSetDraft[event.target.dataset.focus === "rule-set-url" ? "url" : "name"] = event.target.value;
+    if (app.ruleSetDraft.error) {
+      showRuleSetError("");
+    }
+    return;
+  }
   if (event.target.matches('[data-focus="custom-rule-value"]')) {
     app.customRuleDraft.value = event.target.value;
     if (app.customRuleDraft.error) {
@@ -1471,6 +1691,10 @@ document.addEventListener("input", (event) => {
 document.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && event.target.matches('[data-focus="custom-rule-value"]')) {
     submitCustomRule();
+    return;
+  }
+  if (event.key === "Enter" && event.target.matches('[data-focus="rule-set-name"], [data-focus="rule-set-url"]')) {
+    submitRuleSet();
     return;
   }
   if (event.key === "Enter" && event.target.matches("#diagnose-url")) {

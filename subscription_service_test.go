@@ -130,7 +130,8 @@ func TestDelaysNotice(t *testing.T) {
 	}
 }
 
-// 分流规则：检查规则地址；下载规则和它引用的规则列表，内核按规则把流量交给节点、拦截或直连；切换到全局代理后全部走节点。
+// 分流规则集：规则列表交给内核读，完整配置下载它引用的规则列表后转换，内核按规则集的顺序把流量交给节点、拦截或直连；
+// 切换到全局代理后全部走节点；自定义规则排在所有规则集前面。
 func TestSettingsRulesFlow(t *testing.T) {
 	binary := requireCoreBinary(t)
 	website := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -148,6 +149,8 @@ func TestSettingsRulesFlow(t *testing.T) {
 				fmt.Fprintf(writer, "DOMAIN-SUFFIX,site%d.example\n", index)
 			}
 			fmt.Fprintf(writer, "DOMAIN-SUFFIX,%s\n", coreTestHost)
+		case "/listed.list":
+			fmt.Fprintf(writer, "# 交给内核读的规则列表\nDOMAIN,listed.%s\n", coreTestHost)
 		default:
 			writer.WriteHeader(http.StatusNotFound)
 		}
@@ -159,9 +162,12 @@ func TestSettingsRulesFlow(t *testing.T) {
 	defer subscription.Close()
 
 	port, _ := freeProxyPort()
-	configText := fmt.Sprintf(`{"test_url": "http://%s/", "core": {"port": %d}, "profiles": [
-		{"name": "机场", "subscription": %q, "rules": %q, "apply_to": ["system"]}
-	]}`, coreTestHost, port, subscription.URL, rules.URL+"/rules.conf")
+	listUrl, confUrl := rules.URL+"/listed.list", rules.URL+"/rules.conf"
+	configText := fmt.Sprintf(`{"test_url": "http://%s/", "core": {"port": %d}, "rule_sets": [
+		{"url": %q, "policy": "reject"}, {"url": %q}
+	], "profiles": [
+		{"name": "机场", "subscription": %q, "apply_to": ["system"]}
+	]}`, coreTestHost, port, listUrl, confUrl, subscription.URL)
 	fixture := newSettingsFixture(t, configText)
 	defer fixture.backend.Close()
 	if err := linkDevCore(fixture.backend.engine.paths, binary); err != nil {
@@ -170,28 +176,36 @@ func TestSettingsRulesFlow(t *testing.T) {
 	profileId := fixture.backend.engine.Config().Profiles[0].Id
 	base := "/api/subscriptions/" + profileId
 
-	var check RulesCheck
-	status, data := fixture.request(t, "POST", "/api/rules/check", map[string]string{"url": rules.URL + "/rules.conf"}, nil)
-	if err := json.Unmarshal(data, &check); status != http.StatusOK || err != nil || check.Rules != 1 || check.Sets != 1 || check.Skipped != 1 || check.Final != rulePolicyDirect {
-		t.Errorf("检查规则的结果不对：%d %s", status, data)
-	}
-	if status, data := fixture.request(t, "POST", "/api/rules/check", map[string]string{"url": rules.URL + "/missing.conf"}, nil); status != http.StatusBadGateway || !strings.Contains(string(data), "404") {
-		t.Errorf("规则地址不存在时应说明：%d %s", status, data)
-	}
-
 	if status, data := fixture.request(t, "POST", base+"/update", nil, nil); status != http.StatusOK {
 		t.Fatalf("下载订阅失败：%d %s", status, data)
 	}
-	status, data = fixture.request(t, "POST", base+"/rules", nil, nil)
+	status, data := fixture.request(t, "POST", "/api/rulesets/update", map[string]string{"url": confUrl}, nil)
 	if status != http.StatusOK {
 		t.Fatalf("下载规则失败：%d %s", status, data)
 	}
 	state := fixture.state(t, data)
-	if info := state.Rules[profileId]; info.Rules != 2+ruleSetMinimum || info.Sets != 1 || info.FailedSets != 0 || info.Skipped != 1 || info.Final != rulePolicyDirect || info.Error != "" || info.Updated == "" {
-		t.Errorf("规则信息不对：%+v", info)
+	if info := state.RuleSets[confUrl]; info.Kind != ruleSetConvert || !info.Downloaded || info.Count != 2+ruleSetMinimum || info.Sets != 1 || info.FailedSets != 0 || info.Skipped != 1 || info.Final != rulePolicyDirect || info.Error != "" || info.Updated == "" {
+		t.Errorf("完整配置的规则集信息不对：%+v", info)
 	}
-	if len(state.RulePresets) == 0 || !strings.HasSuffix(state.RulePresets[0].Url, ".conf") {
-		t.Errorf("应提供可以直接选的规则：%+v", state.RulePresets)
+	if info := state.RuleSets[listUrl]; info.Kind != ruleSetProvider || info.Downloaded {
+		t.Errorf("还没下载的规则列表：%+v", info)
+	}
+	status, data = fixture.request(t, "POST", "/api/rulesets/update-all", nil, nil)
+	var updateAll struct {
+		Result RuleSetsUpdate `json:"result"`
+		State  SettingsState  `json:"state"`
+	}
+	if err := json.Unmarshal(data, &updateAll); status != http.StatusOK || err != nil || updateAll.Result.Updated != 2 || len(updateAll.Result.Failed) != 0 {
+		t.Fatalf("全部更新失败：%d %s", status, data)
+	}
+	if info := updateAll.State.RuleSets[listUrl]; info.Kind != ruleSetProvider || !info.Downloaded || info.Behavior != behaviorClassical || info.Count != 1 {
+		t.Errorf("规则列表的信息不对（规则数由内核报告）：%+v", info)
+	}
+	if len(updateAll.State.RuleLibrary) == 0 || updateAll.State.RuleLibrary[0].Url != builtinChinaDirect {
+		t.Errorf("应提供规则库：%+v", updateAll.State.RuleLibrary)
+	}
+	if status, data := fixture.request(t, "POST", "/api/rulesets/update", map[string]string{"url": rules.URL + "/none.list"}, nil); status == http.StatusOK || !strings.Contains(string(data), "没有这个规则集") {
+		t.Errorf("没有的规则集应报错：%d %s", status, data)
 	}
 	if status, data := fixture.request(t, "POST", "/api/on", nil, nil); status != http.StatusOK {
 		t.Fatalf("开启失败：%d %s", status, data)
@@ -208,6 +222,9 @@ func TestSettingsRulesFlow(t *testing.T) {
 	}
 	if viaNode, result := through("blocked." + coreTestHost); viaNode || strings.Contains(result, "hello") {
 		t.Errorf("被拦截的网站不应经过节点：%s", result)
+	}
+	if viaNode, result := through("listed." + coreTestHost); viaNode || strings.Contains(result, "hello") {
+		t.Errorf("排在前面的规则列表拦截的网站不应经过节点：%s", result)
 	}
 	if viaNode, _ := through("other.invalid"); viaNode {
 		t.Error("其余网站按 FINAL 直连，不应经过节点")

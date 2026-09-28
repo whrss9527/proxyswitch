@@ -226,16 +226,6 @@ func (config *Config) GroupNames() []string {
 	return names
 }
 
-// RetargetGroup 在策略组被删掉或改名后，把指向它的规则改到新的去向 target。
-func (config *Config) RetargetGroup(name, target string) {
-	old := ruleTargetGroupPrefix + name
-	for index := range config.CustomRules {
-		if config.CustomRules[index].Policy == old {
-			config.CustomRules[index].Policy = target
-		}
-	}
-}
-
 // normalizeRulePolicy 整理规则的去向：proxy / direct / reject 不区分大小写，group:名字 保留名字的大小写。
 func normalizeRulePolicy(policy string) string {
 	value := strings.TrimSpace(policy)

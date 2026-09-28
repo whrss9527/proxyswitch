@@ -46,8 +46,8 @@ var profilePalette = []string{"#16a34a", "#2563eb", "#7c3aed", "#db2777", "#ea58
 
 // Profile 是一套代理配置。填了 Subscription（订阅地址）的配置由内置的代理内核连接机场的节点，
 // Server 由程序填成内核的本地端口；Node 是选中的节点，留空表示自动选择延迟最低的；
-// Mode 是 rule（按规则分流）或 global（全部走节点）；Rules 是按规则分流时用的小火箭（Shadowrocket）规则配置的地址，
-// 留空用内置的大陆直连（国内的网站和 IP 直连，其余走节点）。
+// Mode 是 rule（按规则分流，规则见 Config.RuleSets）或 global（全部走节点）。Rules 是旧版每个配置自己的规则地址，
+// 读入时换成全局的规则集（见 migrateRuleSets），保存时不再写出。
 type Profile struct {
 	Id           string   `json:"id"`
 	Name         string   `json:"name"`
@@ -113,6 +113,8 @@ type Config struct {
 	Tun             TunConfig     `json:"tun"`
 	PolicyGroups    []PolicyGroup `json:"policy_groups"`
 	CustomRules     []CustomRule  `json:"custom_rules"`
+	RuleSets        []RuleSet     `json:"rule_sets"`
+	FinalPolicy     string        `json:"final_policy"`
 	Share           ShareConfig   `json:"share"`
 	AutoSwitch      AutoSwitch    `json:"auto_switch"`
 	Profiles        []Profile     `json:"profiles"`
@@ -210,12 +212,22 @@ const defaultConfigText = `// ProxySwitch 配置文件。推荐在托盘菜单�
 
   // 自定义规则：域名（包括子域名）或 IP / 网段固定走节点（proxy）、直连（direct）、被拦截（reject）或某个策略组（group:组名），
   // type 为 program 时按程序分流，value 是程序名或完整路径；
-  // 排在订阅配置的分流规则前面，全局代理时也生效；只对订阅配置（内置的代理内核）起作用
+  // 排在分流规则集前面，全局代理时也生效；只对订阅配置（内置的代理内核）起作用
   "custom_rules": [
     // { "value": "youtube.com", "policy": "proxy" },
     // { "value": "netflix.com", "policy": "group:流媒体" },
     // { "type": "program", "value": "WeChat.exe", "policy": "direct" }
   ],
+
+  // 分流规则集：订阅配置按规则分流时从上到下匹配，靠前的优先。url 是规则地址（.list、.txt、.yaml、.mrs 规则列表，
+  // 小火箭 / Surge 的 .conf 或 Clash 配置），也可以是本机的文件或内置的 builtin://china-direct（国内直连）；
+  // policy 是去向（proxy / direct / reject / group:组名），留空时完整配置按文件里写的策略、规则列表走节点；
+  // disabled 暂时停用；behavior 是规则列表的类型（classical / domain / ipcidr），留空自动判断
+  "rule_sets": [
+    { "name": "国内直连", "url": "builtin://china-direct", "policy": "direct" }
+  ],
+  // 其余流量：没被任何规则命中的流量往哪走（proxy / direct / reject / group:组名），留空跟随规则文件里的 FINAL（没有就走节点）
+  "final_policy": "",
 
   // 局域网共享：让 PS5、Switch、手机等设备把这台电脑（本机 IP:port）当代理服务器，网络和本机一样。
   // allowed 是允许使用的设备（IP 或网段，逗号分隔），留空表示局域网里的所有设备；
@@ -257,10 +269,8 @@ const defaultConfigText = `// ProxySwitch 配置文件。推荐在托盘菜单�
     //   "subscription": "https://example.com/api/v1/client/subscribe?token=...",
     //   // 选中的节点，留空自动选择延迟最低的
     //   "node": "",
-    //   // rule 按规则分流 / global 全部走节点
+    //   // rule 按规则分流（用上面的 rule_sets）/ global 全部走节点
     //   "mode": "rule",
-    //   // 分流规则：小火箭（Shadowrocket）规则配置或 Clash 配置的地址，留空用内置的大陆直连（国内的网站和 IP 直连，其余走节点）
-    //   "rules": "",
     //   "apply_to": ["system"]
     // }
   ]
@@ -360,6 +370,9 @@ func (config *Config) Clone() *Config {
 	copied.AutoSwitch.Rules = append([]NetRule{}, config.AutoSwitch.Rules...)
 	copied.PolicyGroups = append([]PolicyGroup{}, config.PolicyGroups...)
 	copied.CustomRules = append([]CustomRule{}, config.CustomRules...)
+	if config.RuleSets != nil {
+		copied.RuleSets = append([]RuleSet{}, config.RuleSets...)
+	}
 	return &copied
 }
 
@@ -437,6 +450,10 @@ func normalizeConfig(config *Config) {
 	if config.Share.Port == 0 {
 		config.Share.Port = defaultSharePort
 	}
+	config.FinalPolicy = strings.TrimSpace(config.FinalPolicy)
+	if config.FinalPolicy != "" {
+		config.FinalPolicy = normalizeRulePolicy(config.FinalPolicy)
+	}
 
 	usedIds := map[string]bool{}
 	for index := range config.Profiles {
@@ -456,9 +473,8 @@ func normalizeConfig(config *Config) {
 			profile.Server = coreServer(config.Core.Port)
 			profile.Pac = ""
 			profile.Mode = lowerTrim(profile.Mode, "rule")
-			profile.Rules = strings.TrimSpace(profile.Rules)
 		} else {
-			profile.Node, profile.Mode, profile.Rules = "", "", ""
+			profile.Node, profile.Mode = "", ""
 		}
 		profile.Id = strings.TrimSpace(profile.Id)
 		if profile.Id == "" || usedIds[profile.Id] {
@@ -485,6 +501,12 @@ func normalizeConfig(config *Config) {
 		if profile.NoProxy == "" {
 			profile.NoProxy = defaultNoProxy
 		}
+	}
+
+	// 旧版每个订阅配置自己的规则地址换成全局的规则集。
+	migrateRuleSets(config)
+	for index := range config.RuleSets {
+		normalizeRuleSet(&config.RuleSets[index])
 	}
 
 	autoSwitch := &config.AutoSwitch
@@ -586,6 +608,9 @@ func validateConfig(config *Config) error {
 			return fmt.Errorf("第 %d 条自定义规则：%v", index+1, err)
 		}
 	}
+	if err := validateRuleSets(config); err != nil {
+		return err
+	}
 	if err := validateShare(config.Share, config.Core.Port); err != nil {
 		return err
 	}
@@ -621,11 +646,6 @@ func validateProfile(profile *Profile) error {
 		}
 		if profile.Mode != "rule" && profile.Mode != "global" {
 			return fmt.Errorf("配置「%s」的 mode %q 不认识，可用：rule / global", profile.Name, profile.Mode)
-		}
-		if profile.Rules != "" {
-			if err := validateRulesUrl(profile.Rules); err != nil {
-				return fmt.Errorf("配置「%s」的%v", profile.Name, err)
-			}
 		}
 	}
 	if profile.Server == "" && profile.Pac == "" {
@@ -769,7 +789,8 @@ func writeConfigFile(path string, config *Config) error {
 // State 是运行状态，与用户手写的配置文件分开存放。
 // Original 是开启代理前的系统代理设置，关闭时据此恢复；NextUpdateCheck 是下次自动检查更新的时间，
 // UpdateNotified 是已经提示过的新版本号，同一个版本只提示一次；Version 是上次运行的版本，用来发现程序已经更新。
-// Subscriptions 和 Rules 按配置 id 记录订阅和分流规则的下载情况；GeoAttempted 是上次下载地理数据的时间；
+// Subscriptions 按配置 id 记录订阅的下载情况，RuleSets 按规则集的 id 记录分流规则集的下载情况（Rules 是旧版按配置记的，
+// 读入后清理掉）；GeoAttempted 是上次下载地理数据的时间；
 // Resume 是退出时因内核随之停止而关闭的订阅配置，下次启动后重新开启。
 type State struct {
 	Profile         string                       `json:"profile"`
@@ -780,7 +801,8 @@ type State struct {
 	UpdateNotified  string                       `json:"update_notified,omitempty"`
 	Version         string                       `json:"version,omitempty"`
 	Subscriptions   map[string]*SubscriptionInfo `json:"subscriptions,omitempty"`
-	Rules           map[string]*RulesInfo        `json:"rules,omitempty"`
+	Rules           map[string]json.RawMessage   `json:"rules,omitempty"`
+	RuleSets        map[string]*RuleSetInfo      `json:"rule_sets,omitempty"`
 	GeoAttempted    string                       `json:"geo_attempted,omitempty"`
 	Resume          string                       `json:"resume,omitempty"`
 }

@@ -137,7 +137,7 @@ func TestCustomRulesConfig(t *testing.T) {
 // 自定义规则排在分流规则前面，全局代理时也生效。
 func TestCoreConfigCustomRules(t *testing.T) {
 	settings := CoreSettings{Port: 17890, Active: "p1", Mode: "rule", GeoReady: true, Subscriptions: []CoreSubscription{{Id: "p1"}},
-		CustomRules: []string{"DOMAIN-SUFFIX,youtube.com,ProxySwitch"}}
+		CustomRules: []string{"DOMAIN-SUFFIX,youtube.com,ProxySwitch"}, Rules: builtinRules(builtinChinaDirect, "DIRECT")}
 	rules := func(settings CoreSettings) []string {
 		text := string(coreConfigText(settings, "127.0.0.1:9090", "secret"))
 		start := strings.Index(text, `"rules": [`)
@@ -147,7 +147,7 @@ func TestCoreConfigCustomRules(t *testing.T) {
 	if strings.Index(joined, "youtube.com") > strings.Index(joined, "GEOSITE,cn") || strings.Index(joined, "192.168.0.0") > strings.Index(joined, "youtube.com") {
 		t.Errorf("自定义规则应在局域网规则之后、分流规则之前：\n%s", joined)
 	}
-	settings.Mode = "global"
+	settings.Mode, settings.Rules = "global", nil
 	if joined := strings.Join(rules(settings), "\n"); !strings.Contains(joined, "youtube.com") || strings.Contains(joined, "GEOSITE") {
 		t.Errorf("全局代理时自定义规则也生效：\n%s", joined)
 	}

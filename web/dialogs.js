@@ -16,10 +16,10 @@ const editorKinds = ["http", "socks", "pac", "subscription", "custom"];
 
 const modeOptions = [["rule", "按规则分流"], ["global", "全局代理"]];
 
-const modeHints = {
-  rule: "按下面选的分流规则决定哪些网站经过节点。推荐",
-  global: "所有网站都经过节点（本机和局域网地址除外）",
-};
+// modeHint 说明订阅配置的分流方式。规则集在「分流规则」页设置，所有订阅配置共用。
+function modeHint(mode) {
+  return mode === "global" ? "所有网站都经过节点（本机和局域网地址除外）" : `按「分流规则」页的规则决定哪些网站经过节点，现在是：${rulesSummary()}。推荐`;
+}
 
 // splitServer 把 “协议://主机:端口” 拆开，支持 [IPv6]:端口。
 function splitServer(server) {
@@ -128,18 +128,8 @@ function draftFromProfile(profile) {
     subscription: profile.subscription || "",
     mode: profile.mode || "rule",
     node: profile.node || "",
-    // rulesChoice 是选中的分流规则：空（内置的大陆直连）、预设的地址或 custom；rules 是自定义规则的地址。
-    rulesChoice: "",
-    rules: "",
-    rulesCheck: null,
     savingText: "",
   };
-  if (profile.rules && rulePresetFor(profile.rules)) {
-    draft.rulesChoice = profile.rules;
-  } else if (profile.rules) {
-    draft.rulesChoice = "custom";
-    draft.rules = profile.rules;
-  }
   const server = (profile.server || "").trim();
   if (draft.subscription) {
     draft.kind = "subscription";
@@ -204,9 +194,6 @@ function profileFromDraft(draft) {
     profile.subscription = draft.subscription.trim();
     profile.mode = draft.mode;
     profile.node = draft.node;
-    // 全局代理时规则输入框是隐藏的，没填好的自定义地址按留空处理。
-    const customRules = draft.rules.trim();
-    profile.rules = draft.rulesChoice !== "custom" ? draft.rulesChoice : /^https?:\/\/\S+$/i.test(customRules) ? customRules : "";
   }
   return profile;
 }
@@ -282,13 +269,6 @@ function validateDraft(draft) {
         errors.subscription = "请填写订阅地址";
       } else if (!isSubscriptionAddress(draft.subscription.trim())) {
         errors.subscription = "订阅地址应以 http:// 或 https:// 开头，本机的文件填完整的路径";
-      }
-      if (draft.mode === "rule" && draft.rulesChoice === "custom") {
-        if (!draft.rules.trim()) {
-          errors.rules = "请填写规则配置的地址";
-        } else if (!/^https?:\/\/\S+$/i.test(draft.rules.trim())) {
-          errors.rules = "规则地址应以 http:// 或 https:// 开头";
-        }
       }
       break;
     case "pac":
@@ -379,10 +359,7 @@ function openProfileEditor(profile = {}, options = {}) {
           absorbPastedAddress(event.target);
         }
         draft.test = null;
-        if (field === "rules" || field === "rulesChoice") {
-          draft.rulesCheck = null;
-        }
-        for (const result of element.querySelectorAll("[data-test-result], [data-check-result], [data-rules-result]")) {
+        for (const result of element.querySelectorAll("[data-test-result], [data-check-result]")) {
           result.textContent = "";
         }
         updateFeedback();
@@ -402,13 +379,6 @@ function openProfileEditor(profile = {}, options = {}) {
           refreshPreview();
         } else if (target.dataset.field === "useAfterSave") {
           draft.useAfterSave = target.checked;
-        } else if (target.dataset.field === "rulesChoice") {
-          draft.rulesChoice = target.value;
-          dialogInstance.render();
-          const rulesInput = element.querySelector('[data-field="rules"]');
-          if (rulesInput && !rulesInput.value) {
-            rulesInput.focus();
-          }
         } else if (target.dataset.customColor !== undefined) {
           draft.color = target.value.toLowerCase();
           dialogInstance.render();
@@ -453,9 +423,6 @@ function openProfileEditor(profile = {}, options = {}) {
             break;
           case "dialog-test":
             testDraft();
-            break;
-          case "check-rules":
-            checkRules();
             break;
           case "install-core":
             installCore(() => {
@@ -572,25 +539,6 @@ function openProfileEditor(profile = {}, options = {}) {
     }
   }
 
-  // checkRules 下载规则配置检查地址是否可用，显示规则数和引用的规则列表数。
-  async function checkRules() {
-    if (validateDraft(draft).rules) {
-      draft.touched.rules = true;
-      updateFeedback();
-      return;
-    }
-    draft.rulesCheck = { running: true };
-    dialog.render();
-    try {
-      draft.rulesCheck = { ok: true, result: await api("POST", "/api/rules/check", { url: draft.rules.trim() }) };
-    } catch (error) {
-      draft.rulesCheck = { ok: false, message: error.message };
-    }
-    if (!dialog.closed) {
-      dialog.render();
-    }
-  }
-
   async function saveDraft() {
     draft.submitted = true;
     const errors = validateDraft(draft);
@@ -633,29 +581,12 @@ function openProfileEditor(profile = {}, options = {}) {
           return;
         }
       }
-      // 新选的分流规则也立即下载。没下载成功时配置照样能用，暂时按大陆直连分流，后台稍后重试。
-      let rulesError = "";
-      if (saved && saved.subscription && saved.rules && (!editing || profile.rules !== saved.rules)) {
-        draft.savingText = "正在下载分流规则…";
-        dialog.render();
-        try {
-          receiveState(await api("POST", `/api/subscriptions/${saved.id}/rules`), { force: true });
-        } catch (error) {
-          if (error.state) {
-            receiveState(error.state, { force: true });
-          }
-          rulesError = error.message;
-        }
-      }
       dialog.close(true);
       if (draft.useAfterSave) {
         await runOperation("/api/use", { name: profileValue.name }, `已开启「${profileValue.name}」`);
-      } else if (!rulesError) {
+      } else {
         const active = app.state.status.state === "on" && app.state.status.profile === profileValue.name;
         toast(active ? "修改已立即生效" : "可以在列表里点「使用」开启", "success", `已保存「${profileValue.name}」`);
-      }
-      if (rulesError) {
-        toast(`${rulesError}。暂时按大陆直连分流，稍后会自动重试`, "warning", "分流规则没有下载成功");
       }
     } catch (error) {
       draft.saving = false;
@@ -719,61 +650,6 @@ function renderCheckResult(test) {
   return html`<div class="infobar success">${icon("success")}<div class="infobar-body"><div class="infobar-title">找到 ${test.check.nodes} 个节点</div>${usage || "机场没有提供流量和到期时间"}</div></div>`;
 }
 
-// renderRulesField 是编辑订阅配置时选择分流规则的部分：内置的大陆直连、小火箭规则的预设，或自定义规则配置的地址。
-function renderRulesField(draft, errors) {
-  const presets = app.state.rule_presets || [];
-  const custom = draft.rulesChoice === "custom";
-  const preset = rulePresetFor(draft.rulesChoice);
-  const hint = custom
-    ? "小火箭（Shadowrocket）、Surge 的规则配置（.conf）或 Clash 配置（.yaml）的地址，网上分享的规则配置一般都能用。可以先点「检查规则」看看"
-    : preset
-      ? `${preset.description}。来自 Shadowrocket-ADBlock-Rules-Forever，每天自动更新`
-      : "国内的网站和 IP 直连，其余走节点";
-  const checking = draft.rulesCheck && draft.rulesCheck.running;
-  return html`
-    <div class="field">
-      <label class="field-label" for="field-rulesChoice">分流规则</label>
-      <select class="select" id="field-rulesChoice" data-field="rulesChoice" data-focus="rulesChoice">
-        <option value="" ${draft.rulesChoice === "" ? raw("selected") : ""}>大陆直连（内置）</option>
-        <optgroup label="小火箭规则">
-          ${presets.map((item) => html`<option value="${item.url}" ${draft.rulesChoice === item.url ? raw("selected") : ""}>${item.name}</option>`)}
-        </optgroup>
-        <option value="custom" ${custom ? raw("selected") : ""}>自定义规则地址…</option>
-      </select>
-      ${custom ? "" : html`<div class="field-hint">${hint}</div>`}
-    </div>
-    ${custom ? html`
-      <div class="field">
-        <label class="field-label" for="field-rules">规则配置的地址</label>
-        <div class="field-inline">
-          <input class="input mono ${errors.rules ? "invalid" : ""}" id="field-rules" type="text" data-field="rules" data-focus="rules" value="${draft.rules}" placeholder="https://…/rules.conf" spellcheck="false" autocomplete="off">
-          <button class="button" type="button" data-action="check-rules" ${checking ? raw("disabled") : ""}>${checking ? html`<span class="spinner"></span>` : icon("refresh")}检查规则</button>
-        </div>
-        <div class="field-error" data-error="rules">${errors.rules}</div>
-        <div class="field-hint">${hint}</div>
-      </div>
-      <div data-rules-result>${renderRulesCheck(draft.rulesCheck)}</div>` : ""}`;
-}
-
-function renderRulesCheck(check) {
-  if (!check || check.running) {
-    return html``;
-  }
-  if (!check.ok) {
-    return html`<div class="infobar danger">${icon("error")}<div class="infobar-body"><div class="infobar-title">这个规则地址不能用</div>${check.message}</div></div>`;
-  }
-  const result = check.result;
-  const notes = [];
-  if (result.sets) {
-    notes.push(`另外引用了 ${result.sets} 个规则列表，保存后一起下载`);
-  }
-  if (result.skipped) {
-    notes.push(`${result.skipped} 条内核不支持（例如 USER-AGENT），会跳过`);
-  }
-  notes.push(finalTexts[result.final]);
-  return html`<div class="infobar success">${icon("success")}<div class="infobar-body"><div class="infobar-title">找到 ${result.rules.toLocaleString()} 条规则</div>${notes.join("；")}</div></div>`;
-}
-
 function field({ label, name, value, placeholder = "", error = "", hint = "", className = "", type = "text", mono = false, focus = name }) {
   return html`
     <div class="field ${className}">
@@ -808,9 +684,8 @@ function renderProfileEditor(draft, editing, errors) {
           <div class="segmented" role="group" aria-label="分流">
             ${modeOptions.map(([value, label]) => html`<button type="button" data-mode="${value}" aria-pressed="${draft.mode === value}">${label}</button>`)}
           </div>
-          <div class="field-hint">${modeHints[draft.mode]}</div>
-        </div>
-        ${draft.mode === "rule" ? renderRulesField(draft, errors) : ""}`;
+          <div class="field-hint">${modeHint(draft.mode)}</div>
+        </div>`;
       break;
     default:
       kindFields = html`
@@ -1213,7 +1088,7 @@ function renderNodes(profile, view) {
         <div class="segmented" role="group" aria-label="分流方式">
           ${modeOptions.map(([value, label]) => html`<button type="button" data-action="nodes-mode" data-value="${value}" aria-pressed="${profile.mode === value}" ${busy}>${label}</button>`)}
         </div>
-        <span class="caption muted">${profile.mode === "global" ? "所有网站都经过节点" : `分流规则：${rulesName(profile.rules)}`}</span>
+        <span class="caption muted">${profile.mode === "global" ? "所有网站都经过节点" : `分流规则：${rulesSummary()}`}</span>
       </div>
       ${content}
     </div>
@@ -1698,14 +1573,105 @@ function openGroupEditor(index = null) {
   return dialog;
 }
 
-// retargetGroup 在策略组被删掉或改名后，把指向它的自定义规则改到 target。返回改了几条。
+// ---------- 规则库 ----------
+
+// openRuleLibrary 按分类列出规则库里的公开规则，点「添加」加到规则集的最后，去向可以在列表里再改。
+function openRuleLibrary() {
+  const view = { query: "", adding: "" };
+  const entries = () => app.state.rule_library || [];
+  const added = (entry) => ((app.config && app.config.rule_sets) || []).some((set) => set.url === entry.url);
+  const list = () => {
+    const query = view.query.trim().toLowerCase();
+    const visible = entries().filter((entry) => !query || `${entry.name} ${entry.detail} ${entry.category}`.toLowerCase().includes(query));
+    if (visible.length === 0) {
+      return html`<p class="caption muted library-empty">没有找到规则，可以把规则地址直接粘到分流规则页的输入框里</p>`;
+    }
+    const categories = [...new Set(visible.map((entry) => entry.category))];
+    return categories.map((category) => html`
+      <div class="library-category">${category}</div>
+      <div class="library-group">
+        ${visible.filter((entry) => entry.category === category).map((entry) => {
+          const done = added(entry);
+          const adding = view.adding === entry.url;
+          return html`
+            <div class="library-entry">
+              <div class="library-text">
+                <div class="library-name">${entry.name}</div>
+                ${entry.detail ? html`<div class="caption muted">${entry.detail}</div>` : ""}
+              </div>
+              <span class="badge" title="添加后的去向，可以在列表里改">${entry.policy ? policyLabel(entry.policy) : "按文件里的"}</span>
+              <button class="button library-add" data-library-url="${entry.url}" aria-label="${done ? `已添加「${entry.name}」` : `添加「${entry.name}」`}" ${done || view.adding ? raw("disabled") : ""}>${done ? html`${icon("check")}已添加` : adding ? html`<span class="spinner"></span>添加` : html`${icon("plus")}添加`}</button>
+            </div>`;
+        })}
+      </div>`);
+  };
+  const dialog = openDialog({
+    className: "wide library-dialog",
+    render: () => html`
+      <div class="dialog-body">
+        <h2 class="dialog-title">规则库</h2>
+        <p class="caption muted" style="margin:-8px 0 14px">blackmatrix7、MetaCubeX、ACL4SSR 和 johnshall 维护的公开规则，每天自动更新。添加后排在规则集的最后，去向可以在列表里改。</p>
+        <div class="nodes-toolbar">
+          <input class="input" type="search" data-focus="library-search" value="${view.query}" placeholder="搜索，例如 Netflix、广告" aria-label="搜索规则库" spellcheck="false" autocomplete="off">
+        </div>
+        <div class="library-list" data-library-list>${list()}</div>
+      </div>
+      <div class="dialog-footer">
+        <button class="button accent" data-action="dialog-cancel">完成</button>
+      </div>`,
+    onMount: (instance) => {
+      const element = instance.element;
+      // 搜索和添加时只重绘列表，不重建输入框，避免打断中文输入法。
+      const refreshList = () => setHtml(element.querySelector("[data-library-list]"), html`${list()}`);
+      element.addEventListener("input", (event) => {
+        if (event.target.dataset.focus === "library-search") {
+          view.query = event.target.value;
+          refreshList();
+        }
+      });
+      element.addEventListener("click", async (event) => {
+        const button = event.target.closest("button");
+        if (!button || button.disabled) {
+          return;
+        }
+        if (button.dataset.action === "dialog-cancel") {
+          instance.close(false);
+          return;
+        }
+        const entry = entries().find((item) => item.url === button.dataset.libraryUrl);
+        if (!entry) {
+          return;
+        }
+        view.adding = entry.url;
+        refreshList();
+        const set = { name: entry.name, url: entry.url };
+        if (entry.policy) {
+          set.policy = entry.policy;
+        }
+        await addRuleSet(set, null, { quiet: true });
+        view.adding = "";
+        if (!instance.closed) {
+          refreshList();
+          const next = element.querySelector(`[data-library-url="${CSS.escape(entry.url)}"]`);
+          if (next) {
+            next.focus();
+          }
+        }
+      });
+    },
+  });
+  return dialog;
+}
+
+// retargetGroup 与程序里的 RetargetGroup 一致：策略组被删掉或改名后，把指向它的自定义规则、规则集和「其余流量」改到 target。
 function retargetGroup(config, name, target) {
-  let count = 0;
-  for (const rule of config.custom_rules || []) {
-    if (rule.policy === `group:${name}`) {
-      rule.policy = target;
-      count++;
+  const old = `group:${name}`;
+  for (const item of [...(config.custom_rules || []), ...(config.rule_sets || [])]) {
+    if (item.policy === old) {
+      item.policy = target;
     }
   }
-  return count;
+  if (config.final_policy === old) {
+    config.final_policy = target;
+  }
 }

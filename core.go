@@ -608,20 +608,33 @@ func (core *Core) resetAutoGroups(settings CoreSettings) {
 }
 
 func (core *Core) ruleProvidersLoaded(settings CoreSettings) bool {
+	counts, err := core.RuleProviderCounts(coreApiTimeout)
+	if err != nil {
+		return false
+	}
+	for name, provider := range settings.RuleProviders {
+		if counts[name] == 0 && !provider.Optional {
+			return false
+		}
+	}
+	return true
+}
+
+// RuleProviderCounts 是内核里各个规则集（rule-provider）读到的规则数，按名字查。
+func (core *Core) RuleProviderCounts(timeout time.Duration) (map[string]int, error) {
 	var result struct {
 		Providers map[string]struct {
 			RuleCount int `json:"ruleCount"`
 		} `json:"providers"`
 	}
-	if err := core.request(http.MethodGet, "/providers/rules", nil, &result, coreApiTimeout); err != nil {
-		return false
+	if err := core.request(http.MethodGet, "/providers/rules", nil, &result, timeout); err != nil {
+		return nil, err
 	}
-	for name := range settings.RuleProviders {
-		if result.Providers[name].RuleCount == 0 {
-			return false
-		}
+	counts := map[string]int{}
+	for name, provider := range result.Providers {
+		counts[name] = provider.RuleCount
 	}
-	return true
+	return counts, nil
 }
 
 func (core *Core) reload(text []byte, settings CoreSettings) error {

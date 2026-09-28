@@ -137,12 +137,6 @@ var corePrivateRules = []string{
 	"IP-CIDR6,fe80::/10,DIRECT,no-resolve",
 }
 
-// 大陆直连：国内的域名和 IP 直连，其余走节点。
-var coreMainlandRules = []string{
-	"GEOSITE,cn,DIRECT",
-	"GEOIP,CN,DIRECT",
-}
-
 type coreHealthCheck struct {
 	Enable   bool   `json:"enable"`
 	Url      string `json:"url"`
@@ -345,10 +339,8 @@ func coreConfigText(settings CoreSettings, controller, secret string) []byte {
 		}
 		config.RuleProviders = map[string]coreRuleProvider{}
 		for name, provider := range settings.RuleProviders {
-			config.RuleProviders[name] = coreRuleProvider{Type: "file", Behavior: provider.Behavior, Format: "text", Path: provider.Path}
+			config.RuleProviders[name] = coreRuleProvider{Type: "file", Behavior: provider.Behavior, Format: policyOr(provider.Format, "text"), Path: provider.Path}
 		}
-	case settings.GeoReady:
-		config.Rules = append(config.Rules, coreMainlandRules...)
 	}
 	if !strings.HasPrefix(config.Rules[len(config.Rules)-1], "MATCH,") {
 		config.Rules = append(config.Rules, "MATCH,"+coreTopGroup)
