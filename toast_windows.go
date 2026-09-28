@@ -25,6 +25,7 @@ const (
 	toastAppKey         = `Software\Classes\AppUserModelId\` + toastAppId
 	toastGroup          = "ProxySwitch"
 	toastIconSize       = 96
+	toastMinBuild       = 17763
 	roInitMultithreaded = 1
 )
 
