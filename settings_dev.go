@@ -33,6 +33,9 @@ type devBackend struct {
 	// loopback 模拟商店应用和它们的回环豁免；loopbackChanges 记下以管理员身份修改的次数。
 	loopback        []LoopbackApp
 	loopbackChanges int
+	// wslConfig 模拟 .wslconfig 的内容，wslRestart 表示改过设置还没重启 WSL。
+	wslConfig  string
+	wslRestart bool
 }
 
 var devDefaultNetwork = NetworkInfo{
@@ -218,6 +221,42 @@ func (backend *devBackend) Close() {
 func (backend *devBackend) InstallUpdate(progress func(received, total int64)) error {
 	_, err := downloadLatestRelease(backend.UpdatePaths(), filepath.Join(backend.engine.paths.Dir, "update.download"), progress)
 	return err
+}
+
+// WslInfo 在开发模式下模拟装了 Ubuntu、支持镜像网络的 WSL。
+func (backend *devBackend) WslInfo() WslInfo {
+	backend.mutex.Lock()
+	defer backend.mutex.Unlock()
+	info := WslInfo{Installed: true, Distros: []string{"Ubuntu"}, Supported: true, Restart: backend.wslRestart, Config: `C:\Users\dev\.wslconfig`}
+	info.Mirrored, info.AutoProxy = wslConfigValues(backend.wslConfig)
+	return info
+}
+
+// SetupWsl 在开发模式下只改模拟的 .wslconfig。
+func (backend *devBackend) SetupWsl() (WslInfo, error) {
+	return backend.editWslConfig(setWslProxy)
+}
+
+// ResetWsl 在开发模式下只改模拟的 .wslconfig。
+func (backend *devBackend) ResetWsl() (WslInfo, error) {
+	return backend.editWslConfig(resetWslProxy)
+}
+
+func (backend *devBackend) editWslConfig(edit func(string) string) (WslInfo, error) {
+	backend.mutex.Lock()
+	if updated := edit(backend.wslConfig); updated != backend.wslConfig {
+		backend.wslConfig, backend.wslRestart = updated, true
+	}
+	backend.mutex.Unlock()
+	return backend.WslInfo(), nil
+}
+
+// RestartWsl 在开发模式下只记下已经重启。
+func (backend *devBackend) RestartWsl() (WslInfo, error) {
+	backend.mutex.Lock()
+	backend.wslRestart = false
+	backend.mutex.Unlock()
+	return backend.WslInfo(), nil
 }
 
 // RunningPrograms 在开发模式下返回几个常见的程序名。

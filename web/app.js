@@ -297,6 +297,9 @@ function goto(pageId) {
   if (pageId === "system" && (!app.loopback || app.loopback.error)) {
     refreshLoopback();
   }
+  if (pageId === "system") {
+    refreshWsl();
+  }
   if (pageId === "diagnose" && !app.diagnoseJob) {
     loadDiagnose();
   }
@@ -671,6 +674,36 @@ async function refreshLoopback() {
     app.loopback = { info: await api("GET", "/api/loopback") };
   } catch (error) {
     app.loopback = { error: error.message || "读不到应用" };
+  }
+  renderPage();
+}
+
+// refreshWsl 读取 WSL 的情况（系统集成页）。
+async function refreshWsl() {
+  if (!app.wsl || app.wsl.error) {
+    app.wsl = { loading: true };
+    renderPage();
+  }
+  try {
+    app.wsl = { info: await api("GET", "/api/wsl") };
+  } catch (error) {
+    app.wsl = { error: error.message || "读不到 WSL 的情况" };
+  }
+  renderPage();
+}
+
+// runWsl 设置或重启 WSL，完成后显示结果。
+async function runWsl(path, successTitle, successText) {
+  app.wsl = { ...app.wsl, busy: true };
+  renderPage();
+  try {
+    app.wsl = { info: await api("POST", path) };
+    toast(successText, "success", successTitle);
+  } catch (error) {
+    app.wsl = { ...app.wsl, busy: false };
+    if (error.status !== 0 && error.status !== 403) {
+      toast(error.message, "warning", "没有成功");
+    }
   }
   renderPage();
 }
@@ -1073,6 +1106,15 @@ const actions = {
   "share-test": () => testShare(),
   "share-firewall": () => allowShareFirewall(),
   "loopback-refresh": () => refreshLoopback(),
+  "wsl-refresh": () => refreshWsl(),
+  "wsl-setup": () => runWsl("/api/wsl/setup", "已设置 WSL", "重启 WSL 后，WSL 里的程序就会使用本机的代理"),
+  "wsl-reset": () => runWsl("/api/wsl/reset", "已撤销", "重启 WSL 后恢复默认的网络设置"),
+  "wsl-restart": () => runWsl("/api/wsl/restart", "已重启 WSL", "重新打开 WSL 的终端就会用上新的设置"),
+  "copy-wsl-command": async (element) => {
+    if (await copyText(element.dataset.command)) {
+      toast("打开局域网共享后，在 WSL 里粘贴运行", "success", "已复制");
+    }
+  },
   "loopback-all": () => app.loopback && app.loopback.info && saveLoopback(app.loopback.info.apps.map((item) => item.sid)),
   "loopback-choose": () => openLoopbackDialog(),
   "take-over-clash-links": () => runOperation("/api/links/clash", {}, "机场网站的「一键导入 Clash」现在会打开 ProxySwitch", "没有改过来"),
@@ -1368,6 +1410,7 @@ async function start() {
     }
     if (app.page === "system") {
       refreshLoopback();
+      refreshWsl();
     }
     // 窗口是为程序的请求打开的（地址里就是请求的页面），例如托盘菜单的「检查更新」：执行请求的操作。
     const requested = state.navigate && state.navigate.page === initialPage && state.navigate.action;

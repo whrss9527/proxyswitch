@@ -71,7 +71,9 @@ type App struct {
 	// linksRegistered 是上次按配置登记链接时 url_links 的值，还没登记过时为 nil。
 	linksRegistered *bool
 	gitAvailable    atomic.Bool
-	exitHandled     bool
+	// wslRestart 表示改过 WSL 的设置，要重启 WSL 才生效。
+	wslRestart  atomic.Bool
+	exitHandled bool
 	// 已显示的警告和错误通知数，用来判断一个错误是否已经提示过。
 	problemNotices int
 	// 设置页发起的操作由页面自己显示结果，这期间不弹托盘通知。
