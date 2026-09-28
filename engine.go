@@ -231,7 +231,7 @@ func (engine *Engine) ReplaceConfig(config *Config) {
 func (engine *Engine) afterConfigChange() {
 	engine.forgetSubscriptions()
 	engine.syncCore()
-	if len(engine.SubscriptionsDue()) > 0 || len(engine.RulesDue()) > 0 || engine.GeoDue() {
+	if len(engine.SubscriptionsDue()) > 0 || len(engine.RuleSetsDue()) > 0 || engine.GeoDue() {
 		engine.requestDownloads()
 	}
 }
@@ -945,8 +945,8 @@ func (engine *Engine) settingsState() SettingsState {
 		Defaults:      defaultsInfo(),
 		Palette:       profilePalette,
 		Subscriptions: engine.subscriptionInfos(),
-		Rules:         engine.rulesInfos(),
-		RulePresets:   rulePresets,
+		RuleSets:      engine.ruleSetStates(),
+		RuleLibrary:   ruleLibrary,
 		Core:          engine.coreInfo(),
 		Share:         engine.shareInfo(status),
 		Groups:        GroupsInfo{Source: engine.groupSource(), States: []CoreGroupState{}},

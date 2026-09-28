@@ -53,8 +53,8 @@ type SettingsBackend interface {
 	TestNodes(profileId string) (CoreNodes, error)
 	UpdateSubscription(profileId string) error
 	CheckSubscription(address string) (SubscriptionCheck, error)
-	UpdateRules(profileId string) error
-	CheckRules(address string) (RulesCheck, error)
+	UpdateRuleSet(address string) error
+	UpdateAllRuleSets() (RuleSetsUpdate, error)
 	SetMode(profileId, mode string) error
 	SelectGroupNode(name, node string) error
 	InstallCore() error
@@ -96,11 +96,11 @@ type SettingsState struct {
 	Navigate    NavigateInfo     `json:"navigate"`
 	Update      *UpdateInfo      `json:"update,omitempty"`
 	Installing  *InstallProgress `json:"installing,omitempty"`
-	// Subscriptions 和 Rules 按配置 id 给出订阅和分流规则的下载情况，RulePresets 是可以直接选的规则配置，
+	// Subscriptions 按配置 id 给出订阅的下载情况，RuleSets 按地址给出分流规则集的情况，RuleLibrary 是规则库，
 	// Core 是订阅使用的代理内核的情况。
 	Subscriptions map[string]SubscriptionInfo `json:"subscriptions"`
-	Rules         map[string]RulesInfo        `json:"rules"`
-	RulePresets   []RulePreset                `json:"rule_presets"`
+	RuleSets      map[string]RuleSetState     `json:"rule_sets"`
+	RuleLibrary   []RuleLibraryEntry          `json:"rule_library"`
 	Core          CoreInfo                    `json:"core"`
 	// Share 是局域网共享的去向、这台电脑的局域网地址和防睡眠的状态，共享入口是否在监听见 Core.Share。
 	Share ShareInfo `json:"share"`
@@ -312,10 +312,10 @@ func (settings *SettingsServer) Start() (string, error) {
 	mux.HandleFunc("POST /api/subscriptions/{id}/test", settings.handleTestNodes)
 	mux.HandleFunc("POST /api/subscriptions/{id}/update", settings.handleUpdateSubscription)
 	mux.HandleFunc("POST /api/subscriptions/check", settings.handleCheckSubscription)
-	mux.HandleFunc("POST /api/subscriptions/{id}/rules", settings.handleUpdateRules)
 	mux.HandleFunc("POST /api/subscriptions/{id}/mode", settings.handleSetMode)
 	mux.HandleFunc("POST /api/groups/select", settings.handleSelectGroupNode)
-	mux.HandleFunc("POST /api/rules/check", settings.handleCheckRules)
+	mux.HandleFunc("POST /api/rulesets/update", settings.handleUpdateRuleSet)
+	mux.HandleFunc("POST /api/rulesets/update-all", settings.handleUpdateAllRuleSets)
 	mux.HandleFunc("POST /api/core/install", settings.handleInstallCore)
 	mux.HandleFunc("POST /api/share", settings.handleShare)
 	mux.HandleFunc("GET /api/share/activity", settings.handleShareActivity)
@@ -743,8 +743,24 @@ func (settings *SettingsServer) handleCheckSubscription(writer http.ResponseWrit
 	writeJson(writer, http.StatusOK, result)
 }
 
-func (settings *SettingsServer) handleUpdateRules(writer http.ResponseWriter, request *http.Request) {
-	settings.respondState(writer, request, settings.backend.UpdateRules(request.PathValue("id")))
+func (settings *SettingsServer) handleUpdateRuleSet(writer http.ResponseWriter, request *http.Request) {
+	var body struct {
+		Url string `json:"url"`
+	}
+	if !decodeJsonBody(writer, request, &body) {
+		return
+	}
+	settings.respondState(writer, request, settings.backend.UpdateRuleSet(body.Url))
+}
+
+func (settings *SettingsServer) handleUpdateAllRuleSets(writer http.ResponseWriter, request *http.Request) {
+	result, err := settings.backend.UpdateAllRuleSets()
+	if err != nil {
+		settings.respondState(writer, request, err)
+		return
+	}
+	state := settings.state()
+	writeJson(writer, http.StatusOK, map[string]any{"result": result, "state": state})
 }
 
 func (settings *SettingsServer) handleSetMode(writer http.ResponseWriter, request *http.Request) {
@@ -766,21 +782,6 @@ func (settings *SettingsServer) handleSelectGroupNode(writer http.ResponseWriter
 		return
 	}
 	settings.respondState(writer, request, settings.backend.SelectGroupNode(body.Group, body.Node))
-}
-
-func (settings *SettingsServer) handleCheckRules(writer http.ResponseWriter, request *http.Request) {
-	var body struct {
-		Url string `json:"url"`
-	}
-	if !decodeJsonBody(writer, request, &body) {
-		return
-	}
-	result, err := settings.backend.CheckRules(strings.TrimSpace(body.Url))
-	if err != nil {
-		writeError(writer, http.StatusBadGateway, err.Error())
-		return
-	}
-	writeJson(writer, http.StatusOK, result)
 }
 
 // handleInstallCore 下载内核，进度经 /api/state 的 core.installing 提供。

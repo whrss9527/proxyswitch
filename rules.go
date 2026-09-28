@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -47,39 +48,6 @@ const (
 
 var ruleUserAgent = "ProxySwitch/" + appVersion
 
-// RulePreset 是设置页里可以直接选的规则配置。
-type RulePreset struct {
-	Name        string `json:"name"`
-	Url         string `json:"url"`
-	Description string `json:"description"`
-}
-
-// rulePresets 来自 Shadowrocket-ADBlock-Rules-Forever，每天自动生成更新。
-const rulePresetBase = "https://johnshall.github.io/Shadowrocket-ADBlock-Rules-Forever/"
-
-var rulePresets = []RulePreset{
-	{"黑名单 + 去广告", rulePresetBase + "sr_top500_banlist_ad.conf", "被墙的网站走节点，其余直连；拦截广告"},
-	{"白名单 + 去广告", rulePresetBase + "sr_top500_whitelist_ad.conf", "国内网站和能直连的国外网站直连，其余走节点；拦截广告"},
-	{"国内外划分 + 去广告", rulePresetBase + "sr_cnip_ad.conf", "中国的网站和 IP 直连，国外走节点；拦截广告"},
-	{"黑名单", rulePresetBase + "sr_top500_banlist.conf", "被墙的网站走节点，其余直连"},
-	{"白名单", rulePresetBase + "sr_top500_whitelist.conf", "国内网站和能直连的国外网站直连，其余走节点"},
-	{"国内外划分", rulePresetBase + "sr_cnip.conf", "中国的网站和 IP 直连，国外走节点"},
-	{"懒人配置", rulePresetBase + "lazy.conf", "按常用的网站和 App 分流，国内直连，国外走节点"},
-}
-
-// rulesLabel 是订阅配置的分流规则的简短说明：内置的大陆直连、预设的名字或「自定义规则」。
-func rulesLabel(profile *Profile) string {
-	if profile.Rules == "" {
-		return "大陆直连"
-	}
-	for _, preset := range rulePresets {
-		if preset.Url == profile.Rules {
-			return preset.Name
-		}
-	}
-	return "自定义规则"
-}
-
 // ruleEntry 是一条换成内核写法的规则，不含去向。
 type ruleEntry struct {
 	Kind      string
@@ -88,20 +56,24 @@ type ruleEntry struct {
 }
 
 // ruleLine 是规则配置里的一条规则：普通规则（Entry），或者引用外部列表的 RULE-SET / DOMAIN-SET（Set）。
-// NoResolve 表示引用的列表里的 IP 段都不解析域名（RULE-SET 后面写了 no-resolve）。
+// NoResolve 表示引用的列表里的 IP 段都不解析域名（RULE-SET 后面写了 no-resolve）。Policy 是归类后的去向（走节点、直连、
+// 拦截），Name 是文件里写的策略名：和某个策略组同名时指到那个组（见 ruleSetTarget）。
 type ruleLine struct {
 	Entry     ruleEntry
 	Set       string
 	DomainSet bool
 	NoResolve bool
 	Policy    string
+	Name      string
 }
 
-// ruleConfig 是解析后的规则配置。Final 是 FINAL 的去向，没有写时为空；Skipped 是内核做不到而跳过的规则数。
+// ruleConfig 是解析后的规则配置。Final 是 FINAL 归类后的去向，没有写时为空，FinalName 是文件里写的策略名；
+// Skipped 是内核做不到而跳过的规则数。
 type ruleConfig struct {
-	Lines   []ruleLine
-	Final   string
-	Skipped int
+	Lines     []ruleLine
+	Final     string
+	FinalName string
+	Skipped   int
 }
 
 // ruleSetSource 是一个要下载的规则列表。
@@ -243,7 +215,7 @@ func (config *ruleConfig) addClash(rule string, groups map[string]proxyGroup, pr
 		for _, item := range provider.Payload {
 			if entry, ok := ruleListEntry(item, domainSet); ok {
 				entry.NoResolve = entry.NoResolve || isIpRule(entry) && hasNoResolve(fields[3:])
-				config.Lines = append(config.Lines, ruleLine{Entry: entry, Policy: policy})
+				config.Lines = append(config.Lines, ruleLine{Entry: entry, Policy: policy, Name: fields[2]})
 			} else {
 				config.Skipped++
 			}
@@ -252,7 +224,7 @@ func (config *ruleConfig) addClash(rule string, groups map[string]proxyGroup, pr
 		// mrs 是二进制格式，读不了。
 		config.Skipped++
 	case strings.HasPrefix(strings.ToLower(provider.Url), "http://") || strings.HasPrefix(strings.ToLower(provider.Url), "https://"):
-		config.Lines = append(config.Lines, ruleLine{Set: provider.Url, DomainSet: domainSet, NoResolve: hasNoResolve(fields[3:]), Policy: policy})
+		config.Lines = append(config.Lines, ruleLine{Set: provider.Url, DomainSet: domainSet, NoResolve: hasNoResolve(fields[3:]), Policy: policy, Name: fields[2]})
 	default:
 		config.Skipped++
 	}
@@ -298,7 +270,7 @@ func (config *ruleConfig) add(line string, groups map[string]proxyGroup) bool {
 		if len(fields) > 1 {
 			policy = fields[1]
 		}
-		config.Final = resolvePolicy(policy, groups)
+		config.Final, config.FinalName = resolvePolicy(policy, groups), policy
 		return false
 	case "RULE-SET", "DOMAIN-SET":
 		if len(fields) < 3 {
@@ -312,7 +284,7 @@ func (config *ruleConfig) add(line string, groups map[string]proxyGroup) bool {
 			}
 			return true
 		}
-		config.Lines = append(config.Lines, ruleLine{Set: fields[1], DomainSet: kind == "DOMAIN-SET", NoResolve: hasNoResolve(fields[3:]), Policy: resolvePolicy(fields[2], groups)})
+		config.Lines = append(config.Lines, ruleLine{Set: fields[1], DomainSet: kind == "DOMAIN-SET", NoResolve: hasNoResolve(fields[3:]), Policy: resolvePolicy(fields[2], groups), Name: fields[2]})
 		return true
 	}
 	if len(fields) < 3 {
@@ -324,7 +296,7 @@ func (config *ruleConfig) add(line string, groups map[string]proxyGroup) bool {
 		config.Skipped++
 		return true
 	}
-	config.Lines = append(config.Lines, ruleLine{Entry: entry, Policy: resolvePolicy(fields[2], groups)})
+	config.Lines = append(config.Lines, ruleLine{Entry: entry, Policy: resolvePolicy(fields[2], groups), Name: fields[2]})
 	return true
 }
 
@@ -513,13 +485,28 @@ func bareRuleEntry(line string, domainSet bool) (ruleEntry, bool) {
 
 // ---------- 转换 ----------
 
-// convertedRules 是转换后交给内核的规则：Rules 是规则行，其中的规则集是 Providers 里的文件。
-// Count 是展开规则列表后的规则数；Final 是其余网站的去向；Geo 表示用到了 GEOIP 或 GEOSITE，需要地理数据。
+// ruleTemplate 是转换后的一条规则，还没定去向：Rule 是规则本身（不含去向），Policy 和 Name 见 ruleLine，Option 是去向后面的
+// 选项（,no-resolve）。生成内核配置时才按规则集的设置定去向（见 ruleSetTarget）：改了规则集的去向、增删改策略组都不用重新转换。
+type ruleTemplate struct {
+	Rule   string `json:"r"`
+	Policy string `json:"p"`
+	Name   string `json:"n,omitempty"`
+	Option string `json:"o,omitempty"`
+}
+
+// line 是这条规则在内核里的写法，forced 是规则集设的去向（空表示按文件里写的）。
+func (rule ruleTemplate) line(forced string, groups []string) string {
+	return rule.Rule + "," + ruleSetTarget(forced, rule.Policy, rule.Name, groups) + rule.Option
+}
+
+// convertedRules 是转换后交给内核的规则：Rules 是规则，其中的规则集是 Providers 里的文件。Count 是展开规则列表后的规则数；
+// Final 和 FinalName 是 FINAL 的去向（没写时为空）；Geo 表示用到了 GEOIP 或 GEOSITE，需要地理数据。
 type convertedRules struct {
-	Rules     []string
+	Rules     []ruleTemplate
 	Providers []convertedProvider
 	Count     int
 	Final     string
+	FinalName string
 	Geo       bool
 }
 
@@ -532,6 +519,7 @@ type convertedProvider struct {
 type policyRule struct {
 	entry  ruleEntry
 	policy string
+	name   string
 }
 
 // corePolicyName 是去向在内核配置里的名字：代理交给 ProxySwitch 组，也就是正在使用的订阅选中的节点。
@@ -545,42 +533,42 @@ func corePolicyName(policy string) string {
 	return coreTopGroup
 }
 
-// convertRules 展开规则列表，把去向相同的连续规则合并成规则集。sets 是按地址下载好的规则列表，
+// convertRules 展开规则列表，把去向相同（归类和文件里写的策略名都相同）的连续规则合并成规则集。sets 是按地址下载好的规则列表，
 // 没下载到的列表按空处理。prefix 用来给规则集起名字。
 func convertRules(config ruleConfig, sets map[ruleSetSource][]ruleEntry, prefix string) convertedRules {
 	var rules []policyRule
 	for _, line := range config.Lines {
+		name := strings.TrimSpace(line.Name)
 		if line.Set == "" {
-			rules = append(rules, policyRule{line.Entry, line.Policy})
+			rules = append(rules, policyRule{line.Entry, line.Policy, name})
 			continue
 		}
 		for _, entry := range sets[ruleSetSource{line.Set, line.DomainSet}] {
 			entry.NoResolve = entry.NoResolve || line.NoResolve && isIpRule(entry)
-			rules = append(rules, policyRule{entry, line.Policy})
+			rules = append(rules, policyRule{entry, line.Policy, name})
 		}
 	}
-	result := convertedRules{Count: len(rules), Final: config.Final}
+	result := convertedRules{Count: len(rules), Final: config.Final, FinalName: strings.TrimSpace(config.FinalName)}
 	for start := 0; start < len(rules); {
 		end := start
-		for end < len(rules) && rules[end].policy == rules[start].policy {
+		for end < len(rules) && rules[end].policy == rules[start].policy && strings.EqualFold(rules[end].name, rules[start].name) {
 			end++
 		}
 		result.addRun(rules[start:end], prefix)
 		start = end
 	}
-	if result.Final == "" {
-		// 没有 FINAL 时其余网站走代理：开启的是代理配置，不认识的网站能访问比被直连挡住更合理。
-		result.Final = rulePolicyProxy
-	}
-	result.Rules = append(result.Rules, "MATCH,"+corePolicyName(result.Final))
 	return result
 }
 
 // addRun 转换一段去向相同的规则：域名规则集、其他按域名判断的规则、不解析域名的 IP 段、要解析域名的 IP 段、GEOIP。
 func (result *convertedRules) addRun(rules []policyRule, prefix string) {
-	target := corePolicyName(rules[0].policy)
+	policy, name := rules[0].policy, rules[0].name
+	template := func(rule, option string) ruleTemplate {
+		return ruleTemplate{Rule: rule, Policy: policy, Name: name, Option: option}
+	}
 	seen := map[string]bool{}
-	var domains, inline, quietIps, ips, needsIp []string
+	var domains, quietIps, ips []string
+	var inline, needsIp []ruleTemplate
 	for _, rule := range rules {
 		entry := rule.entry
 		key := entry.Kind + "," + entry.Value + "," + strconv.FormatBool(entry.NoResolve)
@@ -601,38 +589,38 @@ func (result *convertedRules) addRun(rules []policyRule, prefix string) {
 			}
 		case "GEOSITE":
 			result.Geo = true
-			inline = append(inline, "GEOSITE,"+entry.Value+","+target)
+			inline = append(inline, template("GEOSITE,"+entry.Value, ""))
 		case "GEOIP":
 			result.Geo = true
-			rule := "GEOIP," + entry.Value + "," + target
+			option := ""
 			if entry.NoResolve {
-				rule += ",no-resolve"
+				option = ",no-resolve"
 			}
-			needsIp = append(needsIp, rule)
+			needsIp = append(needsIp, template("GEOIP,"+entry.Value, option))
 		default:
-			inline = append(inline, entry.Kind+","+entry.Value+","+target)
+			inline = append(inline, template(entry.Kind+","+entry.Value, ""))
 		}
 	}
 	if len(domains) >= ruleSetMinimum {
-		result.addProvider("domain", domains, target, "", prefix)
+		result.addProvider("domain", domains, template, "", prefix)
 	} else {
 		for _, domain := range domains {
 			if suffix, found := strings.CutPrefix(domain, "+."); found {
-				result.Rules = append(result.Rules, "DOMAIN-SUFFIX,"+suffix+","+target)
+				result.Rules = append(result.Rules, template("DOMAIN-SUFFIX,"+suffix, ""))
 			} else {
-				result.Rules = append(result.Rules, "DOMAIN,"+domain+","+target)
+				result.Rules = append(result.Rules, template("DOMAIN,"+domain, ""))
 			}
 		}
 	}
 	result.Rules = append(result.Rules, inline...)
-	result.addIps(quietIps, target, ",no-resolve", prefix)
-	result.addIps(ips, target, "", prefix)
+	result.addIps(quietIps, template, ",no-resolve", prefix)
+	result.addIps(ips, template, "", prefix)
 	result.Rules = append(result.Rules, needsIp...)
 }
 
-func (result *convertedRules) addIps(ips []string, target, option, prefix string) {
+func (result *convertedRules) addIps(ips []string, template func(rule, option string) ruleTemplate, option, prefix string) {
 	if len(ips) >= ruleSetMinimum {
-		result.addProvider("ipcidr", ips, target, option, prefix)
+		result.addProvider("ipcidr", ips, template, option, prefix)
 		return
 	}
 	for _, ip := range ips {
@@ -640,44 +628,50 @@ func (result *convertedRules) addIps(ips []string, target, option, prefix string
 		if strings.Contains(ip, ":") {
 			kind = "IP-CIDR6"
 		}
-		result.Rules = append(result.Rules, kind+","+ip+","+target+option)
+		result.Rules = append(result.Rules, template(kind+","+ip, option))
 	}
 }
 
-func (result *convertedRules) addProvider(behavior string, lines []string, target, option, prefix string) {
+func (result *convertedRules) addProvider(behavior string, lines []string, template func(rule, option string) ruleTemplate, option, prefix string) {
 	name := fmt.Sprintf("%s-%d", prefix, len(result.Providers)+1)
 	result.Providers = append(result.Providers, convertedProvider{Name: name, Behavior: behavior, Lines: lines})
-	result.Rules = append(result.Rules, "RULE-SET,"+name+","+target+option)
+	result.Rules = append(result.Rules, template("RULE-SET,"+name, option))
 }
 
 // ---------- 保存 ----------
 
-// ruleManifest 是转换好的规则，保存在规则目录的 rules.json，生成内核配置时读取。
+// ruleManifest 是转换好的规则，保存在规则集文件夹的 rules.json，生成内核配置时读取。
 type ruleManifest struct {
-	Rules     []string                    `json:"rules"`
+	Rules     []ruleTemplate              `json:"rules"`
 	Providers map[string]CoreRuleProvider `json:"providers"`
+	Final     string                      `json:"final,omitempty"`
+	FinalName string                      `json:"final_name,omitempty"`
 }
 
-// CoreRuleProvider 是一个规则集文件，Path 相对于内核的工作目录。
+// CoreRuleProvider 是一个规则集文件，Path 相对于内核的工作目录；Format 是 text（默认）、yaml 或 mrs。
+// Optional 表示是下载来的列表：内核读不出来（格式或类型不对）时不等它加载，免得拖慢内核启动。
 type CoreRuleProvider struct {
 	Behavior string `json:"behavior"`
+	Format   string `json:"format,omitempty"`
 	Path     string `json:"path"`
+	Optional bool   `json:"optional,omitempty"`
 }
 
 const ruleManifestName = "rules.json"
 
-// ruleDir 是配置 profileId 的规则在内核工作目录里的位置（用 / 分隔，内核配置里也用这个写法）。
-func ruleDir(profileId string) string {
-	return "rules/" + profileId
+// ruleDir 是规则集 id 的文件在内核工作目录里的位置（用 / 分隔，内核配置里也用这个写法）。
+func ruleDir(id string) string {
+	return "rules/" + id
 }
 
-// writeConvertedRules 把转换好的规则写到 rules/<配置 id>/<版本>/，版本是内容的摘要：内容没变时不重复写，
+// writeConvertedRules 把转换好的规则写到 rules/<规则集 id>/<版本>/，版本是内容的摘要：内容没变时不重复写，
 // 内核的配置也不变；内容变了路径跟着变，内核重新加载时读到的是新文件。
-func writeConvertedRules(coreDir, profileId string, converted convertedRules) (string, error) {
+func writeConvertedRules(coreDir, id string, converted convertedRules) (string, error) {
 	hash := sha256.New()
 	for _, rule := range converted.Rules {
-		fmt.Fprintln(hash, rule)
+		fmt.Fprintln(hash, rule.Rule, rule.Policy, rule.Name, rule.Option)
 	}
+	fmt.Fprintln(hash, "final", converted.Final, converted.FinalName)
 	for _, provider := range converted.Providers {
 		fmt.Fprintln(hash, provider.Name, provider.Behavior, len(provider.Lines))
 		for _, line := range provider.Lines {
@@ -685,7 +679,7 @@ func writeConvertedRules(coreDir, profileId string, converted convertedRules) (s
 		}
 	}
 	revision := hex.EncodeToString(hash.Sum(nil))[:12]
-	relative := ruleDir(profileId) + "/" + revision
+	relative := ruleDir(id) + "/" + revision
 	target := filepath.Join(coreDir, filepath.FromSlash(relative))
 	if fileExists(filepath.Join(target, ruleManifestName)) {
 		return revision, nil
@@ -695,7 +689,7 @@ func writeConvertedRules(coreDir, profileId string, converted convertedRules) (s
 	if err := os.MkdirAll(temporary, 0o755); err != nil {
 		return "", fmt.Errorf("无法保存规则：%v", err)
 	}
-	manifest := ruleManifest{Rules: converted.Rules, Providers: map[string]CoreRuleProvider{}}
+	manifest := ruleManifest{Rules: converted.Rules, Providers: map[string]CoreRuleProvider{}, Final: converted.Final, FinalName: converted.FinalName}
 	for index, provider := range converted.Providers {
 		name := strconv.Itoa(index+1) + ".txt"
 		if err := os.WriteFile(filepath.Join(temporary, name), []byte(strings.Join(provider.Lines, "\n")+"\n"), 0o644); err != nil {
@@ -718,8 +712,8 @@ func writeConvertedRules(coreDir, profileId string, converted convertedRules) (s
 }
 
 // readRuleManifest 读取保存好的规则。
-func readRuleManifest(coreDir, profileId, revision string) (*ruleManifest, error) {
-	data, err := os.ReadFile(filepath.Join(coreDir, filepath.FromSlash(ruleDir(profileId)), revision, ruleManifestName))
+func readRuleManifest(coreDir, id, revision string) (*ruleManifest, error) {
+	data, err := os.ReadFile(filepath.Join(coreDir, filepath.FromSlash(ruleDir(id)), revision, ruleManifestName))
 	if err != nil {
 		return nil, err
 	}
@@ -730,9 +724,10 @@ func readRuleManifest(coreDir, profileId, revision string) (*ruleManifest, error
 	return &manifest, nil
 }
 
-// removeRuleRevisions 删除配置 profileId 除 keep 以外的规则版本；keep 为空时删除这个配置的全部规则。
-func removeRuleRevisions(coreDir, profileId, keep string) {
-	dir := filepath.Join(coreDir, filepath.FromSlash(ruleDir(profileId)))
+// removeRuleRevisions 删除规则集 id 除 keep 以外的版本（转换结果的文件夹，或者下载的列表文件）；keep 为空时删除这个规则集的
+// 全部文件。上次下载的引用列表（sets）保留，下次下载失败时还能用。
+func removeRuleRevisions(coreDir, id, keep string) {
+	dir := filepath.Join(coreDir, filepath.FromSlash(ruleDir(id)))
 	if keep == "" {
 		_ = os.RemoveAll(dir)
 		return
@@ -747,87 +742,157 @@ func removeRuleRevisions(coreDir, profileId, keep string) {
 
 // ---------- 下载 ----------
 
-// ruleSetCacheDir 保存上次下载成功的规则列表：下次下载失败时仍然可以用。
+// ruleSetCacheDir 保存完整配置里引用的规则列表上次下载成功的副本：下次下载失败时仍然可以用。
 const ruleSetCacheDir = "sets"
 
-// rulesDownload 是一次下载并转换好的规则。Revision 是保存的版本；Sets 是引用的规则列表数，
-// FailedSets 是其中没下载到、也没有上次的副本而没有用上的；Skipped 是内核做不到而跳过的规则数。
-type rulesDownload struct {
+// ruleSetDownload 是一次下载好的规则集。Kind 是认出来的加载方式（provider 纯列表 / convert 完整配置）；Revision 是保存的
+// 版本：纯列表是 rules/<id>/ 下的文件名，完整配置是转换结果的文件夹名；Behavior 是纯列表的类型（从内容判断，mrs 按地址猜）；
+// Count 是规则数（纯列表是行数，完整配置是展开引用的列表后的规则数）。以下是完整配置的：Sets 是引用的规则列表数，FailedSets 是
+// 其中没下载到、也没有上次的副本而没有用上的；Skipped 是内核做不到而跳过的规则数；Final / FinalName 是 FINAL；
+// Geo 表示用到了 GEOIP 或 GEOSITE，需要地理数据。
+type ruleSetDownload struct {
+	Kind       string
 	Revision   string
+	Format     string
+	Behavior   string
 	Count      int
 	Sets       int
 	FailedSets int
 	Skipped    int
 	Final      string
+	FinalName  string
 	Geo        bool
 }
 
-// RulesInfo 是一个订阅配置的分流规则的下载记录，保存在 state.json。Source 是规则地址的摘要，地址改了要重新下载；
-// Updated 是上次下载成功的时间，Attempted 是上次尝试的时间；Revision 是在用的规则版本；其余字段见 rulesDownload。
-type RulesInfo struct {
-	Source     string `json:"source,omitempty"`
-	Updated    string `json:"updated,omitempty"`
-	Attempted  string `json:"attempted,omitempty"`
-	Error      string `json:"error,omitempty"`
-	Revision   string `json:"revision,omitempty"`
-	Rules      int    `json:"rules,omitempty"`
-	Sets       int    `json:"sets,omitempty"`
-	FailedSets int    `json:"failed_sets,omitempty"`
-	Skipped    int    `json:"skipped,omitempty"`
-	Final      string `json:"final,omitempty"`
-	Geo        bool   `json:"geo,omitempty"`
+// fetchRuleSet 下载规则集，保存到内核工作目录的 rules/<id>/ 下：纯列表原样保存（交给内核读），完整配置转换后保存。
+// 地址是纯列表的扩展名、内容却是完整配置（Clash 的 rules:、小火箭的 [Rule] 段）时也转换。
+func fetchRuleSet(coreDir string, set RuleSet, paths []string) (ruleSetDownload, error) {
+	content, err := fetchRuleFile(set.Url, paths)
+	if err != nil {
+		return ruleSetDownload{}, err
+	}
+	if set.guessKind() == ruleSetProvider && !needsConversion(content) {
+		return saveRuleList(coreDir, set, content)
+	}
+	return convertRuleSet(coreDir, set.Id(), content, paths)
 }
 
-// RulesCheck 是在编辑配置时检查规则地址的结果：规则数（不含规则列表里的）、引用的规则列表数、跳过的规则数、其余网站的去向。
-type RulesCheck struct {
-	Rules   int    `json:"rules"`
-	Sets    int    `json:"sets"`
-	Skipped int    `json:"skipped"`
-	Final   string `json:"final"`
-}
+// zstdMagic 是 zstd 压缩数据的开头：mrs 格式的规则集是 zstd 压缩的。
+var zstdMagic = []byte{0x28, 0xb5, 0x2f, 0xfd}
 
-// checkRuleConfig 下载规则配置检查地址是否可用，不下载引用的规则列表，不保存。
-func checkRuleConfig(address string, paths []string) (RulesCheck, error) {
-	if err := validateRulesUrl(address); err != nil {
-		return RulesCheck{}, err
-	}
-	content, err := fetchRuleFile(address, paths)
-	if err != nil {
-		return RulesCheck{}, err
-	}
-	config, err := parseRuleConfig(content)
-	if err != nil {
-		return RulesCheck{}, err
-	}
-	check := RulesCheck{Sets: len(config.Sets()), Skipped: config.Skipped, Final: config.Final}
-	for _, line := range config.Lines {
-		if line.Set == "" {
-			check.Rules++
+// saveRuleList 检查并保存纯规则列表。格式看内容：有 payload: 的是 YAML，否则是一行一条的文本（扩展名不一定对）；
+// 文件名是内容的摘要：内容变了路径跟着变，内核重新加载时读到的是新文件。
+func saveRuleList(coreDir string, set RuleSet, content []byte) (ruleSetDownload, error) {
+	result := ruleSetDownload{Kind: ruleSetProvider, Format: set.format()}
+	if result.Format != "mrs" {
+		result.Format = "text"
+		if yamlPayloadPattern.Match(content) {
+			result.Format = "yaml"
 		}
 	}
-	if check.Final == "" {
-		check.Final = rulePolicyProxy
+	if result.Format == "mrs" {
+		if !bytes.HasPrefix(content, zstdMagic) {
+			return result, errors.New("不是 mrs 格式的规则集，地址可能填错了")
+		}
+		result.Behavior = set.guessBehavior()
+	} else {
+		text := strings.TrimPrefix(string(content), "\xef\xbb\xbf")
+		if strings.HasPrefix(strings.TrimSpace(text), "<") {
+			return result, errors.New("返回的是网页，规则地址可能填错了")
+		}
+		result.Behavior, result.Count = detectRuleListBehavior(text)
+		if result.Count == 0 {
+			return result, errors.New("里面没有规则")
+		}
 	}
-	return check, nil
+	sum := sha256.Sum256(content)
+	result.Revision = hex.EncodeToString(sum[:])[:12] + "." + map[string]string{"text": "txt", "yaml": "yaml", "mrs": "mrs"}[result.Format]
+	dir := filepath.Join(coreDir, filepath.FromSlash(ruleDir(set.Id())))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return result, fmt.Errorf("无法保存规则：%v", err)
+	}
+	if target := filepath.Join(dir, result.Revision); !fileExists(target) {
+		if err := writeFileAtomically(target, content); err != nil {
+			return result, fmt.Errorf("无法保存规则：%v", err)
+		}
+	}
+	return result, nil
 }
 
-// fetchRules 下载规则配置和它引用的规则列表，转换后保存到内核工作目录的 rules/<配置 id>/ 下。
-// 规则列表下载失败时用上次下载的副本，没有副本的跳过并计数。
-func fetchRules(coreDir, profileId, address string, paths []string) (rulesDownload, error) {
-	if err := validateRulesUrl(address); err != nil {
-		return rulesDownload{}, err
+// yamlPayloadPattern 认出 Clash 规则集的 YAML 写法：顶格的 payload: 列表。
+var yamlPayloadPattern = regexp.MustCompile(`(?m)^payload:`)
+
+// needsConversion 表示下载的内容是完整配置、要由 ProxySwitch 转换：小火箭 / Surge 的 [Rule] 段，或者 Clash 顶格的 rules: 列表
+// （纯规则列表用的是 payload:）。
+func needsConversion(content []byte) bool {
+	for _, raw := range strings.Split(strings.TrimPrefix(string(content), "\xef\xbb\xbf"), "\n") {
+		if strings.HasPrefix(raw, " ") || strings.HasPrefix(raw, "\t") {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(raw)) {
+		case "[rule]", "rules:":
+			return true
+		case "payload:":
+			return false
+		}
 	}
-	content, err := fetchRuleFile(address, paths)
-	if err != nil {
-		return rulesDownload{}, err
+	return false
+}
+
+// ruleListKinds 是规则列表里一行开头的规则类型：有这些的是完整规则的列表（classical）。
+var ruleListKinds = []string{
+	"DOMAIN", "DOMAIN-SUFFIX", "DOMAIN-KEYWORD", "DOMAIN-WILDCARD", "DOMAIN-REGEX", "HOST", "HOST-SUFFIX", "HOST-KEYWORD", "HOST-WILDCARD",
+	"IP-CIDR", "IP-CIDR6", "IP6-CIDR", "IP-SUFFIX", "IP-ASN", "SRC-IP-CIDR", "GEOIP", "GEOSITE", "DST-PORT", "SRC-PORT", "IN-PORT",
+	"PROCESS-NAME", "PROCESS-PATH", "NETWORK", "USER-AGENT", "URL-REGEX", "RULE-SET", "AND", "OR", "NOT",
+}
+
+// detectRuleListBehavior 从内容判断纯规则列表的类型：有「类型,内容」这种完整规则的是 classical；全是 IP 段的是 ipcidr；
+// 其余当 domain。同时数出规则的行数。
+func detectRuleListBehavior(text string) (behavior string, lines int) {
+	sampled, cidrs, classical := 0, 0, false
+	for _, raw := range strings.Split(text, "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || isRuleComment(line) || line == "payload:" {
+			continue
+		}
+		line = strings.Trim(stripRuleComment(strings.TrimSpace(strings.TrimPrefix(line, "- "))), `'"`)
+		if line == "" {
+			continue
+		}
+		lines++
+		if classical {
+			continue
+		}
+		if kind, _, found := strings.Cut(line, ","); found && containsString(ruleListKinds, strings.ToUpper(strings.TrimSpace(kind))) {
+			classical = true
+			continue
+		}
+		if sampled < 200 {
+			sampled++
+			if _, ok := normalizeRulePrefix(line); ok {
+				cidrs++
+			}
+		}
 	}
+	switch {
+	case classical:
+		return behaviorClassical, lines
+	case sampled > 0 && cidrs == sampled:
+		return behaviorIpcidr, lines
+	}
+	return behaviorDomain, lines
+}
+
+// convertRuleSet 转换完整配置：下载它引用的规则列表（下载失败时用上次下载的副本，没有副本的跳过并计数），
+// 转换后保存到 rules/<id>/<版本>/。
+func convertRuleSet(coreDir, id string, content []byte, paths []string) (ruleSetDownload, error) {
 	config, err := parseRuleConfig(content)
 	if err != nil {
-		return rulesDownload{}, err
+		return ruleSetDownload{}, err
 	}
 	sources := config.Sets()
-	result := rulesDownload{Sets: len(sources), Skipped: config.Skipped}
-	cacheDir := filepath.Join(coreDir, filepath.FromSlash(ruleDir(profileId)), ruleSetCacheDir)
+	result := ruleSetDownload{Kind: ruleSetConvert, Sets: len(sources), Skipped: config.Skipped}
+	cacheDir := filepath.Join(coreDir, filepath.FromSlash(ruleDir(id)), ruleSetCacheDir)
 	type setResult struct {
 		entries []ruleEntry
 		skipped int
@@ -879,12 +944,12 @@ func fetchRules(coreDir, profileId, address string, paths []string) (rulesDownlo
 			}
 		}
 	}
-	converted := convertRules(config, sets, profileId+"-rules")
-	revision, err := writeConvertedRules(coreDir, profileId, converted)
+	converted := convertRules(config, sets, id)
+	revision, err := writeConvertedRules(coreDir, id, converted)
 	if err != nil {
-		return rulesDownload{}, err
+		return ruleSetDownload{}, err
 	}
-	result.Revision, result.Count, result.Final, result.Geo = revision, converted.Count, converted.Final, converted.Geo
+	result.Revision, result.Count, result.Final, result.FinalName, result.Geo = revision, converted.Count, converted.Final, converted.FinalName, converted.Geo
 	return result, nil
 }
 
@@ -901,16 +966,56 @@ func validateRulesUrl(address string) error {
 	return nil
 }
 
-// fetchRuleFile 下载规则配置或规则列表，依次尝试各条网络路径，都失败时返回第一条路径的错误。
+// ruleMirror 是 GitHub 原始地址（raw.githubusercontent.com）在 jsDelivr 上的镜像，国内一般能直接访问；
+// 不是 GitHub 原始地址时返回空。
+func ruleMirror(address string) string {
+	parsed, err := url.Parse(address)
+	if err != nil || !strings.EqualFold(parsed.Hostname(), "raw.githubusercontent.com") {
+		return ""
+	}
+	parts := strings.SplitN(strings.TrimPrefix(parsed.Path, "/"), "/", 4)
+	if len(parts) < 4 || parts[3] == "" {
+		return ""
+	}
+	return "https://testingcf.jsdelivr.net/gh/" + parts[0] + "/" + parts[1] + "@" + parts[2] + "/" + parts[3]
+}
+
+// ruleFileCandidates 是经某条网络路径下载规则时依次尝试的地址：GitHub 上的规则经代理时先试原地址，直连时先试镜像
+// （国内直连 GitHub 常常不通）。
+func ruleFileCandidates(address string, direct bool) []string {
+	mirror := ruleMirror(address)
+	switch {
+	case mirror == "":
+		return []string{address}
+	case direct:
+		return []string{mirror, address}
+	}
+	return []string{address, mirror}
+}
+
+// fetchRuleFile 下载规则配置或规则列表，依次尝试各条网络路径（每条路径上 GitHub 的规则也试 jsDelivr 镜像），
+// 都失败时返回第一次的错误。本机的文件（file:///…）直接读取。
 func fetchRuleFile(address string, paths []string) ([]byte, error) {
+	if path, isFile := localFilePath(address); isFile {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("读不了本机的文件：%v", err)
+		}
+		if len(data) > maxRuleFileSize {
+			return nil, fmt.Errorf("文件超过 %d MB", maxRuleFileSize>>20)
+		}
+		return data, nil
+	}
 	var firstErr error
 	for _, proxyUrl := range paths {
-		data, err := fetchRuleFileVia(address, proxyUrl)
-		if err == nil {
-			return data, nil
-		}
-		if firstErr == nil {
-			firstErr = err
+		for _, candidate := range ruleFileCandidates(address, proxyUrl == "") {
+			data, err := fetchRuleFileVia(candidate, proxyUrl)
+			if err == nil {
+				return data, nil
+			}
+			if firstErr == nil {
+				firstErr = err
+			}
 		}
 	}
 	if firstErr == nil {
@@ -942,6 +1047,9 @@ func fetchRuleFileVia(address, proxyUrl string) ([]byte, error) {
 	}
 	if len(data) > maxRuleFileSize {
 		return nil, fmt.Errorf("文件超过 %d MB", maxRuleFileSize>>20)
+	}
+	if len(data) == 0 {
+		return nil, errors.New("文件是空的")
 	}
 	return data, nil
 }

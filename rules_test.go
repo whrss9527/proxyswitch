@@ -199,15 +199,32 @@ rules:
 	}
 	sets := map[ruleSetSource][]ruleEntry{{"https://example.com/cncidr.txt", false}: {{Kind: "IP-CIDR", Value: "1.0.1.0/24"}}}
 	converted := convertRules(config, sets, "r")
-	if !containsString(converted.Rules, "PROCESS-NAME,Telegram.exe,ProxySwitch") {
-		t.Errorf("PROCESS-NAME 规则应交给内核：%v", converted.Rules)
+	lines := templateLines(converted.Rules, "", nil)
+	if !containsString(lines, "PROCESS-NAME,Telegram.exe,ProxySwitch") {
+		t.Errorf("PROCESS-NAME 规则应交给内核：%v", lines)
 	}
-	if !converted.Geo || !containsString(converted.Rules, "GEOSITE,category-ads-all,REJECT") || !containsString(converted.Rules, "GEOSITE,geolocation-!cn,ProxySwitch") {
-		t.Errorf("GEOSITE 规则应原样交给内核，并下载地理数据：%v", converted.Rules)
+	if !converted.Geo || !containsString(lines, "GEOSITE,category-ads-all,REJECT") || !containsString(lines, "GEOSITE,geolocation-!cn,ProxySwitch") {
+		t.Errorf("GEOSITE 规则应原样交给内核，并下载地理数据：%v", lines)
 	}
-	if !containsString(converted.Rules, "IP-CIDR,1.0.1.0/24,DIRECT,no-resolve") {
-		t.Errorf("规则集里的 IP 段按 RULE-SET 的 no-resolve 不解析域名：%v", converted.Rules)
+	if !containsString(lines, "IP-CIDR,1.0.1.0/24,DIRECT,no-resolve") {
+		t.Errorf("规则集里的 IP 段按 RULE-SET 的 no-resolve 不解析域名：%v", lines)
 	}
+	// 文件里写的策略名和某个策略组同名时指到那个组，规则集设了去向时全部改到那里。
+	if lines := templateLines(converted.Rules, "", []string{"🚀 节点选择"}); !containsString(lines, "DOMAIN-SUFFIX,google.com,🚀 节点选择") || !containsString(lines, "GEOSITE,category-ads-all,REJECT") {
+		t.Errorf("和策略组同名的策略应指到那个组：%v", lines)
+	}
+	if lines := templateLines(converted.Rules, rulePolicyDirect, []string{"🚀 节点选择"}); containsString(lines, "DOMAIN-SUFFIX,google.com,🚀 节点选择") || !containsString(lines, "GEOSITE,category-ads-all,DIRECT") {
+		t.Errorf("规则集设了去向时全部改到那里：%v", lines)
+	}
+}
+
+// templateLines 是转换结果在内核里的写法。
+func templateLines(rules []ruleTemplate, forced string, groups []string) []string {
+	var lines []string
+	for _, rule := range rules {
+		lines = append(lines, rule.line(forced, groups))
+	}
+	return lines
 }
 
 func TestParseRuleList(t *testing.T) {
@@ -276,20 +293,19 @@ func TestConvertRules(t *testing.T) {
 		setEntries = append(setEntries, ruleEntry{Kind: "IP-CIDR", Value: fmt.Sprintf("10.%d.0.0/16", index)})
 	}
 	sets := map[ruleSetSource][]ruleEntry{{Url: "https://rules.example.com/list"}: setEntries}
-	converted := convertRules(config, sets, "p1-rules")
+	converted := convertRules(config, sets, "rs-1")
 	want := []string{
-		"RULE-SET,p1-rules-1,REJECT",
+		"RULE-SET,rs-1-1,REJECT",
 		"DOMAIN-SUFFIX,google.com,ProxySwitch",
 		"DOMAIN-KEYWORD,youtube,ProxySwitch",
 		"IP-CIDR,91.108.4.0/22,ProxySwitch,no-resolve",
 		"GEOIP,US,ProxySwitch",
 		"DOMAIN-SUFFIX,cn.example.com,DIRECT",
 		"GEOIP,CN,DIRECT",
-		"RULE-SET,p1-rules-2,ProxySwitch",
-		"MATCH,DIRECT",
+		"RULE-SET,rs-1-2,ProxySwitch",
 	}
-	if !reflect.DeepEqual(converted.Rules, want) {
-		t.Errorf("转换后的规则不对：\n%s", strings.Join(converted.Rules, "\n"))
+	if lines := templateLines(converted.Rules, "", nil); !reflect.DeepEqual(lines, want) {
+		t.Errorf("转换后的规则不对：\n%s", strings.Join(lines, "\n"))
 	}
 	if len(converted.Providers) != 2 || converted.Providers[0].Behavior != "domain" || len(converted.Providers[0].Lines) != ruleSetMinimum+1 ||
 		converted.Providers[0].Lines[0] != "+.ad0.example.com" || converted.Providers[0].Lines[ruleSetMinimum] != "ad0.example.com" ||
@@ -300,10 +316,17 @@ func TestConvertRules(t *testing.T) {
 		t.Errorf("规则数、其余网站的去向或地理数据标记不对：%d %s %v", converted.Count, converted.Final, converted.Geo)
 	}
 
-	// 没有 FINAL 时其余网站走代理；没下载到的规则列表按空处理。
-	converted = convertRules(ruleConfig{Lines: []ruleLine{{Set: "https://missing.example.com/list", Policy: rulePolicyReject}}}, nil, "p2-rules")
-	if !reflect.DeepEqual(converted.Rules, []string{"MATCH,ProxySwitch"}) || converted.Final != rulePolicyProxy || converted.Geo {
-		t.Errorf("没有 FINAL 时应走代理：%v", converted.Rules)
+	// 没有 FINAL 时不记（其余流量由规则集的设置决定）；没下载到的规则列表按空处理。
+	converted = convertRules(ruleConfig{Lines: []ruleLine{{Set: "https://missing.example.com/list", Policy: rulePolicyReject}}}, nil, "rs-2")
+	if len(converted.Rules) != 0 || converted.Final != "" || converted.Geo {
+		t.Errorf("没有 FINAL、规则列表也没下载到时应没有规则：%+v", converted)
+	}
+
+	// 策略名不同的连续规则分开：它们可能指到不同的策略组。
+	config, _ = parseRuleConfig([]byte("[Rule]\nDOMAIN-SUFFIX,netflix.com,Netflix\nDOMAIN-SUFFIX,google.com,Proxy\nFINAL,Proxy\n"))
+	converted = convertRules(config, nil, "rs-3")
+	if lines := templateLines(converted.Rules, "", []string{"netflix"}); !reflect.DeepEqual(lines, []string{"DOMAIN-SUFFIX,netflix.com,netflix", "DOMAIN-SUFFIX,google.com,ProxySwitch"}) || converted.FinalName != "Proxy" {
+		t.Errorf("策略名不同的规则应分开，同名的策略组不区分大小写：%v %+v", lines, converted)
 	}
 }
 
@@ -333,62 +356,57 @@ func TestFetchRules(t *testing.T) {
 	}))
 	defer server.Close()
 	dir := t.TempDir()
+	set := RuleSet{Name: "规则", Url: server.URL + "/rules.conf"}
+	id := set.Id()
 
 	// 规则列表下载失败，也没有上次的副本：跳过它，其余规则照常使用。
-	result, err := fetchRules(dir, "p1", server.URL+"/rules.conf", []string{""})
+	result, err := fetchRuleSet(dir, set, []string{""})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Sets != 2 || result.FailedSets != 1 || result.Count != 3 || result.Skipped != 1 || result.Final != rulePolicyDirect || result.Revision == "" {
+	if result.Kind != ruleSetConvert || result.Sets != 2 || result.FailedSets != 1 || result.Count != 3 || result.Skipped != 1 || result.Final != rulePolicyDirect || result.FinalName != "DIRECT" || result.Revision == "" {
 		t.Errorf("第一次下载的结果不对：%+v", result)
 	}
 	first := result.Revision
 
 	setAvailable.Store(true)
-	result, err = fetchRules(dir, "p1", server.URL+"/rules.conf", []string{""})
+	result, err = fetchRuleSet(dir, set, []string{""})
 	if err != nil || result.FailedSets != 0 || result.Count != 3+ruleSetMinimum || result.Skipped != 2 || result.Revision == first {
 		t.Fatalf("规则列表能下载后结果不对：%+v %v", result, err)
 	}
-	manifest, err := readRuleManifest(dir, "p1", result.Revision)
+	manifest, err := readRuleManifest(dir, id, result.Revision)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(manifest.Providers) != 1 || manifest.Rules[len(manifest.Rules)-1] != "MATCH,DIRECT" {
+	if len(manifest.Providers) != 1 || manifest.Final != rulePolicyDirect || len(manifest.Rules) != 3 {
 		t.Errorf("保存的规则不对：%+v", manifest)
 	}
 	for _, provider := range manifest.Providers {
 		data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(provider.Path)))
-		if err != nil || !strings.HasPrefix(string(data), "+.google.com\n+.t0.me\n") || provider.Behavior != "domain" || !strings.HasPrefix(provider.Path, "rules/p1/"+result.Revision+"/") {
+		if err != nil || !strings.HasPrefix(string(data), "+.google.com\n+.t0.me\n") || provider.Behavior != "domain" || !strings.HasPrefix(provider.Path, "rules/"+id+"/"+result.Revision+"/") {
 			t.Errorf("规则集文件不对：%+v %q %v", provider, data, err)
 		}
 	}
 
 	// 规则列表再次下载失败时用上次的副本，内容没变，版本也不变。
 	setAvailable.Store(false)
-	again, err := fetchRules(dir, "p1", server.URL+"/rules.conf", []string{""})
+	again, err := fetchRuleSet(dir, set, []string{""})
 	if err != nil || again.FailedSets != 0 || again.Revision != result.Revision || listDownloads.Load() != 3 {
 		t.Errorf("应使用上次下载的规则列表：%+v %v", again, err)
 	}
 
-	removeRuleRevisions(dir, "p1", result.Revision)
-	entries, _ := os.ReadDir(filepath.Join(dir, "rules", "p1"))
+	removeRuleRevisions(dir, id, result.Revision)
+	entries, _ := os.ReadDir(filepath.Join(dir, "rules", id))
 	if len(entries) != 2 {
 		t.Errorf("应只留下在用的版本和规则列表的副本：%v", entries)
 	}
-	removeRuleRevisions(dir, "p1", "")
-	if fileExists(filepath.Join(dir, "rules", "p1")) {
-		t.Error("应删除这个配置的全部规则")
+	removeRuleRevisions(dir, id, "")
+	if fileExists(filepath.Join(dir, "rules", id)) {
+		t.Error("应删除这个规则集的全部文件")
 	}
 
-	if _, err := fetchRules(dir, "p1", server.URL+"/missing.conf", []string{""}); err == nil || !strings.Contains(err.Error(), "404") {
+	if _, err := fetchRuleSet(dir, RuleSet{Url: server.URL + "/missing.conf"}, []string{""}); err == nil || !strings.Contains(err.Error(), "404") {
 		t.Errorf("规则地址不存在时应报错：%v", err)
-	}
-	check, err := checkRuleConfig(server.URL+"/rules.conf", []string{""})
-	if err != nil || check.Rules != 1 || check.Sets != 2 || check.Skipped != 1 || check.Final != rulePolicyDirect {
-		t.Errorf("检查规则的结果不对：%+v %v", check, err)
-	}
-	if _, err := checkRuleConfig("ftp://example.com/rules.conf", []string{""}); err == nil {
-		t.Error("只支持 http 和 https 地址")
 	}
 }
 
@@ -410,23 +428,21 @@ func TestFetchClashRules(t *testing.T) {
 	}))
 	defer server.Close()
 	dir := t.TempDir()
-	result, err := fetchRules(dir, "p1", server.URL+"/clash.yaml", []string{""})
+	// 地址是 .yaml（按扩展名是规则列表），内容却是 Clash 的完整配置：认出来后转换。
+	set := RuleSet{Url: server.URL + "/clash.yaml"}
+	result, err := fetchRuleSet(dir, set, []string{""})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Sets != 2 || result.FailedSets != 0 || result.Count != 5 || result.Final != rulePolicyProxy {
+	if result.Kind != ruleSetConvert || result.Sets != 2 || result.FailedSets != 0 || result.Count != 5 || result.Final != rulePolicyProxy || result.FinalName != "节点选择" {
 		t.Errorf("Clash 配置的下载结果不对：%+v", result)
 	}
-	manifest, err := readRuleManifest(dir, "p1", result.Revision)
+	manifest, err := readRuleManifest(dir, set.Id(), result.Revision)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"DOMAIN-SUFFIX,ads.example.com,REJECT", "DOMAIN,tracker.example.com,REJECT", "DOMAIN-SUFFIX,google.com,ProxySwitch", "IP-CIDR,1.0.1.0/24,DIRECT,no-resolve", "IP-CIDR,1.0.2.0/23,DIRECT,no-resolve", "MATCH,ProxySwitch"}
-	if !reflect.DeepEqual(manifest.Rules, want) {
-		t.Errorf("转换后的规则不对：%v", manifest.Rules)
-	}
-	check, err := checkRuleConfig(server.URL+"/clash.yaml", []string{""})
-	if err != nil || check.Rules != 1 || check.Sets != 2 || check.Final != rulePolicyProxy {
-		t.Errorf("检查 Clash 配置：%+v %v", check, err)
+	want := []string{"DOMAIN-SUFFIX,ads.example.com,REJECT", "DOMAIN,tracker.example.com,REJECT", "DOMAIN-SUFFIX,google.com,ProxySwitch", "IP-CIDR,1.0.1.0/24,DIRECT,no-resolve", "IP-CIDR,1.0.2.0/23,DIRECT,no-resolve"}
+	if lines := templateLines(manifest.Rules, "", nil); !reflect.DeepEqual(lines, want) {
+		t.Errorf("转换后的规则不对：%v", lines)
 	}
 }

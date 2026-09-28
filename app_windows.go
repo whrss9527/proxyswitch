@@ -530,7 +530,7 @@ func (app *App) menuItems() []MenuItem {
 			active := status.State == statusOn && status.Profile.Id == profile.Id
 			item := MenuItem{Id: uint32(menuProfileBase + index), Text: text, Checked: active, Radio: true, Bitmap: app.menuDot(profile.Color)}
 			if profile.IsSubscription() && app.subscriptionService != nil {
-				item.Children = app.subscriptionMenu(profile, active)
+				item.Children = app.subscriptionMenu(config, profile, active)
 			}
 			items = append(items, item)
 		}
@@ -574,7 +574,7 @@ func (app *App) menuItems() []MenuItem {
 
 // subscriptionMenu 是订阅配置的子菜单：没开启时可以直接开启；选择节点（自动选择或某个节点，显示最近测得的延迟）；
 // 切换按规则分流和全局代理；测速、更新订阅和分流规则。
-func (app *App) subscriptionMenu(profile *Profile, active bool) []MenuItem {
+func (app *App) subscriptionMenu(config *Config, profile *Profile, active bool) []MenuItem {
 	var items []MenuItem
 	if !active {
 		items = append(items, app.menuChoice(MenuItem{Text: "使用这个配置"}, menuChoice{profileId: profile.Id, action: "use"}), MenuItem{Separator: true})
@@ -601,12 +601,12 @@ func (app *App) subscriptionMenu(profile *Profile, active bool) []MenuItem {
 		}
 	}
 	items = append(items, MenuItem{Separator: true},
-		app.menuChoice(MenuItem{Text: "按规则分流（" + escapeMenuText(rulesLabel(profile)) + "）", Radio: true, Checked: profile.Mode == "rule"}, menuChoice{profileId: profile.Id, action: "mode", mode: "rule"}),
+		app.menuChoice(MenuItem{Text: "按规则分流（" + escapeMenuText(truncateRunes(rulesSummary(config), 20)) + "）", Radio: true, Checked: profile.Mode == "rule"}, menuChoice{profileId: profile.Id, action: "mode", mode: "rule"}),
 		app.menuChoice(MenuItem{Text: "全局代理", Radio: true, Checked: profile.Mode == "global"}, menuChoice{profileId: profile.Id, action: "mode", mode: "global"}),
 		MenuItem{Separator: true},
 		app.menuChoice(MenuItem{Text: "全部测速"}, menuChoice{profileId: profile.Id, action: "test"}),
 		app.menuChoice(MenuItem{Text: "更新订阅"}, menuChoice{profileId: profile.Id, action: "update"}))
-	if profile.Rules != "" {
+	if config.hasDownloadedRuleSets() {
 		items = append(items, app.menuChoice(MenuItem{Text: "更新分流规则"}, menuChoice{profileId: profile.Id, action: "rules"}))
 	}
 	return items
@@ -735,20 +735,22 @@ func (app *App) runMenuChoice(choice menuChoice) {
 		}
 		text := "所有网站都经过节点"
 		if choice.mode == "rule" {
-			text = "分流规则：" + rulesLabel(&profileCopy)
+			text = "分流规则：" + rulesSummary(config)
 		}
 		title := map[string]string{"rule": "已切换到按规则分流", "global": "已切换到全局代理"}[choice.mode]
 		app.notify(Notice{Level: noticeInfo, Title: title, Text: profileCopy.Name + " · " + text, Icon: iconStateOn, Color: profileCopy.Color})
 	case "rules":
 		go func() {
-			err := app.UpdateRules(profileCopy.Id)
+			result, err := app.UpdateAllRuleSets()
 			_ = app.tray.RunOnUi(func() {
-				if err != nil {
-					app.notify(Notice{Level: noticeWarning, Title: "分流规则没有更新成功", Text: profileCopy.Name + "\n" + err.Error(), Page: "proxies"})
-					return
+				switch {
+				case err != nil:
+					app.notify(Notice{Level: noticeWarning, Title: "分流规则没有更新成功", Text: err.Error(), Page: "rules"})
+				case len(result.Failed) > 0:
+					app.notify(Notice{Level: noticeWarning, Title: fmt.Sprintf("有 %d 个规则集没有更新成功", len(result.Failed)), Text: strings.Join(result.Failed, "\n"), Page: "rules"})
+				default:
+					app.notify(Notice{Level: noticeInfo, Title: "分流规则已更新", Text: fmt.Sprintf("更新了 %d 个规则集", result.Updated), Icon: iconStateOn, Color: profileCopy.Color})
 				}
-				info := app.engine.rulesInfos()[profileCopy.Id]
-				app.notify(Notice{Level: noticeInfo, Title: "分流规则已更新", Text: fmt.Sprintf("%s · 共 %d 条规则", rulesLabel(&profileCopy), info.Rules), Icon: iconStateOn, Color: profileCopy.Color})
 			})
 		}()
 	case "update":

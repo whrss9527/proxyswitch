@@ -47,14 +47,16 @@ func TestCoreConfigText(t *testing.T) {
 	if last != "MATCH,ProxySwitch" || !contains(config.Rules, "IP-CIDR,192.168.0.0/16,DIRECT,no-resolve") {
 		t.Errorf("规则应让局域网直连、其余交给顶层组：%v", config.Rules)
 	}
-	if contains(config.Rules, "GEOIP,CN,DIRECT") {
-		t.Error("地理数据还没下载时不能用大陆直连规则，否则内核会在启动时去下载")
+	// 分流规则（引擎按规则集拼好的，最后一条是 MATCH）：地理数据还没下载时先跳过 GEOIP 和 GEOSITE，否则内核会拒绝配置。
+	settings.Rules = append(builtinRules(builtinChinaDirect, "DIRECT"), "MATCH,DIRECT")
+	if rules := rulesOf(t, coreConfigText(settings, "127.0.0.1:9090", "secret")); contains(rules, "GEOIP,CN,DIRECT") || rules[len(rules)-1] != "MATCH,DIRECT" {
+		t.Errorf("地理数据还没下载时不能用大陆直连规则，否则内核会在启动时去下载：%v", rules)
 	}
 
 	settings.GeoReady = true
 	rules := rulesOf(t, coreConfigText(settings, "127.0.0.1:9090", "secret"))
-	if !contains(rules, "GEOSITE,cn,DIRECT") || !contains(rules, "GEOIP,CN,DIRECT") || rules[len(rules)-1] != "MATCH,ProxySwitch" {
-		t.Errorf("大陆直连模式应让国内地址直连：%v", rules)
+	if !contains(rules, "GEOSITE,cn,DIRECT") || !contains(rules, "GEOIP,CN,DIRECT") || rules[len(rules)-1] != "MATCH,DIRECT" {
+		t.Errorf("大陆直连应让国内地址直连，其余按规则集的最后一条：%v", rules)
 	}
 	settings.Mode = "global"
 	if rules := rulesOf(t, coreConfigText(settings, "127.0.0.1:9090", "secret")); contains(rules, "GEOIP,CN,DIRECT") {
