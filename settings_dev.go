@@ -489,9 +489,12 @@ func runDevSettings(args []string) int {
 		if value, found := strings.CutPrefix(argument, "--web="); found {
 			webDir = value
 		}
-		// 自动化测试用本地模拟的 GitHub 发布接口。
+		// 自动化测试用本地模拟的 GitHub 发布接口和查询出口 IP 的接口。
 		if value, found := strings.CutPrefix(argument, "--release-api="); found {
 			releaseApiUrl = value
+		}
+		if value, found := strings.CutPrefix(argument, "--exit-ip-api="); found {
+			exitIpEndpoints = []string{value}
 		}
 		if value, found := strings.CutPrefix(argument, "--core="); found {
 			corePath = value

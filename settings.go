@@ -61,6 +61,11 @@ type SettingsBackend interface {
 	SetShare(enabled bool) error
 	ShareActivity() ShareActivity
 	ClearShareHistory()
+	Connections() ConnectionsView
+	CloseConnection(id string) error
+	ClearConnections()
+	ResetTraffic()
+	CheckExit(direct bool) error
 	AllowShareFirewall() error
 	StartDiagnose(address, perspective string) (DiagnoseJob, error)
 	Diagnose() DiagnoseJob
@@ -321,6 +326,11 @@ func (settings *SettingsServer) Start() (string, error) {
 	mux.HandleFunc("GET /api/share/activity", settings.handleShareActivity)
 	mux.HandleFunc("POST /api/share/clear", settings.handleShareClear)
 	mux.HandleFunc("POST /api/share/firewall", settings.handleShareFirewall)
+	mux.HandleFunc("GET /api/connections", settings.handleConnections)
+	mux.HandleFunc("POST /api/connections/close", settings.handleCloseConnection)
+	mux.HandleFunc("POST /api/connections/clear", settings.handleClearConnections)
+	mux.HandleFunc("POST /api/traffic/reset", settings.handleResetTraffic)
+	mux.HandleFunc("POST /api/exit/check", settings.handleCheckExit)
 	mux.HandleFunc("POST /api/links/clash", settings.handleClashLinks)
 	mux.HandleFunc("GET /api/loopback", settings.handleLoopback)
 	mux.HandleFunc("GET /api/programs", settings.handlePrograms)
@@ -881,6 +891,52 @@ func (settings *SettingsServer) handleShareActivity(writer http.ResponseWriter, 
 func (settings *SettingsServer) handleShareClear(writer http.ResponseWriter, request *http.Request) {
 	settings.backend.ClearShareHistory()
 	writeJson(writer, http.StatusOK, settings.backend.ShareActivity())
+}
+
+// ---------- 连接页 ----------
+
+func (settings *SettingsServer) handleConnections(writer http.ResponseWriter, request *http.Request) {
+	writeJson(writer, http.StatusOK, settings.backend.Connections())
+}
+
+// handleCloseConnection 断开一条连接，id 为空时断开全部。
+func (settings *SettingsServer) handleCloseConnection(writer http.ResponseWriter, request *http.Request) {
+	var body struct {
+		Id string `json:"id"`
+	}
+	if !decodeJsonBody(writer, request, &body) {
+		return
+	}
+	if err := settings.backend.CloseConnection(body.Id); err != nil {
+		writeError(writer, http.StatusConflict, err.Error())
+		return
+	}
+	writeJson(writer, http.StatusOK, settings.backend.Connections())
+}
+
+func (settings *SettingsServer) handleClearConnections(writer http.ResponseWriter, request *http.Request) {
+	settings.backend.ClearConnections()
+	writeJson(writer, http.StatusOK, settings.backend.Connections())
+}
+
+func (settings *SettingsServer) handleResetTraffic(writer http.ResponseWriter, request *http.Request) {
+	settings.backend.ResetTraffic()
+	writeJson(writer, http.StatusOK, settings.backend.Connections())
+}
+
+// handleCheckExit 查出口 IP，查完返回连接页的内容；没查到的原因记在里面。内核没有运行时返回 409。
+func (settings *SettingsServer) handleCheckExit(writer http.ResponseWriter, request *http.Request) {
+	var body struct {
+		Direct bool `json:"direct"`
+	}
+	if !decodeJsonBody(writer, request, &body) {
+		return
+	}
+	if err := settings.backend.CheckExit(body.Direct); err != nil && errors.Is(err, errCoreNotRunning) {
+		writeError(writer, http.StatusConflict, err.Error())
+		return
+	}
+	writeJson(writer, http.StatusOK, settings.backend.Connections())
 }
 
 // handleFlushDns 清除这台电脑的 DNS 缓存。

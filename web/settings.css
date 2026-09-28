@@ -2278,6 +2278,173 @@ kbd.compact {
   padding: 12px 4px;
 }
 
+/* 连接页：出口 IP、按出口累计的流量、正在进行的和最近的连接。 */
+.exits {
+  padding: 8px 16px 14px;
+}
+
+.exit-row {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+}
+
+.exit-row + .exit-row {
+  border-top: 1px solid var(--divider);
+}
+
+.exit-label {
+  font-weight: 600;
+}
+
+.exit-ip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.exit-country {
+  min-width: 30px;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.exit-warning {
+  color: var(--warning);
+}
+
+.traffic {
+  padding: 14px 16px;
+}
+
+.traffic-session {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-weight: 600;
+}
+
+.traffic-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.traffic-row {
+  display: grid;
+  grid-template-columns: minmax(0, 180px) minmax(0, 1fr) 200px;
+  align-items: center;
+  gap: 12px;
+}
+
+.traffic-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.traffic-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--fill);
+  overflow: hidden;
+}
+
+.traffic-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent);
+}
+
+.traffic-bar > span.direct {
+  background: var(--text-3);
+}
+
+.traffic-value {
+  text-align: right;
+}
+
+.connections-toolbar {
+  display: flex;
+  margin: 26px 0 0;
+}
+
+.connections-toolbar .input {
+  flex: 1;
+}
+
+.connections {
+  padding: 8px 16px;
+}
+
+.connections > p {
+  margin: 6px 0;
+}
+
+.connection-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.connection {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, auto) 32px;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 0;
+}
+
+.connection + .connection {
+  border-top: 1px solid var(--divider);
+}
+
+.connection-main,
+.connection-side {
+  min-width: 0;
+}
+
+.connection-target {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.connection-target > .mono,
+.connection-source,
+.connection-route {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.connection-target .badge {
+  height: 16px;
+  padding: 0 6px;
+  font-size: 10px;
+}
+
+.connection-side {
+  max-width: 280px;
+  text-align: right;
+}
+
+.connection-route {
+  font-weight: 600;
+  color: var(--accent-text);
+}
+
+.connection-route.direct {
+  color: var(--text-2);
+}
+
 /* 代理页的策略组：图标、名字和筛选、选节点的下拉框（或在用的节点）、编辑和更多。 */
 .policy-groups {
   padding: 8px 16px;

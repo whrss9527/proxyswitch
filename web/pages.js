@@ -1,10 +1,11 @@
 "use strict";
 
-// 各页面的内容：代理、分流规则、局域网共享、网址诊断、自动切换、常规、系统集成、诊断、关于。每个函数根据 app 里的状态生成整页 HTML。
+// 各页面的内容：代理、分流规则、连接、局域网共享、网址诊断、自动切换、常规、系统集成、诊断、关于。每个函数根据 app 里的状态生成整页 HTML。
 
 const pages = [
   { id: "proxies", label: "代理", icon: "globe" },
   { id: "rules", label: "分流规则", icon: "signpost" },
+  { id: "connections", label: "连接", icon: "traffic" },
   { id: "share", label: "局域网共享", icon: "router" },
   { id: "diagnose", label: "网址诊断", icon: "stethoscope" },
   { id: "network", label: "自动切换", icon: "wifi" },
@@ -813,6 +814,253 @@ function proxiesPage() {
       <div class="stack">${profiles.map((profile, index) => profileRow(profile, index))}</div>
       <p class="caption faint" style="margin:14px 2px 0">单击托盘图标开关代理，右键托盘图标可以快速切换配置。</p>
       ${policyGroupsView()}`}`;
+}
+
+// ---------- 连接 ----------
+
+// outboundLabel 是出口的名字：直连、拦截，其余是节点名或上游代理。
+function outboundLabel(name) {
+  if (!name || name === "DIRECT") {
+    return "直连";
+  }
+  return /^REJECT/.test(name) ? "拦截" : name;
+}
+
+// connectionRoute 是连接走的路：经过策略组时是「流媒体 → 香港 01」，否则只有出口。
+function connectionRoute(chains) {
+  const outbound = (chains && chains[0]) || "DIRECT";
+  const policy = chains && chains.length ? chains[chains.length - 1] : "";
+  const group = policy !== outbound && ((app.config && app.config.policy_groups) || []).some((item) => item.name === policy) ? policy : "";
+  return group ? `${group} → ${outboundLabel(outbound)}` : outboundLabel(outbound);
+}
+
+// connectionRule 是命中的规则：MATCH 是其余流量；规则集写成它的名字（内核里的名字以规则集的 id 开头）。
+function connectionRule(rule) {
+  const [kind, payload = ""] = String(rule || "").split(" ");
+  if (kind === "Match") {
+    return "其余流量";
+  }
+  if (kind === "RuleSet" && payload) {
+    const set = ((app.config && app.config.rule_sets) || []).find((item) => {
+      const id = ruleSetState(item).id;
+      return id && (payload === id || payload.startsWith(`${id}-`));
+    });
+    if (set) {
+      return `规则集「${set.name}」`;
+    }
+  }
+  return rule || "";
+}
+
+// connectionSource 是连接的来源：发起连接的程序，局域网里的设备显示它的 IP。
+function connectionSource(record) {
+  if (record.process) {
+    return record.process;
+  }
+  if (record.share) {
+    return `${record.client}（设备）`;
+  }
+  return !record.client || isLoopbackIp(record.client) ? "本机" : record.client;
+}
+
+// formatSize 是连接和流量统计里的字节数：0 B、512 B、1.5 KB、23 MB、1.25 GB。
+function formatSize(bytes) {
+  let value = Math.max(0, bytes || 0);
+  if (value < 1024) {
+    return `${Math.round(value)} B`;
+  }
+  for (const unit of ["KB", "MB", "GB", "TB"]) {
+    value /= 1024;
+    if (value < 1023.5 || unit === "TB") {
+      return `${value < 10 ? value.toFixed(value < 1 ? 2 : 1) : Math.round(value)} ${unit}`;
+    }
+  }
+  return "";
+}
+
+// durationText 是连接开了多久。
+function durationText(start) {
+  const seconds = Math.floor((Date.now() - new Date(start).getTime()) / 1000);
+  if (!(seconds >= 0)) {
+    return "";
+  }
+  if (seconds < 60) {
+    return `${seconds} 秒`;
+  }
+  if (seconds < 3600) {
+    return `${Math.floor(seconds / 60)} 分钟`;
+  }
+  return `${Math.floor(seconds / 3600)} 小时 ${Math.floor((seconds % 3600) / 60)} 分`;
+}
+
+// exitPlace 是出口的地点：国家（按国家代码显示中文名）和城市。
+function exitPlace(info) {
+  let country = info.country || "";
+  if (info.country_code) {
+    try {
+      country = new Intl.DisplayNames(["zh-CN"], { type: "region" }).of(info.country_code) || country;
+    } catch (error) {
+      // 不认识的国家代码就用接口给的名字。
+    }
+  }
+  return [country, info.city && info.city !== info.country ? info.city : ""].filter(Boolean).join(" ");
+}
+
+// exitRow 是一种出口 IP：国家代码、IP、地点和运营商；经节点的还说明这次查询走的出口。
+function exitRow({ label, kind, state, available, unavailableText }) {
+  const info = state.info;
+  const checking = state.checking || Boolean(app.exitChecking[kind]);
+  let body;
+  if (info) {
+    const details = [exitPlace(info), info.organization].filter(Boolean).join(" · ");
+    let route = "";
+    if (kind === "proxy" && info.outbound) {
+      let host = "";
+      try {
+        host = new URL(info.endpoint).hostname;
+      } catch (error) {
+        // 地址不对时不提主机名。
+      }
+      route = info.outbound === "DIRECT"
+        ? html`<div class="caption exit-warning">这次查询按分流规则直连了，看到的是本机的出口。想看节点的出口，可以在分流规则里让 ${host || "查询接口"} 走节点</div>`
+        : html`<div class="caption muted">经「${outboundLabel(info.outbound)}」出去</div>`;
+    }
+    body = html`
+      <div class="exit-ip"><span class="badge exit-country" title="${exitPlace(info)}">${info.country_code || "?"}</span><span class="mono">${info.ip}</span></div>
+      ${details ? html`<div class="caption muted">${details}</div>` : ""}
+      ${route}`;
+  } else if (checking) {
+    body = html`<span class="caption muted"><span class="spinner inline-spinner"></span>正在查…</span>`;
+  } else if (!available) {
+    body = html`<span class="caption muted">${unavailableText}</span>`;
+  } else if (state.error) {
+    body = html`<span class="caption exit-warning">没查到：${state.error}</span>`;
+  } else {
+    body = html`<span class="caption muted">还没查</span>`;
+  }
+  return html`
+    <div class="exit-row">
+      <span class="exit-label">${label}</span>
+      <div class="exit-body">${body}</div>
+      <button class="button" data-action="exit-check" data-kind="${kind}" ${checking || !available ? raw("disabled") : ""}>${checking ? html`<span class="spinner"></span>` : icon("refresh")}${info ? "重查" : "查询"}</button>
+    </div>`;
+}
+
+function trafficView(view) {
+  const outbounds = view.traffic.outbounds || [];
+  const top = outbounds.length ? Math.max(1, outbounds[0].upload + outbounds[0].download) : 1;
+  const rows = outbounds.slice(0, 12).map((item) => html`
+    <div class="traffic-row">
+      <span class="traffic-name" title="${item.name}">${outboundLabel(item.name)}</span>
+      <span class="traffic-bar"><span class="${item.name === "DIRECT" ? "direct" : ""}" style="width:${Math.max(1, Math.round(((item.upload + item.download) * 100) / top))}%"></span></span>
+      <span class="caption muted numeric traffic-value">↑ ${formatSize(item.upload)} ↓ ${formatSize(item.download)}</span>
+    </div>`);
+  const since = view.traffic.since ? new Date(view.traffic.since) : null;
+  const sinceText = since && !Number.isNaN(since.getTime()) ? `${formatDate(since.getTime() / 1000)} ${String(since.getHours()).padStart(2, "0")}:${String(since.getMinutes()).padStart(2, "0")}` : "";
+  return html`
+    <div class="section-title">流量统计
+      <div class="actions"><button class="button subtle" data-action="traffic-reset" ${outbounds.length ? "" : raw("disabled")}>${icon("trash")}清零</button></div>
+    </div>
+    <div class="card traffic">
+      <div class="traffic-session"><span>内核这次运行</span><span class="numeric">${view.running ? `↑ ${formatSize(view.session.upload)}　↓ ${formatSize(view.session.download)}` : "没有运行"}</span></div>
+      ${rows.length ? html`<div class="traffic-list">${rows}</div>` : html`<p class="caption muted" style="margin:10px 0 0">有流量经过内核后，这里按节点（以及直连、上游代理）累计。</p>`}
+      <p class="caption faint" style="margin:10px 0 0">${sinceText ? `从 ${sinceText} 起累计，` : ""}内核重启后接着算；每两秒采样一次，连接关掉前的最后一点流量算不进来，看趋势够用。</p>
+    </div>`;
+}
+
+// connectionRow 是一条连接：目标和来源、命中的规则，右边是走的路和流量。list 是 active（正在进行的）或 recent。
+function connectionRow(record, index, list) {
+  const target = record.port && record.port !== "80" && record.port !== "443" ? `${record.host}:${record.port}` : record.host;
+  const route = connectionRoute(record.chains);
+  const direct = !record.chains || !record.chains.length || record.chains[0] === "DIRECT";
+  const duration = durationText(record.start);
+  return html`
+    <div class="connection">
+      <div class="connection-main">
+        <div class="connection-target"><span class="mono" title="${record.host}:${record.port}">${target || "（未知）"}</span>${record.network && record.network !== "TCP" ? html`<span class="badge">${record.network}</span>` : ""}</div>
+        <div class="caption muted connection-source">${[connectionSource(record), connectionRule(record.rule)].filter(Boolean).join(" · ")}</div>
+      </div>
+      <div class="connection-side">
+        <div class="connection-route ${direct ? "direct" : ""}" title="${(record.chains || []).slice().reverse().join(" → ")}">${route}</div>
+        <div class="caption muted numeric">${list === "active" ? `↑ ${formatSize(record.upload)} ↓ ${formatSize(record.download)}${duration ? ` · ${duration}` : ""}` : relativeTime(record.start)}</div>
+      </div>
+      <button class="button subtle icon-only" data-action="connection-menu" data-list="${list}" data-index="${index}" title="更多" aria-label="${record.host} 的更多操作">${icon("more")}</button>
+    </div>`;
+}
+
+// filteredConnections 按页面上填的筛选（域名、程序、设备、规则或节点）过滤连接。
+function filteredConnections(records) {
+  const query = app.connectionsFilter.trim().toLowerCase();
+  if (!query) {
+    return records;
+  }
+  return records.filter((record) => [`${record.host}:${record.port}`, record.process, record.client, connectionRule(record.rule), record.rule, ...(record.chains || [])].some((value) => String(value || "").toLowerCase().includes(query)));
+}
+
+const connectionShownLimit = 80;
+
+// connectionListsView 是正在进行的和最近的连接。筛选时只重绘这一块，不打断输入。
+function connectionListsView() {
+  const view = app.connections;
+  const active = filteredConnections(view.active);
+  const recent = filteredConnections(view.recent);
+  const filtering = Boolean(app.connectionsFilter.trim());
+  let activeContent;
+  if (!view.running) {
+    activeContent = html`<p class="caption muted" style="margin:0">内核没有运行。开启订阅配置或局域网共享后，经内核的连接会列在这里。</p>`;
+  } else if (!active.length) {
+    activeContent = html`<p class="caption muted" style="margin:0">${filtering ? "没有匹配的连接。" : "现在没有开着的连接。"}</p>`;
+  } else {
+    activeContent = html`
+      <div class="connection-list">${active.slice(0, connectionShownLimit).map((record) => connectionRow(record, view.active.indexOf(record), "active"))}</div>
+      ${active.length > connectionShownLimit ? html`<p class="caption faint" style="margin:8px 0 0">还有 ${active.length - connectionShownLimit} 条没有列出，用上面的筛选缩小范围。</p>` : ""}`;
+  }
+  return html`
+    <div class="section-title">正在进行的连接<span class="caption faint numeric">${view.running ? `${view.active.length} 条` : ""}</span>
+      <div class="actions"><button class="button subtle" data-action="connections-close-all" ${view.running && view.active.length ? "" : raw("disabled")}>${icon("close")}全部断开</button></div>
+    </div>
+    <div class="card connections">${activeContent}</div>
+    <div class="section-title">最近的连接<span class="caption faint">短连接也记下来，最多 200 条</span>
+      <div class="actions"><button class="button subtle" data-action="connections-clear" ${view.recent.length ? "" : raw("disabled")}>${icon("trash")}清空</button></div>
+    </div>
+    <div class="card connections">
+      ${recent.length
+        ? html`<div class="connection-list">${recent.slice(0, 60).map((record) => connectionRow(record, view.recent.indexOf(record), "recent"))}</div>`
+        : html`<p class="caption muted" style="margin:0">${filtering && view.recent.length ? "没有匹配的连接。" : "经内核的连接会按时间记在这里：谁访问了什么、走了哪个节点、命中了哪条规则。"}</p>`}
+    </div>`;
+}
+
+function connectionsPage() {
+  if (!app.config) {
+    return html`${pageHeader("连接")}${configErrorView()}`;
+  }
+  const view = app.connections;
+  if (!view) {
+    return html`${pageHeader("连接")}<div class="loading"><span class="spinner"></span>正在读取…</div>`;
+  }
+  const notices = [];
+  if (hasSubscriptions()) {
+    const notice = coreNotice("查看连接");
+    if (notice.text) {
+      notices.push(notice);
+    }
+  }
+  return html`
+    ${pageHeader("连接")}
+    <p class="muted" style="margin:-12px 0 16px">谁在访问什么、走了哪个节点、命中了哪条规则；出口 IP 和按节点累计的流量。只统计经内置代理内核的连接。</p>
+    ${notices}
+    <div class="section-title">出口 IP</div>
+    <div class="card exits">
+      ${exitRow({ label: "经节点", kind: "proxy", state: view.exit.proxy, available: view.running, unavailableText: "内核运行后可以查" })}
+      ${exitRow({ label: "直连", kind: "direct", state: view.exit.direct, available: true, unavailableText: "" })}
+      <p class="caption faint" style="margin:8px 0 0">经节点的出口是网站看到的你的地址，切换节点后自动重查；直连的是这台电脑自己的公网地址。打开这一页时经 ip.sb、ipinfo.io、ipapi.co 这些公开接口查询。</p>
+    </div>
+    ${trafficView(view)}
+    <div class="connections-toolbar">
+      <input class="input" type="search" data-focus="connections-filter" value="${app.connectionsFilter}" placeholder="按域名、程序、设备、规则或节点筛选" aria-label="筛选连接" spellcheck="false" autocomplete="off">
+    </div>
+    <div data-connection-lists>${connectionListsView()}</div>
+    <p class="caption faint" style="margin:10px 4px 0">来源是发起连接的程序，局域网共享的设备显示它的 IP。点一条连接右边的按钮，可以让这个网站或程序固定走某个去向、诊断它，或者断开它。</p>`;
 }
 
 // ---------- 局域网共享 ----------
@@ -1690,6 +1938,7 @@ ProxySwitch.exe settings        打开设置</pre></div>
 const pageRenderers = {
   proxies: proxiesPage,
   rules: rulesPage,
+  connections: connectionsPage,
   share: sharePage,
   diagnose: diagnosePage,
   network: networkPage,
