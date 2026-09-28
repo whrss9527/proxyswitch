@@ -19,6 +19,8 @@ func TestParseLink(t *testing.T) {
 		"proxyswitch://settings":                             {Command: "settings"},
 		"proxyswitch://settings?page=about":                  {Command: "settings", Argument: "about"},
 		"proxyswitch://update":                               {Command: "update"},
+		"proxyswitch://update?install=0123abcdef":            {Command: "update", Argument: "0123abcdef"},
+		"proxyswitch://update?install=../settings":           {Command: "update"},
 		"proxyswitch://diagnose":                             {Command: "diagnose", Argument: "\x00" + diagnosePc},
 		"proxyswitch://diagnose?url=youtube.com&from=device": {Command: "diagnose", Argument: "youtube.com\x00" + diagnoseDevice},
 	} {

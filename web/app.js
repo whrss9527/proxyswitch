@@ -74,6 +74,8 @@ const requestableActions = new Set(["check-update"]);
 function runRequestedAction(action, argument = "") {
   if (requestableActions.has(action)) {
     actions[action]();
+  } else if (action === "install-update") {
+    installRequestedUpdate();
   } else if (action === "import-subscription") {
     let request = {};
     try {
@@ -91,6 +93,14 @@ function runRequestedAction(action, argument = "") {
     }
     startDiagnose(request.url || "", request.perspective || "pc");
   }
+}
+
+// installRequestedUpdate 是系统通知上的「立即更新」：还不知道新版本时先检查，能安装就直接安装。
+async function installRequestedUpdate() {
+  if (!knownUpdate()) {
+    await actions["check-update"]();
+  }
+  actions["install-update"]();
 }
 
 // importSubscription 处理机场网站的「一键导入」：打开添加订阅的对话框，填好地址并检查；已经添加过时提示是哪个配置。

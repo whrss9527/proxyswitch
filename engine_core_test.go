@@ -145,6 +145,8 @@ func TestEngineSubscriptionFlow(t *testing.T) {
 	recordTestSubscription(t, engine, &profile)
 	if notice := fixture.lastNotice(t); notice.Title != "订阅已就绪：机场" || !strings.Contains(notice.Text, "2 个节点") {
 		t.Errorf("第一次下载成功应提示：%+v", notice)
+	} else if len(notice.Actions) != 1 || notice.Actions[0].Link != useProfileLink("机场") || notice.Tag != noticeTagSubscription {
+		t.Errorf("还没开启时通知上应有「开启」：%+v", notice)
 	}
 	if data, _ := os.ReadFile(engine.subscriptionPath(profile.Id)); string(data) != testSubscriptionContent {
 		t.Error("应保存订阅文件")

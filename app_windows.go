@@ -3,6 +3,7 @@
 package main
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -80,6 +81,9 @@ type App struct {
 	quiet bool
 	// 最近一条通知对应的设置页，点击通知时打开。
 	noticePage string
+	// toasts 显示系统通知（可以带按钮），托盘程序启动后才创建；noticeToken 是通知上「立即更新」的链接带的随机数。
+	toasts      *toaster
+	noticeToken string
 	// 这次是程序内更新后重新启动，保持原来的代理状态。
 	restartedForUpdate bool
 	// 最近一次检查更新发现的新版本，设置页和托盘菜单据此提示。
@@ -94,7 +98,7 @@ type App struct {
 }
 
 func newApp(paths Paths) *App {
-	app := &App{paths: paths, icons: map[string]uintptr{}, menuBitmaps: map[string]uintptr{}}
+	app := &App{paths: paths, icons: map[string]uintptr{}, menuBitmaps: map[string]uintptr{}, noticeToken: newNoticeToken()}
 	app.engine = newEngine(windowsSystem{}, paths, app.notify)
 	app.settings = newSettingsServer(app)
 	_, err := gitPath()
@@ -112,6 +116,9 @@ func (app *App) run(autostarted bool, settingsPage string) error {
 		return err
 	}
 	app.tray = tray
+	app.toasts = newToaster(func(notice Notice, timeout time.Duration) {
+		_ = app.tray.RunOnUi(func() { app.showBalloon(notice, timeout) })
+	})
 	// 内核和订阅下载会从后台通知 UI 线程，所以在托盘创建之后再启动；配置已经加载，立即把状态交给内核。
 	app.subscriptionService = newSubscriptionService(app.engine, newCore(app.onCoreError), app.tray.RunOnUi)
 	app.engine.syncCore()
@@ -143,7 +150,7 @@ func (app *App) run(autostarted bool, settingsPage string) error {
 		app.notify(Notice{Level: noticeWarning, Title: "ProxySwitch 上次意外退出了", Text: "详细信息已记录，点这里查看；反馈问题时附上会更快解决", Page: "diagnostics"})
 	}
 	if previous := app.engine.RecordVersion(appVersion); previous != "" {
-		app.notify(Notice{Level: noticeInfo, Title: "ProxySwitch 已更新到 " + appVersion, Text: "原来的版本是 " + previous + "，设置和代理配置都已保留", Icon: iconStateOn, Color: profilePalette[1], Page: "about"})
+		app.notify(Notice{Level: noticeInfo, Title: "ProxySwitch 已更新到 " + appVersion, Text: "原来的版本是 " + previous + "，设置和代理配置都已保留", Icon: iconStateOn, Color: profilePalette[1], Page: "about", Tag: noticeTagUpdate})
 	}
 	// 首次运行、或还没有任何代理配置时直接打开设置页引导添加；开机自启时不打扰。
 	config := app.engine.Config()
@@ -177,6 +184,20 @@ func (app *App) registerLinks(enabled bool) {
 	if err := applyLinks(enabled); err != nil {
 		slog.Warn("登记链接失败", "err", err)
 	}
+	if !enabled {
+		// 系统通知的点击和按钮靠链接，关闭链接后通知改用托盘气泡，通知用的应用 ID 也一起取消登记。
+		if err := unregisterToastApp(); err != nil {
+			slog.Warn("取消登记通知的应用 ID 失败", "err", err)
+		}
+		if app.toasts != nil {
+			app.toasts.forget()
+		}
+	}
+}
+
+// toastsEnabled 表示通知用系统通知显示：登记了链接（点通知和按钮靠它），系统通知也可用。
+func (app *App) toastsEnabled() bool {
+	return app.toasts != nil && app.linksRegistered != nil && *app.linksRegistered
 }
 
 func (app *App) registerHotkeys(config *Config) {
@@ -340,6 +361,14 @@ func (app *App) notify(notice Notice) {
 		// 出错和警告多留几秒，免得没看清就消失了。
 		timeout = 6 * time.Second
 	}
+	if app.toastsEnabled() && app.toasts.show(notice, timeout) {
+		return
+	}
+	app.showBalloon(notice, timeout)
+}
+
+// showBalloon 用托盘气泡显示通知，点击时打开通知对应的设置页。
+func (app *App) showBalloon(notice Notice, timeout time.Duration) {
 	var flags uint32
 	var largeIcon uintptr
 	switch notice.Level {
@@ -819,7 +848,12 @@ func (app *App) onCopyData(data []byte) uintptr {
 	case "diagnose":
 		app.openDiagnose(argument)
 	case "update":
-		app.openSettingsAt("about", "check-update")
+		// 通知上的「立即更新」带着这次运行的随机数，直接安装；其他地方打开的只检查更新。
+		action := "check-update"
+		if argument != "" && subtle.ConstantTimeCompare([]byte(argument), []byte(app.noticeToken)) == 1 {
+			action = "install-update"
+		}
+		app.openSettingsAt("about", action)
 	case "import":
 		// 机场网站的「一键导入」：打开添加订阅的对话框，填好地址。
 		app.openSettingsWith("proxies", "import-subscription", argument)

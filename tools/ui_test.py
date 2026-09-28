@@ -814,7 +814,8 @@ def run_flows(page, api, info, config_path):
     updater.wait_for_selector(".about-hero")
     check(wait_until(lambda: release_checks["count"] > checks, timeout=10), "为「检查更新」打开的设置窗口立即检查")
     updater.wait_for_selector("[data-action=install-update]", timeout=10000)
-    updater.click("[data-action=install-update]")
+    # 系统通知上的「立即更新」：程序请求页面直接安装，和点「一键更新」走同一个操作。
+    updater.evaluate("runRequestedAction('install-update')")
     check(wait_until(lambda: updater.locator(".progress").count() == 1, timeout=3), "下载时显示进度")
     check(wait_until(lambda: updater.is_closed() or "正在重新启动" in updater.inner_text("#page"), timeout=10), "下载校验完成后提示正在重新启动")
     downloaded = os.path.join(info["dir"], "update.download")

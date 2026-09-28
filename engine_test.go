@@ -326,6 +326,8 @@ func TestEngineHealthNotify(t *testing.T) {
 	}
 	if notice := fixture.lastNotice(t); notice.Level != noticeWarning || notice.Title != "代理服务器连不上" {
 		t.Errorf("应发出警告：%+v", notice)
+	} else if len(notice.Actions) != 1 || notice.Actions[0].Link != turnOffLink() || notice.Tag != noticeTagHealth {
+		t.Errorf("警告上应有「关闭代理」：%+v", notice)
 	}
 	fixture.engine.HealthResult(target, refused)
 	if len(fixture.notices) != noticeCount+1 {
@@ -333,8 +335,8 @@ func TestEngineHealthNotify(t *testing.T) {
 	}
 	fixture.engine.HealthResult(target, nil)
 	fixture.engine.HealthResult(target, nil)
-	if state, _ := fixture.engine.HealthInfo(); state != healthOk || fixture.lastNotice(t).Title != "代理服务器已恢复" {
-		t.Errorf("恢复后应通知：%s %+v", state, fixture.lastNotice(t))
+	if state, _ := fixture.engine.HealthInfo(); state != healthOk || fixture.lastNotice(t).Title != "代理服务器已恢复" || fixture.lastNotice(t).Tag != noticeTagHealth {
+		t.Errorf("恢复后应通知，替换连不上的通知：%s %+v", state, fixture.lastNotice(t))
 	}
 	fixture.engine.HealthResult("1.2.3.4:5", refused)
 	fixture.engine.HealthResult("1.2.3.4:5", refused)
