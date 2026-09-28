@@ -747,6 +747,7 @@ func (app *App) handleMenu(command uint32) {
 			app.notify(Notice{Level: noticeError, Title: "无法打开配置文件", Text: err.Error()})
 		}
 	case command == menuExit:
+		app.warnWinHttpOnExit()
 		app.tray.Quit()
 		return
 	case command >= menuProfileBase && config != nil:
@@ -1123,6 +1124,9 @@ func (app *App) Diagnostics() Diagnostics {
 		diagnostics.LastCrash, diagnostics.LastCrashTime = crash, when.Format("2006-01-02 15:04")
 	}
 	diagnostics.NpmrcPath, _ = npmrcPath()
+	if proxy, _, err := readWinHttpProxy(); err == nil {
+		diagnostics.WinHttp = proxy
+	}
 	app.gitAvailable.Store(diagnostics.Git.Available)
 	return diagnostics
 }

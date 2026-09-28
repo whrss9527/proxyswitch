@@ -68,6 +68,8 @@ type SettingsBackend interface {
 	LoopbackApps() (LoopbackInfo, error)
 	SetLoopback(exempt []string) (LoopbackInfo, error)
 	RunningPrograms() []string
+	WinHttpInfo() WinHttpInfo
+	SetWinHttp(useProxy bool) (WinHttpInfo, error)
 	WslInfo() WslInfo
 	SetupWsl() (WslInfo, error)
 	ResetWsl() (WslInfo, error)
@@ -208,6 +210,7 @@ type Diagnostics struct {
 	Git           GitStatus         `json:"git"`
 	Npm           map[string]string `json:"npm"`
 	NpmrcPath     string            `json:"npmrc_path"`
+	WinHttp       string            `json:"winhttp"`
 	LastCrash     string            `json:"last_crash,omitempty"`
 	LastCrashTime string            `json:"last_crash_time,omitempty"`
 }
@@ -309,6 +312,8 @@ func (settings *SettingsServer) Start() (string, error) {
 	mux.HandleFunc("POST /api/links/clash", settings.handleClashLinks)
 	mux.HandleFunc("GET /api/loopback", settings.handleLoopback)
 	mux.HandleFunc("GET /api/programs", settings.handlePrograms)
+	mux.HandleFunc("GET /api/winhttp", settings.handleWinHttp)
+	mux.HandleFunc("POST /api/winhttp", settings.handleSetWinHttp)
 	mux.HandleFunc("GET /api/wsl", settings.handleWsl)
 	mux.HandleFunc("POST /api/wsl/setup", settings.handleWslAction(settings.backend.SetupWsl))
 	mux.HandleFunc("POST /api/wsl/reset", settings.handleWslAction(settings.backend.ResetWsl))
@@ -848,6 +853,28 @@ func (settings *SettingsServer) handleShareActivity(writer http.ResponseWriter, 
 func (settings *SettingsServer) handleShareClear(writer http.ResponseWriter, request *http.Request) {
 	settings.backend.ClearShareHistory()
 	writeJson(writer, http.StatusOK, settings.backend.ShareActivity())
+}
+
+// handleWinHttp 是 WinHTTP 的代理（Windows 更新等系统服务用它）和现在可以设给它的代理。
+func (settings *SettingsServer) handleWinHttp(writer http.ResponseWriter, request *http.Request) {
+	writeJson(writer, http.StatusOK, settings.backend.WinHttpInfo())
+}
+
+// handleSetWinHttp 把 WinHTTP 的代理设为当前代理（proxy 为 true）或改回直连。
+func (settings *SettingsServer) handleSetWinHttp(writer http.ResponseWriter, request *http.Request) {
+	var body struct {
+		Proxy bool `json:"proxy"`
+	}
+	if !decodeJsonBody(writer, request, &body) {
+		return
+	}
+	info, err := settings.backend.SetWinHttp(body.Proxy)
+	if err != nil {
+		slog.WarnContext(request.Context(), "修改 WinHTTP 的代理失败", "err", err)
+		writeJson(writer, http.StatusConflict, map[string]any{"error": err.Error(), "winhttp": info})
+		return
+	}
+	writeJson(writer, http.StatusOK, info)
 }
 
 // handleWsl 是 WSL 的情况：装了没有、支不支持镜像网络、是不是已经设置成使用本机的代理。

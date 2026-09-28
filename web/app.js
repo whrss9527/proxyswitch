@@ -62,6 +62,10 @@ function receiveState(state, options = {}) {
     return;
   }
   renderNav();
+  // WinHTTP 一栏的「当前代理」跟着代理的开关和配置变。
+  if (app.page === "system" && previous && app.winhttp && app.winhttp.info && (previous.status.state !== state.status.state || previous.status.profile !== state.status.profile)) {
+    refreshWinHttp(true);
+  }
   const stateChanged = !previous || JSON.stringify(previous) !== JSON.stringify(state);
   if (options.force || stateChanged) {
     renderPage({ fromPoll: Boolean(options.fromPoll) });
@@ -309,6 +313,7 @@ function goto(pageId) {
   }
   if (pageId === "system") {
     refreshWsl();
+    refreshWinHttp();
   }
   if (pageId === "diagnose" && !app.diagnoseJob) {
     loadDiagnose();
@@ -698,6 +703,38 @@ async function refreshWsl() {
     app.wsl = { info: await api("GET", "/api/wsl") };
   } catch (error) {
     app.wsl = { error: error.message || "读不到 WSL 的情况" };
+  }
+  renderPage();
+}
+
+// refreshWinHttp 读取 WinHTTP 的代理（系统集成页）；quiet 时不显示正在读取，读不到也保留原来的内容。
+async function refreshWinHttp(quiet = false) {
+  if (!quiet && (!app.winhttp || app.winhttp.error)) {
+    app.winhttp = { loading: true };
+    renderPage();
+  }
+  try {
+    app.winhttp = { info: await api("GET", "/api/winhttp") };
+  } catch (error) {
+    if (!quiet) {
+      app.winhttp = { error: error.message || "读不到 WinHTTP 的代理" };
+    }
+  }
+  renderPage();
+}
+
+// setWinHttp 把 WinHTTP 的代理设为当前代理（useProxy）或改回直连，要管理员确认。
+async function setWinHttp(useProxy) {
+  app.winhttp = { ...app.winhttp, busy: true };
+  renderPage();
+  try {
+    app.winhttp = { info: await api("POST", "/api/winhttp", { proxy: useProxy }) };
+    toast(useProxy ? "Windows 更新等系统服务现在经过这个代理" : "Windows 更新等系统服务现在直接连接", "success", useProxy ? "已设置 WinHTTP 的代理" : "WinHTTP 已改回直连");
+  } catch (error) {
+    app.winhttp = { ...app.winhttp, busy: false };
+    if (error.status !== 0 && error.status !== 403) {
+      toast(error.message, "warning", "没有修改");
+    }
   }
   renderPage();
 }
@@ -1116,6 +1153,9 @@ const actions = {
   "share-test": () => testShare(),
   "share-firewall": () => allowShareFirewall(),
   "loopback-refresh": () => refreshLoopback(),
+  "winhttp-refresh": () => refreshWinHttp(),
+  "winhttp-proxy": () => setWinHttp(true),
+  "winhttp-direct": () => setWinHttp(false),
   "wsl-refresh": () => refreshWsl(),
   "wsl-setup": () => runWsl("/api/wsl/setup", "已设置 WSL", "重启 WSL 后，WSL 里的程序就会使用本机的代理"),
   "wsl-reset": () => runWsl("/api/wsl/reset", "已撤销", "重启 WSL 后恢复默认的网络设置"),
@@ -1421,6 +1461,7 @@ async function start() {
     if (app.page === "system") {
       refreshLoopback();
       refreshWsl();
+      refreshWinHttp();
     }
     // 窗口是为程序的请求打开的（地址里就是请求的页面），例如托盘菜单的「检查更新」：执行请求的操作。
     const requested = state.navigate && state.navigate.page === initialPage && state.navigate.action;

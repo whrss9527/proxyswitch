@@ -296,6 +296,20 @@ func (toaster *toaster) show(notice Notice, timeout time.Duration) bool {
 	}
 }
 
+// flush 等通知线程处理完已经排队的通知，最多等 timeout。退出前调用，免得通知还没显示程序就退出了。
+func (toaster *toaster) flush(timeout time.Duration) {
+	done := make(chan struct{})
+	select {
+	case toaster.requests <- func() { close(done) }:
+	default:
+		return
+	}
+	select {
+	case <-done:
+	case <-time.After(timeout):
+	}
+}
+
 // forget 在取消登记应用 ID 之后调用，下次显示前重新登记。
 func (toaster *toaster) forget() {
 	toaster.registered.Store(false)
