@@ -4,14 +4,15 @@ name: release
 # 用 CHANGELOG.md 里对应版本的内容创建 GitHub Release 并上传附件。
 # 编译前下载 core_config.go 里固定版本的官方 mihomo 内核，把它的 SHA-256 写进程序，Windows 版在程序里下载内核时据此校验。
 # Release 先以草稿创建，附件上传完才发布：程序内更新读取最新发布，不能读到还没有附件的发布。
-# 也可以在 Actions 页面手动运行，填一个已有的标签重新上传附件。
+# 也可以在 Actions 页面手动运行：填已有的标签时重新上传附件；在默认分支上运行、填新的版本号时，先在默认分支的最新提交上
+# 打这个标签再发布，不需要在本地推送标签（用 GITHUB_TOKEN 推送的标签不会再触发这个工作流）。
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
     inputs:
       tag:
-        description: "要发布的标签，例如 v2.0.0"
+        description: "要发布的标签，例如 v2.1.0；还没有这个标签时在默认分支的最新提交上创建"
         required: true
         type: string
 
@@ -22,8 +23,39 @@ env:
   TAG: ${{ github.event.inputs.tag || github.ref_name }}
 
 jobs:
+  tag:
+    name: 准备标签
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: 没有这个标签时在默认分支上创建
+        shell: bash
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::标签要写成 v2.1.0 这样：$TAG"
+            exit 1
+          fi
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "标签 $TAG 已经在 $(git rev-parse "$TAG^{commit}")"
+            exit 0
+          fi
+          if [ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ] || [ "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" ]; then
+            echo "::error::没有标签 $TAG：新版本只能在默认分支（$DEFAULT_BRANCH）上手动运行时创建"
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "ProxySwitch $TAG" "$GITHUB_SHA"
+          git push origin "refs/tags/$TAG"
+          echo "已在 $GITHUB_SHA 上创建标签 $TAG"
+
   test-windows:
     name: 测试（Windows）
+    needs: tag
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
