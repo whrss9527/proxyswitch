@@ -488,7 +488,7 @@ function customRulesView() {
         <button class="button" data-action="add-custom-rule">${icon("plus")}添加</button>
       </div>
       ${program ? html`<datalist id="running-programs">${(app.programs || []).map((name) => html`<option value="${name}"></option>`)}</datalist>` : ""}
-      <div class="field-error" data-custom-rule-error></div>
+      <div class="field-error" data-custom-rule-error>${draft.error || ""}</div>
       <p class="caption faint" style="margin:6px 0 0">${program ? "按连接来自哪个程序分流，输入时可以从正在运行的程序里选。" : "域名包括它的子域名。"}只对订阅配置（内置的代理内核）起作用。</p>
     </div>`;
 }

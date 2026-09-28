@@ -23,7 +23,7 @@ const app = {
   shareInputError: "",
   shareFirewallBusy: false,
   // 代理页里还没添加的自定义规则：页面重绘（例如刚保存的上一条返回了最新状态）时不丢。
-  customRuleDraft: { value: "", policy: "proxy", type: "" },
+  customRuleDraft: { value: "", policy: "proxy", type: "", error: "" },
   // 网址诊断页：输入的网址、视角、最近一次诊断的进度和结果。
   diagnoseUrl: "",
   diagnosePerspective: "pc",
@@ -526,6 +526,8 @@ function submitCustomRule() {
     return;
   }
   const problem = addCustomRule(input.value, policy.value, app.customRuleDraft.type);
+  // 提示记在草稿里：页面随状态刷新时重新画出来，不会一闪就没了。
+  app.customRuleDraft.error = problem;
   if (error) {
     error.textContent = problem;
   }
@@ -1332,6 +1334,7 @@ document.addEventListener("change", (event) => {
   }
   if (element.matches('[data-focus="custom-rule-type"]')) {
     app.customRuleDraft.type = element.value;
+    app.customRuleDraft.error = "";
     renderPage();
     if (element.value === "program") {
       loadPrograms();
@@ -1369,6 +1372,13 @@ document.addEventListener("change", (event) => {
 document.addEventListener("input", (event) => {
   if (event.target.matches('[data-focus="custom-rule-value"]')) {
     app.customRuleDraft.value = event.target.value;
+    if (app.customRuleDraft.error) {
+      app.customRuleDraft.error = "";
+      const error = document.querySelector("[data-custom-rule-error]");
+      if (error) {
+        error.textContent = "";
+      }
+    }
   }
 });
 

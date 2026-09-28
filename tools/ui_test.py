@@ -656,7 +656,9 @@ def run_flows(page, api, info, config_path):
     check(wait_until(lambda: "程序" in page.inner_text(".custom-rule-list")), "程序规则在列表里标出来")
     page.fill("[data-focus=custom-rule-value]", "a,b")
     page.press("[data-focus=custom-rule-value]", "Enter")
-    check("写得不对" in page.inner_text("[data-custom-rule-error]"), "程序名不对时给出提示")
+    check(wait_until(lambda: "写得不对" in page.inner_text("[data-custom-rule-error]")), "程序名不对时给出提示")
+    page.evaluate("renderPage()")
+    check("写得不对" in page.inner_text("[data-custom-rule-error]"), "页面随状态刷新后提示还在")
     page.fill("[data-focus=custom-rule-value]", "")
     page.select_option("[data-focus=custom-rule-type]", "")
     # TUN 模式：在常规页的代理内核里开关，没开订阅配置时说明什么时候生效。
