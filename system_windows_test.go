@@ -39,6 +39,7 @@ func TestStructSizes(t *testing.T) {
 		{"SHELLEXECUTEINFOW", unsafe.Sizeof(shellExecuteInfo{}), 112},
 		{"INET_FIREWALL_APP_CONTAINER", unsafe.Sizeof(inetFirewallAppContainer{}), 88},
 		{"SID_AND_ATTRIBUTES", unsafe.Sizeof(sidAndAttributes{}), 16},
+		{"PROCESSENTRY32W", unsafe.Sizeof(processEntry32{}), 568},
 		{"SYSTEM_POWER_STATUS", unsafe.Sizeof(systemPowerStatus{}), 12},
 		{"MIB_IF_ROW2", unsafe.Sizeof(mibIfRow2{}), 1352},
 		{"MIB_IF_ROW2.InOctets", unsafe.Offsetof(mibIfRow2{}.inOctets), 1208},

@@ -23,7 +23,7 @@ const app = {
   shareInputError: "",
   shareFirewallBusy: false,
   // 代理页里还没添加的自定义规则：页面重绘（例如刚保存的上一条返回了最新状态）时不丢。
-  customRuleDraft: { value: "", policy: "proxy" },
+  customRuleDraft: { value: "", policy: "proxy", type: "" },
   // 网址诊断页：输入的网址、视角、最近一次诊断的进度和结果。
   diagnoseUrl: "",
   diagnosePerspective: "pc",
@@ -464,24 +464,40 @@ async function setMode(profile, mode) {
   }
 }
 
-// addCustomRule 加一条自定义规则；已经有这个域名或 IP 时改它的去向并启用。成功时返回空，否则返回问题。
-function addCustomRule(text, policy) {
-  const value = normalizeRuleTarget(text);
-  const problem = ruleTargetProblem(value);
+// addCustomRule 加一条自定义规则（type 为 program 时按程序分流）；已经有这个域名、IP 或程序时改它的去向并启用。
+// 成功时返回空，否则返回问题。
+function addCustomRule(text, policy, type = "") {
+  const program = type === "program";
+  const value = program ? normalizeProgramTarget(text) : normalizeRuleTarget(text);
+  const problem = program ? programTargetProblem(value) : ruleTargetProblem(value);
   if (problem) {
     return problem;
   }
+  const same = (rule) => (rule.type || "") === type && (program ? rule.value.toLowerCase() === value.toLowerCase() : rule.value === value);
   saveConfig((config) => {
     config.custom_rules = config.custom_rules || [];
-    const existing = config.custom_rules.find((rule) => rule.value === value);
+    const existing = config.custom_rules.find(same);
     if (existing) {
       existing.policy = policy;
       existing.disabled = false;
     } else {
-      config.custom_rules.push({ value, policy });
+      config.custom_rules.push(program ? { type, value, policy } : { value, policy });
     }
   }, `${value} ${policyLabels[policy]}`);
   return "";
+}
+
+// loadPrograms 读取正在运行的程序，给按程序分流的规则选程序名。
+async function loadPrograms() {
+  try {
+    app.programs = (await api("GET", "/api/programs")).programs || [];
+  } catch (error) {
+    app.programs = [];
+  }
+  const list = document.getElementById("running-programs");
+  if (list) {
+    setHtml(list, html`${app.programs.map((name) => html`<option value="${name}"></option>`)}`);
+  }
 }
 
 function submitCustomRule() {
@@ -491,7 +507,7 @@ function submitCustomRule() {
   if (!input || !policy) {
     return;
   }
-  const problem = addCustomRule(input.value, policy.value);
+  const problem = addCustomRule(input.value, policy.value, app.customRuleDraft.type);
   if (error) {
     error.textContent = problem;
   }
@@ -1220,6 +1236,18 @@ document.addEventListener("change", (event) => {
   }
   if (element.matches('[data-focus="custom-rule-policy"]')) {
     app.customRuleDraft.policy = element.value;
+    return;
+  }
+  if (element.matches('[data-focus="custom-rule-type"]')) {
+    app.customRuleDraft.type = element.value;
+    renderPage();
+    if (element.value === "program") {
+      loadPrograms();
+    }
+    const input = document.querySelector('[data-focus="custom-rule-value"]');
+    if (input) {
+      input.focus();
+    }
     return;
   }
   if (element.dataset.customRule !== undefined) {

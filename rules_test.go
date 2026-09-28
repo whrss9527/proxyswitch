@@ -181,6 +181,7 @@ rules:
 		{"DOMAIN-SUFFIX", "google.com", "", false, rulePolicyProxy},
 		{"GEOSITE", "category-ads-all", "", false, rulePolicyReject},
 		{"GEOSITE", "geolocation-!cn", "", false, rulePolicyProxy},
+		{"PROCESS-NAME", "Telegram.exe", "", false, rulePolicyProxy},
 		{"", "", "https://example.com/apps.yaml", false, rulePolicyProxy},
 		{"", "", "https://example.com/cncidr.txt", false, rulePolicyDirect},
 		{"GEOIP", "CN", "", false, rulePolicyDirect},
@@ -189,15 +190,18 @@ rules:
 		t.Errorf("Clash 规则转换不对：\n%+v", got)
 	}
 	// 漏网之鱼 → 节点选择 → 自动选择（url-test）：走节点。
-	if config.Final != rulePolicyProxy || config.Skipped != 5 {
-		t.Errorf("MATCH 的去向或跳过的规则数不对（mrs、file、不存在的规则集、PROCESS-NAME、PASS）：%q %d", config.Final, config.Skipped)
+	if config.Final != rulePolicyProxy || config.Skipped != 4 {
+		t.Errorf("MATCH 的去向或跳过的规则数不对（mrs、file、不存在的规则集、PASS）：%q %d", config.Final, config.Skipped)
 	}
 
-	if !config.Lines[7].NoResolve || config.Lines[6].NoResolve {
+	if !config.Lines[8].NoResolve || config.Lines[7].NoResolve {
 		t.Error("RULE-SET 后面的 no-resolve 应记下")
 	}
 	sets := map[ruleSetSource][]ruleEntry{{"https://example.com/cncidr.txt", false}: {{Kind: "IP-CIDR", Value: "1.0.1.0/24"}}}
 	converted := convertRules(config, sets, "r")
+	if !containsString(converted.Rules, "PROCESS-NAME,Telegram.exe,ProxySwitch") {
+		t.Errorf("PROCESS-NAME 规则应交给内核：%v", converted.Rules)
+	}
 	if !converted.Geo || !containsString(converted.Rules, "GEOSITE,category-ads-all,REJECT") || !containsString(converted.Rules, "GEOSITE,geolocation-!cn,ProxySwitch") {
 		t.Errorf("GEOSITE 规则应原样交给内核，并下载地理数据：%v", converted.Rules)
 	}
@@ -209,7 +213,7 @@ rules:
 func TestParseRuleList(t *testing.T) {
 	surge := "# Telegram\nDOMAIN-SUFFIX,t.me\nDOMAIN,telegram.org\nIP-CIDR,91.108.8.0/22,no-resolve\nIP-CIDR6,2001:67c:4e8::/48,no-resolve\nUSER-AGENT,Telegram*\nPROCESS-NAME,Telegram\n"
 	entries, skipped, err := parseRuleList([]byte(surge), false)
-	if err != nil || len(entries) != 4 || skipped != 2 || !entries[2].NoResolve || entries[3].Kind != "IP-CIDR6" {
+	if err != nil || len(entries) != 5 || skipped != 1 || !entries[2].NoResolve || entries[3].Kind != "IP-CIDR6" || entries[4] != (ruleEntry{Kind: "PROCESS-NAME", Value: "Telegram"}) {
 		t.Errorf("Surge 规则列表解析不对：%+v %d %v", entries, skipped, err)
 	}
 	quantumult := "HOST,apps.apple.com,Apple\nHOST-SUFFIX,mzstatic.com,Apple\nhost-keyword,apple,Apple\nHOST-WILDCARD,*.apple.com.edgekey.net,Apple\nIP6-CIDR,2403:300::/32,Apple\nUSER-AGENT,*com.apple*,Apple\n"

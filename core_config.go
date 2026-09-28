@@ -228,13 +228,14 @@ func coreConfigText(settings CoreSettings, controller, secret string) []byte {
 		testUrl = defaultTestUrl
 	}
 	config := coreConfigFile{
-		MixedPort:          coreMixedPort(settings),
-		BindAddress:        "127.0.0.1",
-		Mode:               "rule",
-		LogLevel:           "warning",
-		UnifiedDelay:       true,
-		TcpConcurrent:      true,
-		FindProcessMode:    "off",
+		MixedPort:     coreMixedPort(settings),
+		BindAddress:   "127.0.0.1",
+		Mode:          "rule",
+		LogLevel:      "warning",
+		UnifiedDelay:  true,
+		TcpConcurrent: true,
+		// 只在有按程序分流的规则时查找连接来自哪个程序。
+		FindProcessMode:    "strict",
 		ExternalController: controller,
 		Secret:             secret,
 		// 选中的节点由 ProxySwitch 记在配置文件里，每次启动后重新设置，不用内核自己记。

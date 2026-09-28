@@ -47,8 +47,11 @@ func TestParseRouteTrace(t *testing.T) {
 		"[TCP] dial ProxySwitch (match Match/) 127.0.0.1:50000 --> www.google.com:443 error: connect failed":   {Host: "www.google.com", Port: 443, Rule: "Match", Chain: "ProxySwitch", Error: "connect failed"},
 		"[TCP] dial DIRECT (match DomainSuffix/cn) 127.0.0.1:50000 --> a.cn:443 error: i/o timeout":            {Host: "a.cn", Port: 443, Rule: "DomainSuffix(cn)", Chain: "DIRECT", Error: "i/o timeout"},
 		"[TCP] dial 上游代理 127.0.0.1:50000 --> Example.COM:443 error: refused":                                   {Host: "example.com", Port: 443, Chain: "上游代理", Error: "refused"},
-		"[UDP] 127.0.0.1:50000 --> 8.8.8.8:53 match Match using DIRECT":                                        nil,
-		"Start initial configuration in progress":                                                              nil,
+		// 按程序分流时来源后面跟着程序名，程序名里可能有空格和括号。
+		"[TCP] dial ProxySwitch (match ProcessName/Some App (x86).exe) 127.0.0.1:50000(Some App (x86).exe) --> a.com:443 error: timeout": {Host: "a.com", Port: 443, Rule: "ProcessName(Some App (x86).exe)", Chain: "ProxySwitch", Error: "timeout"},
+		"[TCP] dial DIRECT 127.0.0.1:50000(proxyswitch.test, uid=1000) --> a.com:80 error: refused":                                      {Host: "a.com", Port: 80, Chain: "DIRECT", Error: "refused"},
+		"[UDP] 127.0.0.1:50000 --> 8.8.8.8:53 match Match using DIRECT":                                                                  nil,
+		"Start initial configuration in progress":                                                                                        nil,
 	}
 	for line, want := range cases {
 		if got := parseRouteTrace(line); !reflect.DeepEqual(got, want) {
