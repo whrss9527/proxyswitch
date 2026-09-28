@@ -18,7 +18,7 @@ const (
 )
 
 // LinkRequest 是解析后的链接。Command 和 Argument 与命令行转交给托盘程序的命令相同（见 main_windows.go 的
-// onCopyData）：on、off、toggle、use（配置名）、share（on / off / 空表示切换）、settings（页面）、update、
+// onCopyData）：on、off、toggle、use（配置名）、share（on / off / 空表示切换）、settings（页面）、update（通知上的随机数）、
 // diagnose（网址\x00视角），以及 import（订阅地址和名字的 JSON，打开添加订阅的对话框）。
 type LinkRequest struct {
 	Command  string
@@ -95,7 +95,12 @@ func parseLink(text string) (LinkRequest, error) {
 		}
 		return LinkRequest{Command: "settings", Argument: page}, nil
 	case "update", "upgrade":
-		return LinkRequest{Command: "update"}, nil
+		// 通知上「立即更新」的链接带着这次运行的随机数（见 installUpdateLink），其他的只检查更新。
+		token := strings.ToLower(query.Get("install"))
+		if !validNoticeToken(token) {
+			token = ""
+		}
+		return LinkRequest{Command: "update", Argument: token}, nil
 	case "diagnose", "check":
 		address := strings.TrimSpace(query.Get("url"))
 		if address != "" {

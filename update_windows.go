@@ -131,7 +131,11 @@ func (app *App) watchUpdates() {
 					if info.CanInstall {
 						text += "，可以在设置里一键更新"
 					}
-					app.notify(Notice{Level: noticeInfo, Title: "发现新版本 " + info.Latest, Text: text, Icon: iconStateOn, Color: profilePalette[1], Page: "about"})
+					notice := Notice{Level: noticeInfo, Title: "发现新版本 " + info.Latest, Text: text, Icon: iconStateOn, Color: profilePalette[1], Page: "about", Tag: noticeTagUpdate}
+					if info.CanInstall && app.noticeToken != "" {
+						notice.Actions = []NoticeAction{{Label: "立即更新", Link: installUpdateLink(app.noticeToken)}}
+					}
+					app.notify(notice)
 				}
 			})
 		}

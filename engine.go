@@ -40,14 +40,31 @@ const (
 
 // Notice 是一条托盘通知。Icon 和 Color 决定信息类通知的图标：开关状态和配置的颜色；
 // Page 是点击通知时打开的设置页，为空时打开「代理」页。
+// Actions 是通知上的按钮，只有系统通知（见 toast.go）能显示。Tag 是通知的种类：同一种的新通知替换旧的，
+// 为空时是普通的状态通知；带按钮的通知用自己的种类，免得被随后的状态通知替换掉。
 type Notice struct {
-	Level NoticeLevel
-	Title string
-	Text  string
-	Icon  string
-	Color string
-	Page  string
+	Level   NoticeLevel
+	Title   string
+	Text    string
+	Icon    string
+	Color   string
+	Page    string
+	Actions []NoticeAction
+	Tag     string
 }
+
+// NoticeAction 是通知上的按钮：Label 是按钮上的字，Link 是点了以后打开的 proxyswitch:// 链接。
+type NoticeAction struct {
+	Label string
+	Link  string
+}
+
+// 带按钮的几种通知
+const (
+	noticeTagHealth       = "health"
+	noticeTagUpdate       = "update"
+	noticeTagSubscription = "subscription"
+)
 
 // Status 是当前代理状态的判断结果。
 // State 为 on 时 Profile 是正在使用的配置；为 off 时 Profile 是下次开启会用的配置；为 external 时系统代理由其他程序设置。
@@ -683,7 +700,7 @@ func (engine *Engine) HealthResult(endpoint string, err error) {
 		tracker.state = healthOk
 		tracker.message = ""
 		if profile := engine.Status().Profile; profile != nil {
-			engine.notify(Notice{Level: noticeInfo, Title: "代理服务器已恢复", Text: profile.Name + " · " + profile.Summary(), Color: profile.Color, Icon: iconStateOn})
+			engine.notify(Notice{Level: noticeInfo, Title: "代理服务器已恢复", Text: profile.Name + " · " + profile.Summary(), Color: profile.Color, Icon: iconStateOn, Tag: noticeTagHealth})
 		}
 	case tracker.state == "":
 		tracker.state = healthOk
@@ -700,10 +717,12 @@ func (engine *Engine) proxyDown(endpoint string) {
 	slog.Warn("代理服务器连不上", "profile", profile.Name, "endpoint", endpoint, "reason", message)
 	if engine.config.HealthCheck != "auto_off" {
 		engine.notify(Notice{
-			Level: noticeWarning,
-			Title: "代理服务器连不上",
-			Text:  profile.Name + " · " + endpoint + "\n" + message,
-			Color: profile.Color,
+			Level:   noticeWarning,
+			Title:   "代理服务器连不上",
+			Text:    profile.Name + " · " + endpoint + "\n" + message,
+			Color:   profile.Color,
+			Tag:     noticeTagHealth,
+			Actions: []NoticeAction{{Label: "关闭代理", Link: turnOffLink()}},
 		})
 		return
 	}
@@ -715,6 +734,7 @@ func (engine *Engine) proxyDown(endpoint string) {
 		Title: "代理服务器连不上，已自动关闭代理",
 		Text:  profile.Name + " · " + endpoint + "\n" + message + "\n恢复后会自动重新开启",
 		Color: profile.Color,
+		Tag:   noticeTagHealth,
 	}
 	if len(result.failures) > 0 {
 		notice.Text += "\n" + strings.Join(result.failures, "\n")
@@ -729,7 +749,9 @@ func (engine *Engine) proxyRecovered() {
 		return
 	}
 	result := engine.activate(profile)
-	engine.notify(switchedNotice(profile, result, "代理服务器已恢复，已重新开启", ""))
+	notice := switchedNotice(profile, result, "代理服务器已恢复，已重新开启", "")
+	notice.Tag = noticeTagHealth
+	engine.notify(notice)
 }
 
 // HealthInfo 返回给设置页和托盘显示的健康状态。
