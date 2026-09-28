@@ -848,9 +848,13 @@ def run_flows(page, api, info, config_path):
     page.fill("#share-allowed", "192.168.1.20，192.168.2.0/24")
     page.press("#share-allowed", "Enter")
     check(wait_until(lambda: share_config().get("allowed") == "192.168.1.20，192.168.2.0/24"), "允许的设备写入配置文件")
-    page.fill("#share-allowed", "")
+    # 上一次保存的结果回来时页面会重绘，输入框换成新的：刚全选的文字要仍然选着，按删除键才删得掉。
+    page.focus("#share-allowed")
+    page.evaluate("document.getElementById('share-allowed').select()")
+    page.evaluate("renderPage()")
+    page.keyboard.press("Delete")
     page.press("#share-allowed", "Enter")
-    check(wait_until(lambda: share_config().get("allowed") == ""), "清空允许的设备：局域网里的设备都能用")
+    check(wait_until(lambda: share_config().get("allowed") == ""), "清空允许的设备：局域网里的设备都能用（全选后页面重绘过）")
     if CORE:
         page.click("[data-action=share-toggle]")
         check(wait_until(lambda: f"正在监听端口 {share_port}" in page.inner_text("#page"), timeout=15), "开启共享后内核监听共享端口")
