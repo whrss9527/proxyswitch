@@ -196,6 +196,15 @@ func (backend *devBackend) OpenLogFile() error {
 	return nil
 }
 
+func (backend *devBackend) OpenSyncFolder() error {
+	folder, err := backend.configSync.Folder()
+	if err != nil {
+		return err
+	}
+	slog.Info("开发模式：打开同步文件夹", "path", folder)
+	return nil
+}
+
 func (backend *devBackend) OpenUrl(address string) error {
 	slog.Info("开发模式：打开网址", "url", address)
 	return nil

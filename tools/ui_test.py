@@ -106,7 +106,9 @@ def start_server(directory):
     arguments = [binary, "--dev-settings", f"--dir={directory}", f"--release-api={start_release_server()}", f"--exit-ip-api={start_exit_ip_server()}"]
     if CORE:
         arguments.append(f"--core={CORE}")
-    process = subprocess.Popen(arguments, stdout=subprocess.PIPE, text=True)
+    # 去掉 OneDrive 的环境变量：配置同步的测试从「没有找到 OneDrive」开始，自己填同步文件夹。
+    environment = {key: value for key, value in os.environ.items() if not key.lower().startswith("onedrive") and key != "PROXYSWITCH_SYNC_DIR"}
+    process = subprocess.Popen(arguments, stdout=subprocess.PIPE, text=True, env=environment)
     info = json.loads(process.stdout.readline())
     return process, info
 
@@ -1089,6 +1091,9 @@ def run_flows(page, api, info, config_path):
     api.call("POST", "/api/dev/navigate", {"page": "diagnose", "action": "diagnose", "argument": json.dumps({"url": info["test_url"], "perspective": "pc"})})
     check(wait_until(lambda: page.locator("#diagnose-url").count() == 1 and page.input_value("#diagnose-url") == info["test_url"] and page.locator("#diagnose-headline").count() == 1 and page.inner_text("#diagnose-headline") == "链路正常", timeout=30), "程序请求诊断网址时立即诊断")
 
+    # ---------- 配置同步 ----------
+    run_sync_flows(page, api, config_path)
+
     # ---------- 程序内更新（模拟的发布，开发模式只下载校验、不替换程序） ----------
     # 托盘菜单的「检查更新」：已经打开的设置窗口切到「关于」页并立即检查。
     api.call("POST", "/api/dev/navigate", {"page": "about", "action": "check-update"})
@@ -1138,6 +1143,133 @@ def run_flows(page, api, info, config_path):
     other.wait_for_selector(".blocker")
     check("失效" in other.inner_text(".blocker"), "旧的链接显示已失效")
     other.close()
+
+
+def read_sync_file(folder):
+    path = os.path.join(folder, "config.json")
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as file:
+            return json.load(file)
+    except ValueError:
+        return None
+
+
+def write_sync_file(folder, device, config):
+    """模拟另一台电脑写入同步文件：先写临时文件再改名。"""
+    updated = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + ".%09dZ" % (time.time_ns() % 1_000_000_000)
+    temporary = os.path.join(folder, ".other.tmp")
+    with open(temporary, "w", encoding="utf-8") as file:
+        json.dump({"format": 1, "updated": updated, "device": device, "config": config}, file, ensure_ascii=False)
+    os.replace(temporary, os.path.join(folder, "config.json"))
+
+
+def run_sync_flows(page, api, config_path):
+    folder = os.path.join(tempfile.mkdtemp(prefix="proxyswitch-sync-"), "ProxySwitch")
+    page.click("[data-page=sync]")
+    page.wait_for_selector("#sync-folder")
+    check(page.locator(".nav-item[data-page=sync]").count() == 1 and "没有找到 OneDrive" in page.inner_text("#page"), "配置同步页：没有 OneDrive 时提示填文件夹")
+
+    # 填了相对路径：不开启，提示原因。
+    page.fill("#sync-folder", "ProxySwitch")
+    page.click("button.switch[data-action=sync-toggle]")
+    check(wait_until(lambda: "完整的路径" in page.inner_text("#toasts")), "同步文件夹填相对路径时提示")
+    check(not read_config(config_path)["sync"]["enabled"], "填错时不开启同步")
+    page.evaluate("document.getElementById('toasts').replaceChildren()")
+
+    # 开启：同步文件夹是空的，把这台电脑的配置写上去。
+    page.fill("#sync-folder", folder)
+    page.click("button.switch[data-action=sync-toggle]")
+    check(wait_until(lambda: api.call("GET", "/api/state")["sync"]["state"] == "synced"), "开启配置同步")
+    state = api.call("GET", "/api/state")
+    this = state["sync"]["this"]
+    written = read_sync_file(folder)
+    check(written is not None and written["device"] == this and len(written["config"]["profiles"]) == len(state["config"]["profiles"]), "开启后把这台电脑的配置写进同步文件夹")
+    check(all(key not in written["config"] for key in ("core", "tun", "share", "editor", "sync")), "内核、TUN、局域网共享、编辑器和同步本身不写进同步文件")
+    config = read_config(config_path)
+    check(config["sync"] == {"enabled": True, "folder": folder}, "同步设置写进配置文件")
+    check(wait_until(lambda: "已同步" in page.inner_text("#page") and "这台电脑" in page.inner_text("#page")), "页面显示已同步和最近一次改动来自这台电脑")
+    check(page.locator("#sync-folder").count() == 0 and folder in page.inner_text("#page"), "开启后显示同步文件夹的位置")
+    page.mouse.move(0, 0)
+    page.evaluate("document.getElementById('toasts').replaceChildren()")
+    shot(page, "15_sync")
+
+    # 另一台电脑改了配置：几秒内收到，本机的设置不变。
+    remote = written["config"]
+    first = remote["profiles"][0]["name"]
+    remote["profiles"][0]["name"] = "同步来的名字"
+    remote["notify_seconds"] = 15
+    core_port = config["core"]["port"]
+    write_sync_file(folder, "另一台电脑", remote)
+    check(wait_until(lambda: read_config(config_path)["profiles"][0]["name"] == "同步来的名字", timeout=8), "收到另一台电脑的改动")
+    config = read_config(config_path)
+    check(config["notify_seconds"] == 15 and config["core"]["port"] == core_port and config["sync"]["enabled"], "收到的改动不影响本机的设置")
+    check(wait_until(lambda: "「另一台电脑」" in page.inner_text("#page"), timeout=6), "页面显示最近一次改动来自另一台电脑")
+
+    # 本机改了配置：写进同步文件夹。
+    page.click("[data-page=general]")
+    page.select_option("select[data-setting=notify_seconds]", "8")
+    check(wait_until(lambda: (read_sync_file(folder) or {}).get("device") == this and read_sync_file(folder)["config"]["notify_seconds"] == 8, timeout=8), "本机的改动写进同步文件夹")
+    # 只改本机的设置（编辑器）：不写同步文件。
+    before = read_sync_file(folder)
+    page.fill("#editor", "code")
+    page.press("#editor", "Enter")
+    check(wait_until(lambda: read_config(config_path)["editor"] == "code"), "修改编辑器")
+    time.sleep(3)
+    check(read_sync_file(folder)["updated"] == before["updated"], "只改本机的设置时不写同步文件")
+
+    # 「恢复默认设置」只恢复常规页的设置：规则、局域网共享和同步都保留。
+    rules_before = config["custom_rules"]
+    page.click("[data-action=reset-settings]")
+    page.click(".dialog [data-dialog-result=yes]")
+    check(wait_until(lambda: read_config(config_path)["notify_seconds"] != 8), "恢复默认设置")
+    config = read_config(config_path)
+    check(config["custom_rules"] == rules_before and config["sync"]["enabled"] and config["editor"] == "", "恢复默认设置不影响规则和同步")
+
+    # 立即同步、打开文件夹。
+    page.click("[data-page=sync]")
+    page.click("[data-action=sync-now]")
+    check(wait_until(lambda: "一致" in page.inner_text("#toasts")), "立即同步")
+    page.click("[data-action=sync-open]")
+    time.sleep(0.5)
+    check(page.locator(".toast.danger").count() == 0, "打开同步文件夹")
+
+    # 关闭：同步文件留着。
+    page.click("button.switch[data-action=sync-toggle]")
+    page.click(".dialog [data-dialog-result=yes]")
+    check(wait_until(lambda: not read_config(config_path)["sync"]["enabled"]), "关闭配置同步")
+    check(read_sync_file(folder) is not None, "关闭后同步文件夹里的文件留着")
+    check(wait_until(lambda: page.locator("#sync-folder").count() == 1 and page.input_value("#sync-folder") == folder), "关闭后可以换文件夹")
+
+    # 同步文件夹里已经有不一样的配置：先问怎么处理，选合并。
+    remote = read_sync_file(folder)["config"]
+    remote["profiles"].append({"id": "premote1", "name": "另一台电脑的配置", "color": "#16a34a", "server": "10.8.8.8:3128", "pac": "", "bypass": "", "no_proxy": "", "apply_to": ["system"]})
+    remote["profiles"] = [profile for profile in remote["profiles"] if profile["name"] != "同步来的名字"]
+    write_sync_file(folder, "另一台电脑", remote)
+    page.click("button.switch[data-action=sync-toggle]")
+    page.wait_for_selector("#sync-pending")
+    check("来自「另一台电脑」" in page.inner_text("#sync-pending") and page.locator("#sync-pending .choice").count() == 3, "同步文件夹里已有配置时让用户选择怎么处理")
+    check(not read_config(config_path)["sync"]["enabled"], "选择之前不开启")
+    page.mouse.move(0, 0)
+    page.evaluate("document.getElementById('toasts').replaceChildren()")
+    shot(page, "15b_sync_pending")
+    page.click("#sync-pending .choice[data-choice=merge]")
+    check(wait_until(lambda: read_config(config_path)["sync"]["enabled"]), "选择合并后开启")
+    names = [profile["name"] for profile in read_config(config_path)["profiles"]]
+    check("另一台电脑的配置" in names and "同步来的名字" in names, "合并后两边的配置都在")
+    check(wait_until(lambda: read_sync_file(folder)["device"] == this and len(read_sync_file(folder)["config"]["profiles"]) == len(names)), "合并的结果写进同步文件夹")
+    check(page.locator("#sync-pending").count() == 0, "选择后不再提示")
+
+    # 恢复：关闭同步，配置名字改回来，免得影响后面的测试。
+    api.call("POST", "/api/sync/disable")
+    config = api.call("GET", "/api/state")["config"]
+    config["profiles"] = [profile for profile in config["profiles"] if profile["name"] != "另一台电脑的配置"]
+    for profile in config["profiles"]:
+        if profile["name"] == "同步来的名字":
+            profile["name"] = first
+    api.call("PUT", "/api/config", config)
+    page.click("[data-page=proxies]")
 
 
 if __name__ == "__main__":

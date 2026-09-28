@@ -35,6 +35,8 @@ const app = {
   connectionsFilter: "",
   exitChecking: {},
   exitAutoNode: null,
+  // 配置同步页里填了还没开启的同步文件夹：页面重绘时不丢。
+  syncFolderDraft: null,
   // 网址诊断页：输入的网址、视角、最近一次诊断的进度和结果。
   diagnoseUrl: "",
   diagnosePerspective: "pc",
@@ -1158,6 +1160,53 @@ async function saveLoopback(exempt) {
   }
 }
 
+// ---------- 配置同步 ----------
+
+async function toggleSync() {
+  if (app.state.sync.enabled) {
+    const confirmed = await confirmDialog({ title: "关闭配置同步？", message: "这台电脑以后的改动不再同步，也不再收到其他电脑的改动。同步文件夹里的文件会留着，其他电脑照常同步。", confirmText: "关闭同步" });
+    if (confirmed) {
+      runOperation("/api/sync/disable", undefined, "已关闭配置同步", "没有关闭");
+    }
+    return;
+  }
+  const input = document.getElementById("sync-folder");
+  const folder = (input ? input.value : app.syncFolderDraft || "").trim();
+  app.syncFolderDraft = folder;
+  if (await runOperation("/api/sync/enable", { folder }, "", "没有开启")) {
+    app.syncFolderDraft = null;
+    if (app.state.sync.enabled) {
+      toast("在其他电脑上也开启、选同一个文件夹就行", "success", "已开启配置同步");
+    }
+  }
+}
+
+async function syncNow() {
+  if (await runOperation("/api/sync/now")) {
+    const sync = app.state.sync;
+    if (sync.state === "error") {
+      toast(sync.message, "warning", "没有同步");
+    } else if (sync.state === "synced") {
+      toast("这台电脑和同步文件夹里的配置一致");
+    }
+  }
+}
+
+const syncChoiceConfirms = {
+  folder: { title: "用同步文件夹里的配置？", message: "这台电脑的代理配置、规则和设置会换成同步文件夹里的，这台电脑独有的代理配置会丢失。想保留的话选「合并两边」。", confirmText: "用同步文件夹里的", danger: true },
+  local: { title: "用这台电脑的配置？", message: "同步文件夹里的配置会换成这台电脑的，其他开了同步的电脑也会跟着换。", confirmText: "用这台电脑的", danger: true },
+};
+
+async function resolveSync(choice) {
+  if (syncChoiceConfirms[choice] && !(await confirmDialog(syncChoiceConfirms[choice]))) {
+    return;
+  }
+  const messages = { folder: "已换成同步文件夹里的配置", merge: "已合并两边的配置", local: "已把这台电脑的配置写进同步文件夹", cancel: "" };
+  if (await runOperation("/api/sync/resolve", { choice }, messages[choice], "没有处理好") && choice !== "cancel") {
+    app.syncFolderDraft = null;
+  }
+}
+
 async function allowShareFirewall() {
   app.shareFirewallBusy = true;
   renderPage();
@@ -1361,8 +1410,19 @@ async function importConfig() {
   if (!confirmed) {
     return;
   }
+  let body = text;
   try {
-    const state = await api("PUT", "/api/config", text);
+    // 同步设置（开没开、用哪个文件夹）是这台电脑自己的：导入别的电脑导出的文件时保留这台的。
+    const imported = JSON.parse(text);
+    if (app.config && imported && typeof imported === "object") {
+      imported.sync = app.config.sync;
+      body = imported;
+    }
+  } catch (error) {
+    // 带注释的配置文件原样导入。
+  }
+  try {
+    const state = await api("PUT", "/api/config", body);
     receiveState(state, { force: true });
     toast("设置和代理配置已替换", "success", "导入成功");
   } catch (error) {
@@ -1581,6 +1641,10 @@ const actions = {
   },
   "share-test": () => testShare(),
   "share-firewall": () => allowShareFirewall(),
+  "sync-toggle": () => toggleSync(),
+  "sync-resolve": (element) => resolveSync(element.dataset.choice),
+  "sync-now": () => syncNow(),
+  "sync-open": () => api("POST", "/api/sync/open").catch((error) => toast(error.message, "danger", "无法打开")),
   "loopback-refresh": () => refreshLoopback(),
   "donate-enlarge": () => openDonateDialog(),
   "winhttp-refresh": () => refreshWinHttp(),
@@ -1839,6 +1903,10 @@ document.addEventListener("input", (event) => {
     if (app.ruleSetDraft.error) {
       showRuleSetError("");
     }
+    return;
+  }
+  if (event.target.matches("[data-sync-folder]")) {
+    app.syncFolderDraft = event.target.value;
     return;
   }
   if (event.target.matches('[data-focus="custom-rule-value"]')) {

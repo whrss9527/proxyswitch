@@ -36,15 +36,18 @@ type subscriptionService struct {
 	shares      shareHistory
 	connections *connectionMonitor
 	exits       exitChecker
-	diagnose    diagnoseRunner
-	speedMutex  sync.Mutex
-	speed       speedMeter
+	// configSync 在多台电脑之间同步配置。
+	configSync *syncService
+	diagnose   diagnoseRunner
+	speedMutex sync.Mutex
+	speed      speedMeter
 }
 
 func newSubscriptionService(engine *Engine, core *Core, onEngine func(action func()) error) *subscriptionService {
 	service := &subscriptionService{engine: engine, core: core, onEngine: onEngine, kick: make(chan struct{}, 1), connections: newConnectionMonitor(trafficPath(engine.paths), time.Now)}
 	engine.core = core
 	engine.downloadsNeeded = service.Kick
+	service.configSync = newSyncService(engine, onEngine)
 	return service
 }
 
@@ -59,6 +62,7 @@ func (service *subscriptionService) Kick() {
 // Run 在后台下载到期的订阅和地理数据，有新订阅时立即下载，否则每隔一段时间检查一次。
 func (service *subscriptionService) Run() {
 	go service.watchConnections()
+	go service.configSync.run()
 	go service.watchSpeed()
 	ticker := time.NewTicker(subscriptionCheckInterval)
 	defer ticker.Stop()
@@ -373,6 +377,7 @@ func (service *subscriptionService) CoreInstalling() *InstallProgress {
 
 // fillState 补上设置页状态里内核的运行情况、局域网共享入口和这台电脑的局域网地址，以及正在使用的订阅实际在用的节点。
 func (service *subscriptionService) fillState(state *SettingsState) {
+	state.Sync = service.configSync.Info(state.Config)
 	status := service.core.Status()
 	state.Core.Running, state.Core.Error = status.Running, status.Error
 	state.Core.Downloadable = coreDownloadable()

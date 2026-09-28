@@ -125,6 +125,11 @@ func (app *App) run(autostarted bool, settingsPage string) error {
 	})
 	// 内核和订阅下载会从后台通知 UI 线程，所以在托盘创建之后再启动；配置已经加载，立即把状态交给内核。
 	app.subscriptionService = newSubscriptionService(app.engine, newCore(app.onCoreError), app.tray.RunOnUi)
+	// 同步改了配置后和保存设置一样更新热键、链接和托盘菜单。
+	app.configSync.applied = func() {
+		app.applyUiConfig()
+		app.refresh()
+	}
 	app.engine.syncCore()
 	go app.subscriptionService.Run()
 	app.applyUiConfig()
@@ -1244,6 +1249,15 @@ func (app *App) OpenConfigFile() error {
 
 func (app *App) OpenLogFile() error {
 	return app.onUi(func() error { return openWithEditor("", app.paths.Log) })
+}
+
+// OpenSyncFolder 打开同步文件夹，还没有时先建好。
+func (app *App) OpenSyncFolder() error {
+	folder, err := app.configSync.Folder()
+	if err != nil {
+		return err
+	}
+	return app.onUi(func() error { return shellOpen(folder) })
 }
 
 func (app *App) OpenUrl(address string) error {

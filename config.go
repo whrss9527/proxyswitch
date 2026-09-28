@@ -116,6 +116,7 @@ type Config struct {
 	RuleSets        []RuleSet     `json:"rule_sets"`
 	FinalPolicy     string        `json:"final_policy"`
 	Share           ShareConfig   `json:"share"`
+	Sync            SyncConfig    `json:"sync"`
 	AutoSwitch      AutoSwitch    `json:"auto_switch"`
 	Profiles        []Profile     `json:"profiles"`
 	// 旧版配置的通知开关：读入时换算成 notify_level，保存时不再写出。
@@ -233,6 +234,10 @@ const defaultConfigText = `// ProxySwitch 配置文件。推荐在托盘菜单�
   // allowed 是允许使用的设备（IP 或网段，逗号分隔），留空表示局域网里的所有设备；
   // keep_awake 共享期间不让电脑自动睡眠，keep_awake_on_battery 用电池时也保持
   "share": { "enabled": false, "port": 17892, "allowed": "", "keep_awake": true, "keep_awake_on_battery": false },
+
+  // 配置同步：代理配置和设置放在一个会同步的文件夹里，在多台电脑之间同步（内核、TUN、局域网共享、编辑器和同步本身
+  // 这些本机的设置不同步）。folder 留空时用 OneDrive 里的 ProxySwitch 文件夹
+  "sync": { "enabled": false, "folder": "" },
 
   // 按所在网络自动切换
   "auto_switch": {
@@ -614,6 +619,9 @@ func validateConfig(config *Config) error {
 	if err := validateShare(config.Share, config.Core.Port); err != nil {
 		return err
 	}
+	if err := validateSyncConfig(config.Sync); err != nil {
+		return err
+	}
 
 	seenNames := map[string]bool{}
 	for index := range config.Profiles {
@@ -805,6 +813,9 @@ type State struct {
 	RuleSets        map[string]*RuleSetInfo      `json:"rule_sets,omitempty"`
 	GeoAttempted    string                       `json:"geo_attempted,omitempty"`
 	Resume          string                       `json:"resume,omitempty"`
+	// Synced 是上次和同步文件一致时配置里同步部分的摘要，SyncedFolder 是那时的同步文件夹：重启后用来判断本机改过没有。
+	Synced       string `json:"synced,omitempty"`
+	SyncedFolder string `json:"synced_folder,omitempty"`
 }
 
 func loadState(path string) *State {
