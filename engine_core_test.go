@@ -203,6 +203,21 @@ func TestEngineSubscriptionFlow(t *testing.T) {
 	if due := engine.SubscriptionsDue(); len(due) != 1 {
 		t.Fatalf("超过一天应更新订阅：%+v", due)
 	}
+	// 按流量计费的网络上暂停每天的更新（可以关掉），换到其他网络后马上补上。
+	engine.UpdateNetwork(NetworkInfo{Metered: true})
+	if len(engine.SubscriptionsDue()) != 0 || !engine.UpdatesPaused() {
+		t.Error("按流量计费的网络上应暂停自动更新")
+	}
+	engine.config.PauseOnMetered = false
+	if len(engine.SubscriptionsDue()) != 1 {
+		t.Error("关掉暂停后按流量计费的网络上也照常更新")
+	}
+	engine.config.PauseOnMetered = true
+	requested := *downloads
+	engine.UpdateNetwork(NetworkInfo{})
+	if len(engine.SubscriptionsDue()) != 1 || *downloads != requested+1 {
+		t.Error("换到不按流量计费的网络后应马上更新")
+	}
 	_ = engine.RecordSubscription(profile.Id, profile.Subscription, subscriptionDownload{}, httpStatusError{502})
 	if len(engine.SubscriptionsDue()) != 0 || len(core.last().Subscriptions) != 1 {
 		t.Error("更新失败后应继续使用上次的节点，并等一段时间再试")

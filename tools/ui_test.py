@@ -684,6 +684,16 @@ def run_flows(page, api, info, config_path):
     check(wait_until(lambda: "开启订阅配置后生效" in page.inner_text(".page")), "没开订阅配置时说明 TUN 什么时候生效")
     page.click("button.switch[data-setting='tun.enabled']")
     check(wait_until(lambda: read_config(config_path)["tun"]["enabled"] is False), "关闭 TUN 模式")
+    # 按流量计费的网络上暂停每天的自动更新，默认开启；换到这样的网络时标出来。
+    check(page.get_attribute("button.switch[data-setting=pause_on_metered]", "aria-checked") == "true", "默认在按流量计费的网络上暂停自动更新")
+    network = api.call("GET", "/api/state")["network"]
+    api.call("POST", "/api/dev/network", {**network, "metered": True})
+    check(wait_until(lambda: "现在是按流量计费的网络，已暂停" in page.inner_text(".page")), "按流量计费的网络上说明已暂停自动更新")
+    page.click("button.switch[data-setting=pause_on_metered]")
+    check(wait_until(lambda: read_config(config_path)["pause_on_metered"] is False and "已暂停" not in page.inner_text(".page")), "可以关掉暂停")
+    page.click("button.switch[data-setting=pause_on_metered]")
+    check(wait_until(lambda: read_config(config_path)["pause_on_metered"] is True), "重新开启暂停")
+    api.call("POST", "/api/dev/network", {**network, "metered": False})
     page.click("[data-page=proxies]")
     if CORE:
         check(wait_until(lambda: "5 个节点" in page.inner_text(card), timeout=10), "保存后下载订阅，列表显示节点数和流量")

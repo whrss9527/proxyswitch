@@ -1177,9 +1177,19 @@ function coreSettingsView(config) {
     <div class="card card-group">
       ${settingCard({ iconName: "box", title: "mihomo 内核", description: html`${version} · <span class="mono">${core.path}</span>`, control: status })}
       ${settingCard({ iconName: "layers", title: "TUN 模式（虚拟网卡）", description: tunDescription(config), control: html`<span class="switch-label">${config.tun.enabled ? "开" : "关"}</span>${switchButton({ checked: config.tun.enabled, setting: "tun.enabled", label: "TUN 模式" })}` })}
+      ${settingCard({ iconName: "clock", title: "按流量计费时暂停更新", description: meteredDescription(config), control: html`<span class="switch-label">${config.pause_on_metered ? "开" : "关"}</span>${switchButton({ checked: config.pause_on_metered, setting: "pause_on_metered", label: "按流量计费时暂停更新" })}` })}
       ${settingCard({ iconName: "link", title: "本地代理端口", description: "订阅配置开启后，系统代理和环境变量指向 127.0.0.1 的这个端口（HTTP 和 SOCKS5 共用）", control: html`<input class="input mono numeric" style="width:96px" id="core-port" data-setting-number="core.port" value="${config.core.port}" inputmode="numeric" spellcheck="false">` })}
       ${settingCard({ iconName: "folder", title: "内核程序的位置", description: core.downloadable ? "留空使用 ProxySwitch 下载的内核；也可以填本机已有的 mihomo 程序" : "填本机 mihomo 程序的完整路径", control: html`<input class="input mono" style="width:280px" id="core-path" data-setting-text="core.path" value="${config.core.path}" placeholder="${core.downloadable ? "自动下载" : "例如 C:\\mihomo\\mihomo.exe"}" spellcheck="false">` })}
     </div>`;
+}
+
+// meteredDescription 说明按流量计费的网络上暂停哪些更新，现在正暂停着时标出来。
+function meteredDescription(config) {
+  const text = "手机热点、设成按流量计费的 Wi-Fi 上不自动更新订阅和分流规则，手动更新不受影响";
+  if (config.pause_on_metered && app.state.network && app.state.network.metered) {
+    return html`${text}。<strong>现在是按流量计费的网络，已暂停</strong>`;
+  }
+  return text;
 }
 
 // ---------- 诊断 ----------

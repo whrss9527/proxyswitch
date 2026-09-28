@@ -255,7 +255,7 @@ func readNetworkInfo() NetworkInfo {
 			ssids, hint = remembered, ""
 		}
 	}
-	return NetworkInfo{Ssids: ssids, SsidError: hint, Adapters: adapters}
+	return NetworkInfo{Ssids: ssids, SsidError: hint, Adapters: adapters, Metered: networkMetered()}
 }
 
 const (
