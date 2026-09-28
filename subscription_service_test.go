@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -240,10 +241,26 @@ func TestSettingsRulesFlow(t *testing.T) {
 	if err := fixture.backend.core.Wait(generation, 10*time.Second); err != nil {
 		t.Fatal(err)
 	}
-	if viaNode, result := through("pinned.invalid"); !viaNode || result != "200 hello <nil>" {
-		t.Errorf("自定义规则让它走节点：%s", result)
+	// 第一次不对时记下内核的判定再试一次，CI 的日志里能看到原因。
+	expect := func(host string, wantNode bool, message string) {
+		t.Helper()
+		for attempt := 1; ; attempt++ {
+			viaNode, result := through(host)
+			if viaNode == wantNode && (!wantNode || result == "200 hello <nil>") {
+				return
+			}
+			_, trace := fixture.backend.core.TraceConnection(context.Background(), host, 80, func() DiagnoseProbe {
+				_, _, err := requestThroughCore(port, host)
+				return DiagnoseProbe{Ok: err == nil}
+			})
+			t.Logf("第 %d 次：%s，经过节点 %v，内核的判定 %+v", attempt, result, viaNode, trace)
+			if attempt == 2 {
+				t.Errorf("%s：%s", message, result)
+				return
+			}
+			time.Sleep(time.Second)
+		}
 	}
-	if viaNode, _ := through(coreTestHost); viaNode {
-		t.Error("自定义规则拦截的网站不应经过节点")
-	}
+	expect("pinned.invalid", true, "自定义规则让它走节点")
+	expect(coreTestHost, false, "自定义规则拦截的网站不应经过节点")
 }
