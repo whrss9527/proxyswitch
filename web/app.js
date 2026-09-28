@@ -385,6 +385,42 @@ async function setMode(profile, mode) {
   }
 }
 
+// addCustomRule 加一条自定义规则；已经有这个域名或 IP 时改它的去向并启用。成功时返回空，否则返回问题。
+function addCustomRule(text, policy) {
+  const value = normalizeRuleTarget(text);
+  const problem = ruleTargetProblem(value);
+  if (problem) {
+    return problem;
+  }
+  saveConfig((config) => {
+    config.custom_rules = config.custom_rules || [];
+    const existing = config.custom_rules.find((rule) => rule.value === value);
+    if (existing) {
+      existing.policy = policy;
+      existing.disabled = false;
+    } else {
+      config.custom_rules.push({ value, policy });
+    }
+  }, `${value} ${policyLabels[policy]}`);
+  return "";
+}
+
+function submitCustomRule() {
+  const input = document.querySelector('[data-focus="custom-rule-value"]');
+  const policy = document.querySelector('[data-focus="custom-rule-policy"]');
+  const error = document.querySelector("[data-custom-rule-error]");
+  if (!input || !policy) {
+    return;
+  }
+  const problem = addCustomRule(input.value, policy.value);
+  if (error) {
+    error.textContent = problem;
+  }
+  if (!problem) {
+    input.value = "";
+  }
+}
+
 async function loadDiagnostics() {
   try {
     const [diagnostics, log] = await Promise.all([api("GET", "/api/diagnostics"), api("GET", "/api/log?lines=300")]);
@@ -674,6 +710,12 @@ const actions = {
   "rule-up": (element) => saveConfig((config) => moveItem(config.auto_switch.rules, Number(element.dataset.index), -1)),
   "rule-down": (element) => saveConfig((config) => moveItem(config.auto_switch.rules, Number(element.dataset.index), 1)),
   "rule-delete": (element) => saveConfig((config) => config.auto_switch.rules.splice(Number(element.dataset.index), 1), "已删除规则"),
+  "add-custom-rule": () => submitCustomRule(),
+  "custom-rule-toggle": (element) => saveConfig((config) => {
+    const rule = config.custom_rules[Number(element.dataset.index)];
+    rule.disabled = !rule.disabled;
+  }),
+  "custom-rule-delete": (element) => saveConfig((config) => config.custom_rules.splice(Number(element.dataset.index), 1), "已删除自定义规则"),
   "apply-auto-switch": () => runOperation("/api/auto-switch/apply", undefined, "已按当前网络应用规则"),
   "refresh-diagnostics": () => {
     app.diagnostics = null;
@@ -798,6 +840,14 @@ document.addEventListener("change", (event) => {
     }
     return;
   }
+  if (element.dataset.customRule !== undefined) {
+    const index = Number(element.dataset.customRule);
+    const value = element.value;
+    saveConfig((config) => {
+      config.custom_rules[index].policy = value;
+    });
+    return;
+  }
   if (element.dataset.rule !== undefined) {
     const index = Number(element.dataset.rule);
     const fieldName = element.dataset.ruleField;
@@ -815,6 +865,10 @@ document.addEventListener("change", (event) => {
 });
 
 document.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && event.target.matches('[data-focus="custom-rule-value"]')) {
+    submitCustomRule();
+    return;
+  }
   if (event.key === "Enter" && event.target.matches(".page input.input")) {
     event.target.blur();
   }

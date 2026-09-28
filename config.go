@@ -83,24 +83,25 @@ type CoreConfig struct {
 }
 
 type Config struct {
-	Hotkey          string     `json:"hotkey"`
-	ProfileHotkeys  string     `json:"profile_hotkeys"`
-	NotifyLevel     string     `json:"notify_level"`
-	NotifySeconds   int        `json:"notify_seconds"`
-	StartupAction   string     `json:"startup_action"`
-	OffMode         string     `json:"off_mode"`
-	DisableOnExit   bool       `json:"disable_on_exit"`
-	HealthCheck     string     `json:"health_check"`
-	TrayClick       string     `json:"tray_click"`
-	TrayDoubleClick string     `json:"tray_double_click"`
-	Theme           string     `json:"theme"`
-	SettingsWindow  string     `json:"settings_window"`
-	TestUrl         string     `json:"test_url"`
-	Editor          string     `json:"editor"`
-	CheckUpdates    bool       `json:"check_updates"`
-	Core            CoreConfig `json:"core"`
-	AutoSwitch      AutoSwitch `json:"auto_switch"`
-	Profiles        []Profile  `json:"profiles"`
+	Hotkey          string       `json:"hotkey"`
+	ProfileHotkeys  string       `json:"profile_hotkeys"`
+	NotifyLevel     string       `json:"notify_level"`
+	NotifySeconds   int          `json:"notify_seconds"`
+	StartupAction   string       `json:"startup_action"`
+	OffMode         string       `json:"off_mode"`
+	DisableOnExit   bool         `json:"disable_on_exit"`
+	HealthCheck     string       `json:"health_check"`
+	TrayClick       string       `json:"tray_click"`
+	TrayDoubleClick string       `json:"tray_double_click"`
+	Theme           string       `json:"theme"`
+	SettingsWindow  string       `json:"settings_window"`
+	TestUrl         string       `json:"test_url"`
+	Editor          string       `json:"editor"`
+	CheckUpdates    bool         `json:"check_updates"`
+	Core            CoreConfig   `json:"core"`
+	CustomRules     []CustomRule `json:"custom_rules"`
+	AutoSwitch      AutoSwitch   `json:"auto_switch"`
+	Profiles        []Profile    `json:"profiles"`
 	// 旧版配置的通知开关：读入时换算成 notify_level，保存时不再写出。
 	Notify *bool `json:"notify,omitempty"`
 }
@@ -119,6 +120,7 @@ func defaultConfig() *Config {
 		TestUrl:         defaultTestUrl,
 		CheckUpdates:    true,
 		Core:            CoreConfig{Port: defaultCorePort},
+		CustomRules:     []CustomRule{},
 		AutoSwitch:      AutoSwitch{Rules: []NetRule{}, DefaultAction: "keep"},
 		Profiles:        []Profile{},
 	}
@@ -167,6 +169,12 @@ const defaultConfigText = `// ProxySwitch 配置文件。推荐在托盘菜单�
 
   // 订阅使用的代理内核（mihomo）：path 留空使用 ProxySwitch 下载的内核，port 是它在本机提供代理的端口
   "core": { "path": "", "port": 17890 },
+
+  // 自定义规则：域名（包括子域名）或 IP / 网段固定走节点（proxy）、直连（direct）或被拦截（reject），
+  // 排在订阅配置的分流规则前面，全局代理时也生效；只对订阅配置（内置的代理内核）起作用
+  "custom_rules": [
+    // { "value": "youtube.com", "policy": "proxy" }
+  ],
 
   // 按所在网络自动切换
   "auto_switch": {
@@ -294,6 +302,7 @@ func (config *Config) Clone() *Config {
 		copied.Profiles[index] = profile
 	}
 	copied.AutoSwitch.Rules = append([]NetRule{}, config.AutoSwitch.Rules...)
+	copied.CustomRules = append([]CustomRule{}, config.CustomRules...)
 	return &copied
 }
 
@@ -353,6 +362,14 @@ func normalizeConfig(config *Config) {
 	}
 	if config.Profiles == nil {
 		config.Profiles = []Profile{}
+	}
+	if config.CustomRules == nil {
+		config.CustomRules = []CustomRule{}
+	}
+	for index := range config.CustomRules {
+		rule := &config.CustomRules[index]
+		rule.Value = normalizeRuleTarget(rule.Value)
+		rule.Policy = lowerTrim(rule.Policy, rulePolicyProxy)
 	}
 
 	usedIds := map[string]bool{}
@@ -490,6 +507,12 @@ func validateConfig(config *Config) error {
 	if config.ProfileHotkeys != "" {
 		if _, err := parseModifiers(config.ProfileHotkeys); err != nil {
 			return fmt.Errorf("切换配置的快捷键 %q 无法识别：%v", config.ProfileHotkeys, err)
+		}
+	}
+
+	for index, rule := range config.CustomRules {
+		if err := validateCustomRule(rule); err != nil {
+			return fmt.Errorf("第 %d 条自定义规则：%v", index+1, err)
 		}
 	}
 

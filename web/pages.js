@@ -357,6 +357,77 @@ function profileRow(profile, index) {
     </div>`;
 }
 
+const policyLabels = { proxy: "走节点", direct: "直连", reject: "拦截" };
+
+// normalizeRuleTarget 与程序里的同名函数一致：把网址、*.域名、带端口的写法整理成域名或 IP。
+function normalizeRuleTarget(text) {
+  let value = String(text || "").trim().toLowerCase();
+  const scheme = value.indexOf("://");
+  if (scheme >= 0) {
+    value = value.slice(scheme + 3);
+  }
+  if (!/^[0-9a-f:.]+\/\d+$/.test(value)) {
+    const cut = value.search(/[/?#]/);
+    if (cut >= 0) {
+      value = value.slice(0, cut);
+    }
+  }
+  if (value.startsWith("[")) {
+    const end = value.indexOf("]");
+    if (end > 0) {
+      value = value.slice(1, end);
+    }
+  } else {
+    const parts = value.split(":");
+    if (parts.length === 2 && /^\d+$/.test(parts[1])) {
+      value = parts[0];
+    }
+  }
+  return value.replace(/^\*\./, "").replace(/^\.+|\.+$/g, "");
+}
+
+// ruleTargetProblem 检查整理过的域名或 IP，没有问题时返回空。
+function ruleTargetProblem(value) {
+  if (!value) {
+    return "请填写域名或 IP";
+  }
+  const ipv4 = /^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$/;
+  const ipv6 = /^[0-9a-f:]*:[0-9a-f:]*(\/\d{1,3})?$/;
+  const domain = /^[a-z0-9_-]+(\.[a-z0-9_-]+)+$/;
+  if (ipv4.test(value) || ipv6.test(value) || domain.test(value)) {
+    return "";
+  }
+  return `认不出「${value}」：填域名（例如 youtube.com）或 IP / 网段（例如 8.8.8.8、10.0.0.0/8）`;
+}
+
+// customRulesView 是代理页的自定义规则：域名或 IP 固定走节点、直连或被拦截。只对订阅配置起作用，没有订阅配置时不显示。
+function customRulesView() {
+  if (!app.config.profiles.some((profile) => profile.subscription)) {
+    return "";
+  }
+  const rules = app.config.custom_rules || [];
+  const policyOptions = (value) => Object.entries(policyLabels).map(([policy, label]) => html`<option value="${policy}" ${policy === value ? raw("selected") : ""}>${label}</option>`);
+  const rows = rules.map((rule, index) => html`
+    <div class="custom-rule ${rule.disabled ? "disabled" : ""}">
+      <span class="mono custom-rule-value" title="${rule.value}">${rule.value}</span>
+      <select class="select" data-custom-rule="${index}" aria-label="「${rule.value}」的去向">${policyOptions(rule.policy)}</select>
+      <button class="switch" role="switch" aria-checked="${!rule.disabled}" data-action="custom-rule-toggle" data-index="${index}" aria-label="启用「${rule.value}」" title="${rule.disabled ? "已停用" : "已启用"}"></button>
+      <button class="button subtle icon-only" data-action="custom-rule-delete" data-index="${index}" title="删除" aria-label="删除「${rule.value}」">${icon("trash")}</button>
+    </div>`);
+  return html`
+    <div class="section-title">自定义规则<span class="caption faint">排在分流规则前面，全局代理时也生效</span></div>
+    <div class="card custom-rules">
+      ${rows.length ? html`<div class="custom-rule-list">${rows}</div>` : html`<p class="muted custom-rules-empty">还没有自定义规则。可以让某个网站固定走节点，或者让公司内网、局域网里的服务直连。</p>`}
+      <div class="custom-rule-add">
+        <input class="input mono" data-focus="custom-rule-value" placeholder="域名或 IP，例如 youtube.com、8.8.8.8、10.0.0.0/8" spellcheck="false" autocomplete="off" aria-label="域名或 IP">
+        <select class="select" data-focus="custom-rule-policy" aria-label="去向">${policyOptions("proxy")}</select>
+        <button class="button" data-action="add-custom-rule">${icon("plus")}添加</button>
+      </div>
+      <div class="field-error" data-custom-rule-error></div>
+      <p class="caption faint" style="margin:6px 0 0">域名包括它的子域名。只对订阅配置（内置的代理内核）起作用。</p>
+    </div>`;
+}
+
 function emptyView() {
   return html`
     <div class="card empty">
@@ -407,7 +478,8 @@ function proxiesPage() {
         </div>
       </div>
       <div class="stack">${profiles.map((profile, index) => profileRow(profile, index))}</div>
-      <p class="caption faint" style="margin:14px 2px 0">单击托盘图标开关代理，右键托盘图标可以快速切换配置。</p>`}`;
+      <p class="caption faint" style="margin:14px 2px 0">单击托盘图标开关代理，右键托盘图标可以快速切换配置。</p>
+      ${customRulesView()}`}`;
 }
 
 // ---------- 自动切换 ----------
