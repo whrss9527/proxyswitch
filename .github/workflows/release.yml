@@ -6,6 +6,8 @@ name: release
 # Release 先以草稿创建，附件上传完才发布：程序内更新读取最新发布，不能读到还没有附件的发布。
 # 也可以在 Actions 页面手动运行：填已有的标签时重新上传附件；在默认分支上运行、填新的版本号时，先在默认分支的最新提交上
 # 打这个标签再发布，不需要在本地推送标签（用 GITHUB_TOKEN 推送的标签不会再触发这个工作流）。
+# CI 在合并进 main、发现 CHANGELOG.md 最上面的版本还没有标签时，也会调用这里自动发布（见 ci.yml 的「发布新版本」），
+# 这时在传进来的提交上打标签。
 on:
   push:
     tags: ["v*"]
@@ -15,12 +17,22 @@ on:
         description: "要发布的标签，例如 v2.1.0；还没有这个标签时在默认分支的最新提交上创建"
         required: true
         type: string
+  workflow_call:
+    inputs:
+      tag:
+        description: "要发布的标签，例如 v2.3.0"
+        required: true
+        type: string
+      ref:
+        description: "在哪个提交上发布（标签不存在时在它上面创建）"
+        required: true
+        type: string
 
 permissions:
   contents: write
 
 env:
-  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+  TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   tag:
@@ -30,10 +42,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: 没有这个标签时在默认分支上创建
+          ref: ${{ inputs.ref }}
+      - name: 没有这个标签时创建
         shell: bash
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          # 由 ci.yml 调用时是合并进 main 的提交；推标签和手动运行时为空。
+          REF: ${{ inputs.ref }}
         run: |
           if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::标签要写成 v2.1.0 这样：$TAG"
@@ -43,15 +58,19 @@ jobs:
             echo "标签 $TAG 已经在 $(git rev-parse "$TAG^{commit}")"
             exit 0
           fi
-          if [ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ] || [ "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" ]; then
+          if [ -n "$REF" ]; then
+            target=$(git rev-parse "$REF^{commit}")
+          elif [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$GITHUB_REF" = "refs/heads/$DEFAULT_BRANCH" ]; then
+            target="$GITHUB_SHA"
+          else
             echo "::error::没有标签 $TAG：新版本只能在默认分支（$DEFAULT_BRANCH）上手动运行时创建"
             exit 1
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "$TAG" -m "ProxySwitch $TAG" "$GITHUB_SHA"
+          git tag -a "$TAG" -m "ProxySwitch $TAG" "$target"
           git push origin "refs/tags/$TAG"
-          echo "已在 $GITHUB_SHA 上创建标签 $TAG"
+          echo "已在 $target 上创建标签 $TAG"
 
   test-windows:
     name: 测试（Windows）
@@ -83,6 +102,10 @@ jobs:
     name: 编译并发布
     needs: test-windows
     runs-on: ubuntu-latest
+    # 同一时间只发一个版本（手动运行和合并后自动发布可能撞在一起）。
+    concurrency:
+      group: release
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
         with:
