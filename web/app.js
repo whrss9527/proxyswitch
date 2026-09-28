@@ -1169,6 +1169,7 @@ const actions = {
   "share-test": () => testShare(),
   "share-firewall": () => allowShareFirewall(),
   "loopback-refresh": () => refreshLoopback(),
+  "donate-enlarge": () => openDonateDialog(),
   "winhttp-refresh": () => refreshWinHttp(),
   "winhttp-proxy": () => setWinHttp(true),
   "winhttp-direct": () => setWinHttp(false),

@@ -1465,6 +1465,72 @@ kbd.compact {
 
 /* ---------- 关于 ---------- */
 
+/* 窗口够宽时赞赏码放在右边，窄的时候排到下面（见文件末尾的媒体查询）。 */
+.about-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.about-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.donate-card {
+  flex: none;
+  width: 232px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 16px 12px 14px;
+  text-align: center;
+}
+
+.donate-image {
+  display: block;
+  padding: 0;
+  border: none;
+  border-radius: 14px;
+  background: none;
+  cursor: zoom-in;
+}
+
+.donate-image img {
+  display: block;
+  width: 192px;
+  height: auto;
+  border-radius: 14px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22);
+}
+
+.donate-image:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.donate-text {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-2);
+}
+
+.dialog.donate-dialog {
+  width: auto;
+}
+
+.donate-large {
+  display: block;
+  width: 420px;
+  max-width: 100%;
+  max-height: calc(100vh - 160px);
+  height: auto;
+  margin: 0 auto;
+  border-radius: 18px;
+}
+
 .about-hero {
   display: flex;
   align-items: center;
@@ -2271,6 +2337,18 @@ body:has(.overlay) .toasts {
 
   .choices {
     grid-template-columns: 1fr;
+  }
+}
+
+/* 窗口窄时赞赏码排到关于卡片下面。 */
+@media (max-width: 1000px) {
+  .about-top {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .donate-card {
+    width: auto;
   }
 }
 

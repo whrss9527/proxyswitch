@@ -456,6 +456,12 @@ go build -trimpath -ldflags="-H windowsgui -s -w" -o ProxySwitch.exe .
 
 推送代码时 GitHub Actions 会在 Linux 上跑单元测试和界面测试，在 Windows 上跑包括读写系统代理在内的全部测试；推送 `v*` 标签会自动编译并发布 Release；也可以在 Actions 页面手动运行 release 工作流，在 main 上填新的版本号（例如 `v2.1.0`）时先在 main 的最新提交上打这个标签再发布，填已有的标签则重新上传附件。发布时下载固定版本的官方内核，把它的 SHA-256 写进程序（`make core-sha256` 可以在本地算出这两个值），程序里下载内核时按它校验。
 
+## 请我喝杯咖啡
+
+ProxySwitch 免费开源。觉得好用的话，可以用微信扫一扫请我喝杯咖啡 ☕（程序里「设置 → 关于」也有这张码，点一下能放大）。
+
+<p align="center"><img src="web/donate-wechat.png" width="300" alt="微信赞赏码：请我喝杯咖啡"></p>
+
 ## 许可证
 
 [MIT](LICENSE)

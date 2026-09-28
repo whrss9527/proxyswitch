@@ -1463,3 +1463,25 @@ function openLoopbackDialog() {
   });
   return dialog;
 }
+
+// openDonateDialog 放大显示赞赏码，方便用手机扫。
+function openDonateDialog() {
+  openDialog({
+    className: "donate-dialog",
+    render: () => html`
+      <div class="dialog-body">
+        <img class="donate-large" src="/assets/donate-wechat.png" alt="微信赞赏码：请我喝杯咖啡" width="420" height="560">
+      </div>
+      <div class="dialog-footer">
+        <div class="left"><span class="caption muted">谢谢支持 ☕</span></div>
+        <button class="button" data-dialog-result="close" autofocus>关闭</button>
+      </div>`,
+    onMount: (dialog) => {
+      dialog.element.addEventListener("click", (event) => {
+        if (event.target.closest("[data-dialog-result]")) {
+          dialog.close();
+        }
+      });
+    },
+  });
+}

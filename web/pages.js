@@ -1359,21 +1359,38 @@ function updateView() {
     </div></div>`;
 }
 
+// donateCard 是关于页的「请我喝杯咖啡」：微信赞赏码，窗口够宽时放在右边，窄的时候排到下面；点一下放大，方便手机扫。
+function donateCard() {
+  return html`
+    <div class="card donate-card">
+      <button class="donate-image" data-action="donate-enlarge" title="点击放大" aria-label="微信赞赏码：请我喝杯咖啡，点击放大">
+        <img src="/assets/donate-wechat.png" alt="微信赞赏码：请我喝杯咖啡" width="192" height="256">
+      </button>
+      <div class="donate-text">觉得好用的话，<br>微信扫一扫请我喝杯咖啡</div>
+      <div class="caption faint">点图片可以放大</div>
+    </div>`;
+}
+
 function aboutPage() {
   const update = app.update;
   const busy = (update && update.checking) || app.installing || app.restarting;
   const repository = "https://github.com/whrss9527/proxyswitch";
   return html`
     ${pageHeader("关于")}
-    <div class="card about-hero">
-      ${logoSvg(app.state.palette[1] || "#2563eb", true)}
-      <div style="flex:1">
-        <div class="about-name">ProxySwitch</div>
-        <div class="muted">快捷切换 Windows 代理 · 版本 <span class="numeric">${app.state.version}</span>${app.state.platform === "dev" ? html` <span class="badge warning">开发模式</span>` : ""}</div>
+    <div class="about-top">
+      <div class="about-main">
+        <div class="card about-hero">
+          ${logoSvg(app.state.palette[1] || "#2563eb", true)}
+          <div style="flex:1">
+            <div class="about-name">ProxySwitch</div>
+            <div class="muted">快捷切换 Windows 代理 · 版本 <span class="numeric">${app.state.version}</span>${app.state.platform === "dev" ? html` <span class="badge warning">开发模式</span>` : ""}</div>
+          </div>
+          <button class="button" data-action="check-update" ${busy ? raw("disabled") : ""}>${icon("refresh")}检查更新</button>
+        </div>
+        <div style="margin-top:12px">${updateView()}</div>
       </div>
-      <button class="button" data-action="check-update" ${busy ? raw("disabled") : ""}>${icon("refresh")}检查更新</button>
+      ${donateCard()}
     </div>
-    <div style="margin-top:12px">${updateView()}</div>
     ${app.config ? html`
       <div class="section-title">更新</div>
       <div class="card">
