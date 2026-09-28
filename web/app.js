@@ -267,13 +267,16 @@ function renderPage({ fromPoll = false, animate = false } = {}) {
     main.scrollTop = 0;
   }
   const active = document.activeElement;
-  const focusId = active && page.contains(active) ? active.id || null : null;
-  const focusAction = active && page.contains(active) && !focusId ? active.dataset.action + "|" + (active.dataset.id || active.dataset.name || active.dataset.page || active.dataset.index || "") : null;
+  const inPage = active && page.contains(active);
+  // 重绘后把焦点放回原来的元素：按 id 找，没有 id 的输入框按 data-focus 找，按钮按 data-action 找。
+  const focusId = inPage ? active.id || null : null;
+  const focusKey = inPage && !focusId ? active.dataset.focus || null : null;
+  const focusAction = inPage && !focusId && !focusKey ? active.dataset.action + "|" + (active.dataset.id || active.dataset.name || active.dataset.page || active.dataset.index || "") : null;
   // 正在输入的文字不能因为重绘丢掉（例如刚保存的另一项返回了最新状态）。
-  const typing = focusId && active.tagName === "INPUT" ? { value: active.value, start: active.selectionStart, end: active.selectionEnd } : null;
+  const typing = (focusId || focusKey) && active.tagName === "INPUT" ? { value: active.value, start: active.selectionStart, end: active.selectionEnd } : null;
   setHtml(page, pageRenderers[app.page]());
-  if (focusId) {
-    const target = document.getElementById(focusId);
+  if (focusId || focusKey) {
+    const target = focusId ? document.getElementById(focusId) : page.querySelector(`[data-focus="${focusKey}"]`);
     if (target) {
       if (typing && target.tagName === "INPUT" && target.value !== typing.value) {
         target.value = typing.value;
