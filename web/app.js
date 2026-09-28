@@ -287,13 +287,16 @@ function renderPage({ fromPoll = false, animate = false } = {}) {
     if (target) {
       if (typing && target.tagName === "INPUT" && target.value !== typing.value) {
         target.value = typing.value;
+      }
+      target.focus();
+      // 选区也要放回去：内容没变时同样如此，否则刚全选的文字按删除键删不掉。
+      if (typing && target.tagName === "INPUT") {
         try {
           target.setSelectionRange(typing.start, typing.end);
         } catch (error) {
           // 有的输入框类型不支持选区。
         }
       }
-      target.focus();
     }
   } else if (focusAction) {
     const [action, key] = focusAction.split("|");
