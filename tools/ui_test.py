@@ -400,6 +400,23 @@ def run_flows(page, api, info, config_path):
     check([item["name"] for item in loopback if item["exempt"]] == ["Netflix", "Xbox"], "允许的是勾选的应用")
     page.click("[data-action=loopback-all]")
     check(wait_until(lambda: "已允许 4 / 4 个" in page.inner_text(".page") and page.locator("[data-action=loopback-all]").count() == 0), "一键允许全部商店应用")
+    # WSL：一键设置成镜像网络 + 自动代理，提示重启 WSL，重启后显示已设置。
+    page.wait_for_selector("[data-action=wsl-setup]")
+    check("Ubuntu" in page.inner_text(".page") and not api.call("GET", "/api/wsl")["mirrored"], "列出 WSL 发行版，还没有设置")
+    page.click("[data-action=wsl-setup]")
+    page.wait_for_selector("[data-action=wsl-restart]")
+    wsl = api.call("GET", "/api/wsl")
+    check(wsl["mirrored"] and wsl["auto_proxy"] and wsl["restart"], "设置 WSL 使用镜像网络和自动代理，等待重启")
+    page.click("[data-action=wsl-restart]")
+    check(wait_until(lambda: page.locator("[data-action=wsl-reset]").count() == 1 and "使用镜像网络" in page.inner_text(".page")), "重启 WSL 后显示已设置")
+    check(not api.call("GET", "/api/wsl")["restart"], "重启后不再提示重启")
+    # 撤销：恢复默认的 NAT 网络，同样要重启 WSL。
+    page.click("[data-action=wsl-reset]")
+    check(wait_until(lambda: "已恢复 WSL 默认的网络设置" in page.inner_text(".page")), "撤销后提示重启 WSL")
+    wsl = api.call("GET", "/api/wsl")
+    check(not wsl["mirrored"] and wsl["restart"], "撤销 WSL 的镜像网络设置")
+    page.click("[data-action=wsl-restart]")
+    check(wait_until(lambda: page.locator("[data-action=wsl-setup]").count() == 1), "撤销并重启后可以重新设置")
     page.click("[data-page=general]")
 
     # ---------- 配置文件被手动修改 ----------

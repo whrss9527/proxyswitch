@@ -1034,7 +1034,44 @@ function systemPage() {
     <div class="section-title">微软商店应用</div>
     <div class="card card-group">
       ${settingCard({ iconName: "box", title: "让商店应用走代理", description: "商店、邮件、Xbox 等商店应用默认连不上本机的代理（127.0.0.1），开启代理后可能上不了网。允许后它们也能经代理上网，修改要管理员确认，重新打开这些应用后生效", control: loopbackControl() })}
-    </div>`;
+    </div>
+
+    <div class="section-title">WSL</div>
+    <div class="card card-group">${wslCard()}</div>`;
+}
+
+// wslCard 是 WSL 一栏：一键设置成使用本机的代理（镜像网络 + 自动代理），改完提示重启 WSL；
+// 不支持镜像网络的 Windows 说明怎样经局域网共享使用代理。
+function wslCard() {
+  const wsl = app.wsl;
+  const title = "让 WSL 走代理";
+  if (!wsl || wsl.loading) {
+    return settingCard({ iconName: "terminal", title, control: html`<span class="caption muted" style="display:inline-flex;gap:6px;align-items:center"><span class="spinner" style="width:12px;height:12px"></span>正在读取</span>` });
+  }
+  if (wsl.error) {
+    return settingCard({ iconName: "terminal", title, description: html`<span style="color:var(--danger)">${wsl.error}</span>`, control: html`<button class="button" data-action="wsl-refresh">${icon("refresh")}重试</button>` });
+  }
+  const info = wsl.info;
+  if (!info.installed) {
+    return settingCard({ iconName: "terminal", title, description: "没有检测到 WSL（适用于 Linux 的 Windows 子系统）的 Linux 发行版" });
+  }
+  const distros = info.distros.join("、");
+  if (!info.supported) {
+    const port = app.config.share.port;
+    const command = `export http_proxy=http://$(ip route show default | awk '{print $3}'):${port} https_proxy=$http_proxy all_proxy=$http_proxy`;
+    return settingCard({ iconName: "terminal", title, description: html`${distros}。这个 Windows 版本的 WSL 连不到本机的 127.0.0.1（Windows 11 22H2 起才能用镜像网络）。可以打开局域网共享，在 WSL 里运行：<span class="mono" style="display:block;margin-top:4px;user-select:all">${command}</span>`, control: html`<button class="button" data-action="copy-wsl-command" data-command="${command}">${icon("copy")}复制命令</button>` });
+  }
+  const busy = wsl.busy ? raw("disabled") : "";
+  const restartButton = (kind) => html`<button class="button ${kind}" data-action="wsl-restart" ${busy}>${wsl.busy ? html`<span class="spinner"></span>` : icon("refresh")}重启 WSL</button>`;
+  const ready = info.mirrored && info.auto_proxy;
+  if (info.restart) {
+    const done = ready ? "已写好设置" : "已恢复 WSL 默认的网络设置";
+    return settingCard({ iconName: "terminal", title, description: `${done}，重启 WSL 后生效（会关闭 WSL 里正在运行的程序，包括 Docker Desktop 的容器）`, control: restartButton("accent") });
+  }
+  if (ready) {
+    return settingCard({ iconName: "terminal", title, description: `${distros}使用镜像网络，WSL 启动时自动使用 Windows 的代理设置。之后开关代理或者换了配置，要重启 WSL 才会跟着变`, control: html`<span class="badge success">已设置</span>${restartButton("")}<button class="button" data-action="wsl-reset" ${busy}>撤销</button>` });
+  }
+  return settingCard({ iconName: "terminal", title, description: html`${distros}。把 WSL 的网络设成镜像模式并自动使用 Windows 的代理，WSL 里的 Linux 程序也走本机的代理（写在 <span class="mono">${info.config}</span>）`, control: html`<button class="button" data-action="wsl-setup" ${busy}>${wsl.busy ? html`<span class="spinner"></span>` : ""}一键设置</button>` });
 }
 
 // loopbackControl 是商店应用一栏的状态和按钮：已允许几个应用、全部允许、选择应用。
