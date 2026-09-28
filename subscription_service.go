@@ -16,7 +16,6 @@ import (
 
 const (
 	subscriptionCheckInterval = 10 * time.Minute
-	shareRecordInterval       = 2 * time.Second
 	speedInterval             = 2 * time.Second
 	coreWaitTimeout           = 20 * time.Second
 	geoDownloadTimeout        = 5 * time.Minute
@@ -32,15 +31,18 @@ type subscriptionService struct {
 	installing *InstallProgress
 	// rulesMutex 让规则集同一时间只下载一个：每次下载成功都会删掉其他版本的文件，并发下载同一个会删掉对方刚写的文件。
 	rulesMutex sync.Mutex
-	// shares 记下经局域网共享入口的连接；diagnose 是最近一次网址诊断；speed 是实时网速。
-	shares     shareHistory
-	diagnose   diagnoseRunner
-	speedMutex sync.Mutex
-	speed      speedMeter
+	// shares 记下经局域网共享入口的连接；connections 记下经内核的连接和按出口累计的流量；exits 是查到的出口 IP；
+	// diagnose 是最近一次网址诊断；speed 是实时网速。
+	shares      shareHistory
+	connections *connectionMonitor
+	exits       exitChecker
+	diagnose    diagnoseRunner
+	speedMutex  sync.Mutex
+	speed       speedMeter
 }
 
 func newSubscriptionService(engine *Engine, core *Core, onEngine func(action func()) error) *subscriptionService {
-	service := &subscriptionService{engine: engine, core: core, onEngine: onEngine, kick: make(chan struct{}, 1)}
+	service := &subscriptionService{engine: engine, core: core, onEngine: onEngine, kick: make(chan struct{}, 1), connections: newConnectionMonitor(trafficPath(engine.paths), time.Now)}
 	engine.core = core
 	engine.downloadsNeeded = service.Kick
 	return service
@@ -56,7 +58,7 @@ func (service *subscriptionService) Kick() {
 
 // Run 在后台下载到期的订阅和地理数据，有新订阅时立即下载，否则每隔一段时间检查一次。
 func (service *subscriptionService) Run() {
-	go service.recordShares()
+	go service.watchConnections()
 	go service.watchSpeed()
 	ticker := time.NewTicker(subscriptionCheckInterval)
 	defer ticker.Stop()
@@ -465,16 +467,6 @@ func (service *subscriptionService) Speed() SpeedInfo {
 	service.speedMutex.Lock()
 	defer service.speedMutex.Unlock()
 	return service.speed.Info()
-}
-
-// recordShares 在局域网共享期间每隔几秒记下经共享入口的连接：内核只列出还开着的连接，这样一闪而过的短连接
-// 也能出现在「最近的连接」里，网址诊断也看得到。
-func (service *subscriptionService) recordShares() {
-	for range time.Tick(shareRecordInterval) {
-		if service.core.Status().Share.Listening {
-			service.ShareActivity()
-		}
-	}
 }
 
 // ClearShareHistory 清空共享页里「最近的连接」。

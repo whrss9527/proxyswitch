@@ -997,6 +997,7 @@ func (app *App) onDestroy() {
 	app.handleExit()
 	app.sleep.update(ShareConfig{})
 	if app.subscriptionService != nil {
+		app.SaveTraffic()
 		app.core.Kill()
 	}
 	app.settings.Stop()

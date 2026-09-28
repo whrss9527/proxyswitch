@@ -718,16 +718,19 @@ func (core *Core) stopProcess() {
 	slog.Info("代理内核已停止")
 }
 
-// CoreConnection 是内核里的一条连接（/connections）。Chains 的第一个是实际走的出口（节点、DIRECT 或上游代理）。
+// CoreConnection 是内核里的一条连接（/connections）。Chains 的第一个是实际走的出口（节点、DIRECT 或上游代理），
+// 最后一个是规则指到的策略。Process 是发起连接的程序（内核开了进程识别，本机的连接才有）。
 type CoreConnection struct {
 	Id       string `json:"id"`
 	Metadata struct {
+		Network         string `json:"network"`
 		SourceIp        string `json:"sourceIP"`
 		DestinationIp   string `json:"destinationIP"`
 		DestinationPort string `json:"destinationPort"`
 		Host            string `json:"host"`
 		SniffHost       string `json:"sniffHost"`
 		InboundName     string `json:"inboundName"`
+		Process         string `json:"process"`
 	} `json:"metadata"`
 	Upload      int64    `json:"upload"`
 	Download    int64    `json:"download"`
@@ -755,13 +758,34 @@ func (connection CoreConnection) Outbound() string {
 	return connection.Chains[0]
 }
 
+// CoreConnections 是内核现在开着的连接和它这次启动以来的累计收发字节数。
+type CoreConnections struct {
+	Connections   []CoreConnection `json:"connections"`
+	UploadTotal   int64            `json:"uploadTotal"`
+	DownloadTotal int64            `json:"downloadTotal"`
+}
+
+// Snapshot 读取内核现在开着的连接和累计流量。
+func (core *Core) Snapshot() (CoreConnections, error) {
+	var result CoreConnections
+	err := core.request(http.MethodGet, "/connections", nil, &result, coreApiTimeout)
+	return result, err
+}
+
 // Connections 列出内核里现在开着的连接。
 func (core *Core) Connections() ([]CoreConnection, error) {
-	var result struct {
-		Connections []CoreConnection `json:"connections"`
-	}
-	err := core.request(http.MethodGet, "/connections", nil, &result, coreApiTimeout)
-	return result.Connections, err
+	snapshot, err := core.Snapshot()
+	return snapshot.Connections, err
+}
+
+// CloseConnection 断开内核里的一条连接。
+func (core *Core) CloseConnection(id string) error {
+	return core.request(http.MethodDelete, "/connections/"+url.PathEscape(id), nil, nil, coreApiTimeout)
+}
+
+// CloseAllConnections 断开内核里的全部连接。
+func (core *Core) CloseAllConnections() error {
+	return core.request(http.MethodDelete, "/connections", nil, nil, coreApiTimeout)
 }
 
 // TrafficTotals 是内核这次启动以来经过它的累计收发字节数，内核没有运行时 ok 为 false。

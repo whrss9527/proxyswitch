@@ -30,6 +30,11 @@ const app = {
   ruleSetsUpdatingAll: false,
   // 正在给策略组切换节点，期间禁用下拉框。
   groupSelecting: false,
+  // 连接页：最近一次读到的连接、流量和出口 IP，填的筛选，正在查的出口（proxy / direct），以及自动重查过的节点。
+  connections: null,
+  connectionsFilter: "",
+  exitChecking: {},
+  exitAutoNode: null,
   // 网址诊断页：输入的网址、视角、最近一次诊断的进度和结果。
   diagnoseUrl: "",
   diagnosePerspective: "pc",
@@ -144,12 +149,138 @@ function schedulePoll() {
         if (app.page === "share") {
           await refreshShareActivity(true);
         }
+        if (app.page === "connections") {
+          await refreshConnections(true);
+        }
       } catch (error) {
         // 连接问题由 connectionLost 处理。
       }
     }
     schedulePoll();
   }, pollInterval);
+}
+
+// refreshConnections 读取连接页的内容，有变化时重绘。正在筛选时只重绘连接列表，不打断输入；fromPoll 时顺便按需重查出口 IP。
+async function refreshConnections(fromPoll = false) {
+  receiveConnections(await api("GET", "/api/connections"), { fromPoll });
+  if (fromPoll) {
+    autoCheckExits();
+  }
+}
+
+function receiveConnections(view, { fromPoll = false } = {}) {
+  const changed = JSON.stringify(view) !== JSON.stringify(app.connections);
+  app.connections = view;
+  if (!changed || app.page !== "connections") {
+    return;
+  }
+  const lists = document.querySelector("[data-connection-lists]");
+  if (fromPoll && isEditing() && lists) {
+    setHtml(lists, connectionListsView());
+    return;
+  }
+  renderPage({ fromPoll });
+}
+
+// autoCheckExits 在打开连接页时查一次出口 IP：直连的还没查过时查；经节点的还没查过，或者正在使用的订阅换了节点时重查。
+function autoCheckExits() {
+  const view = app.connections;
+  if (!view || app.page !== "connections") {
+    return;
+  }
+  if (!view.exit.direct.info && !view.exit.direct.error && !view.exit.direct.checking && !app.exitChecking.direct) {
+    checkExit("direct");
+  }
+  if (!view.running || view.exit.proxy.checking || app.exitChecking.proxy) {
+    return;
+  }
+  const info = view.exit.proxy.info;
+  const node = app.state.status.node || "";
+  if ((!info && !view.exit.proxy.error && app.exitAutoNode === null) || (info && node && info.node !== node && app.exitAutoNode !== node)) {
+    app.exitAutoNode = node;
+    checkExit("proxy");
+  }
+}
+
+// checkExit 查出口 IP（kind 是 proxy 或 direct），查完刷新连接页。
+async function checkExit(kind) {
+  app.exitChecking[kind] = true;
+  if (app.page === "connections") {
+    renderPage();
+  }
+  try {
+    receiveConnections(await api("POST", "/api/exit/check", { direct: kind === "direct" }));
+  } catch (error) {
+    if (error.status !== 0 && error.status !== 403) {
+      toast(error.message, "warning", "没有查到出口 IP");
+    }
+  }
+  delete app.exitChecking[kind];
+  if (app.page === "connections") {
+    renderPage();
+  }
+}
+
+// connectionOperation 执行连接页上的操作（断开、清空、清零），用返回的内容刷新页面。
+async function connectionOperation(path, body, successMessage) {
+  try {
+    receiveConnections(await api("POST", path, body));
+    if (successMessage) {
+      toast(successMessage);
+    }
+  } catch (error) {
+    if (error.status !== 0 && error.status !== 403) {
+      toast(error.message, "danger", "操作失败");
+    }
+  }
+}
+
+// openConnectionMenu 是一条连接的菜单：让这个网站（或程序）固定走某个去向、复制目标、诊断，正在进行的还可以断开。
+function openConnectionMenu(anchor, list, index) {
+  const view = app.connections;
+  const record = view && (list === "active" ? view.active : view.recent)[index];
+  if (!record) {
+    return;
+  }
+  const items = [];
+  const pin = (text, type, label) => policyChoices().map((policy) => ({
+    label: `让 ${label} ${policyLabel(policy)}`,
+    icon: policy === "reject" ? "close" : policy === "direct" ? "link" : policy === "proxy" ? "globe" : "layers",
+    action: () => {
+      const problem = addCustomRule(text, policy, type);
+      if (problem) {
+        toast(problem, "warning", "没有添加");
+      }
+    },
+  }));
+  if (record.host) {
+    items.push(...pin(record.host, "", record.host));
+  }
+  if (record.process) {
+    items.push({ separator: true }, ...pin(record.process, "program", record.process));
+  }
+  if (items.length) {
+    items.push({ separator: true });
+  }
+  const target = record.port ? `${record.host}:${record.port}` : record.host;
+  items.push({
+    label: "复制目标",
+    icon: "copy",
+    action: async () => {
+      if (await copyText(target)) {
+        toast(target, "success", "已复制");
+      }
+    },
+  });
+  if (record.host) {
+    const scheme = record.port === "80" ? "http" : "https";
+    const port = record.port && record.port !== "80" && record.port !== "443" ? `:${record.port}` : "";
+    items.push({ label: `诊断 ${record.host}`, icon: "stethoscope", action: () => startDiagnose(`${scheme}://${record.host}${port}/`, record.share ? "device" : "pc") });
+  }
+  if (list === "active") {
+    items.push({ separator: true }, { label: "断开这条连接", icon: "close", danger: true, action: () => connectionOperation("/api/connections/close", { id: record.id }, "已断开") });
+  }
+  openMenu(anchor, items);
 }
 
 // refreshShareActivity 读取经共享入口上网的设备和最近的连接，有变化时重绘共享页。
@@ -329,6 +460,10 @@ function goto(pageId) {
   }
   if (pageId === "share") {
     refreshShareActivity().catch(() => {});
+  }
+  if (pageId === "connections") {
+    app.exitAutoNode = null;
+    refreshConnections(true).catch(() => {});
   }
   if (pageId === "system" && (!app.loopback || app.loopback.error)) {
     refreshLoopback();
@@ -1384,6 +1519,21 @@ const actions = {
   "rule-delete": (element) => saveConfig((config) => config.auto_switch.rules.splice(Number(element.dataset.index), 1), "已删除规则"),
   "add-custom-rule": () => submitCustomRule(),
   "add-rule-set": () => submitRuleSet(),
+  "exit-check": (element) => checkExit(element.dataset.kind),
+  "traffic-reset": async () => {
+    const confirmed = await confirmDialog({ title: "清零流量统计？", message: "按节点累计的流量会从现在重新开始算。", confirmText: "清零", danger: true });
+    if (confirmed) {
+      connectionOperation("/api/traffic/reset", undefined, "流量统计已清零");
+    }
+  },
+  "connections-close-all": async () => {
+    const confirmed = await confirmDialog({ title: "断开全部连接？", message: "正在下载、看视频的连接会中断，大多数程序会自己重新连接。", confirmText: "全部断开", danger: true });
+    if (confirmed) {
+      connectionOperation("/api/connections/close", { id: "" }, "已断开全部连接");
+    }
+  },
+  "connections-clear": () => connectionOperation("/api/connections/clear"),
+  "connection-menu": (element) => openConnectionMenu(element, element.dataset.list, Number(element.dataset.index)),
   "rule-library": () => openRuleLibrary(),
   "rule-sets-update-all": () => updateAllRuleSets(),
   "rule-set-toggle": (element) => saveConfig((config) => {
@@ -1669,6 +1819,14 @@ document.addEventListener("change", (event) => {
 });
 
 document.addEventListener("input", (event) => {
+  if (event.target.matches('[data-focus="connections-filter"]')) {
+    app.connectionsFilter = event.target.value;
+    const lists = document.querySelector("[data-connection-lists]");
+    if (lists && app.connections) {
+      setHtml(lists, connectionListsView());
+    }
+    return;
+  }
   if (event.target.matches('[data-focus="rule-set-name"], [data-focus="rule-set-url"]')) {
     app.ruleSetDraft[event.target.dataset.focus === "rule-set-url" ? "url" : "name"] = event.target.value;
     if (app.ruleSetDraft.error) {
@@ -1777,6 +1935,9 @@ async function start() {
     }
     if (app.page === "share") {
       refreshShareActivity().catch(() => {});
+    }
+    if (app.page === "connections") {
+      refreshConnections(true).catch(() => {});
     }
     if (app.page === "system") {
       refreshLoopback();

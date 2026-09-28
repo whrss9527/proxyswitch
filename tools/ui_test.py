@@ -77,10 +77,33 @@ def start_release_server():
     return f"http://127.0.0.1:{server.server_port}/releases/latest"
 
 
+# 模拟查询出口 IP 的接口（ip.sb 的格式）：连接页打开时会查。
+exit_checks = {"count": 0}
+
+
+def start_exit_ip_server():
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            exit_checks["count"] += 1
+            body = json.dumps({"ip": "203.0.113.7", "country_code": "JP", "country": "Japan", "city": "Tokyo", "isp": "Example ISP"}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return f"http://127.0.0.1:{server.server_port}/geoip"
+
+
 def start_server(directory):
     binary = os.path.join(directory, "proxyswitch-dev")
     subprocess.run(["go", "build", "-o", binary, "."], cwd=ROOT, check=True)
-    arguments = [binary, "--dev-settings", f"--dir={directory}", f"--release-api={start_release_server()}"]
+    arguments = [binary, "--dev-settings", f"--dir={directory}", f"--release-api={start_release_server()}", f"--exit-ip-api={start_exit_ip_server()}"]
     if CORE:
         arguments.append(f"--core={CORE}")
     process = subprocess.Popen(arguments, stdout=subprocess.PIPE, text=True)
@@ -831,6 +854,50 @@ def run_flows(page, api, info, config_path):
         check(system["system"]["server"] == f"127.0.0.1:{config['core']['port']}", "系统代理指向内核的端口")
         page.mouse.move(0, 0)
         shot(page, "10_subscription")
+
+        # 连接页：经内核的连接列出来源、命中的规则、走的出口和流量，可以筛选、断开；按出口累计流量；打开时查出口 IP。
+        test_host = info["test_url"].split("/")[2]
+        tunnel = socket.create_connection(("127.0.0.1", config["core"]["port"]), timeout=5)
+        tunnel.sendall(f"CONNECT {test_host} HTTP/1.1\r\nHost: {test_host}\r\n\r\n".encode())
+        check(b" 200 " in tunnel.recv(1024), "经内核建立隧道")
+        tunnel.sendall(f"GET /{info['test_url'].split('/', 3)[3]} HTTP/1.1\r\nHost: {test_host}\r\n\r\n".encode())
+        tunnel.recv(4096)
+        checks = exit_checks["count"]
+        page.click("[data-page=connections]")
+        page.wait_for_selector(".exits")
+        check(wait_until(lambda: page.inner_text(".exits").count("203.0.113.7") == 2, timeout=15), "打开连接页时查经节点和直连的出口 IP")
+        check(exit_checks["count"] >= checks + 2 and "日本" in page.inner_text(".exits"), "出口的国家显示中文名")
+        check("按分流规则直连了" in page.inner_text(".exits"), "查询按规则直连时说明看到的是本机的出口")
+        active = ".connections >> nth=0"
+        check(wait_until(lambda: test_host in page.inner_text(active), timeout=10), "正在进行的连接列出经内核的连接")
+        row = f"{active} >> .connection:has-text('{test_host}')"
+        check("直连" in page.inner_text(row) and "本机" in page.inner_text(row) and "IPCIDR" in page.inner_text(row), "连接显示来源、命中的规则和走的出口")
+        check(wait_until(lambda: "直连" in page.inner_text(".traffic-list"), timeout=10), "按出口累计流量")
+        page.fill("[data-focus=connections-filter]", "no-such-host.example")
+        check(wait_until(lambda: "没有匹配的连接" in page.inner_text(active)), "筛选连接")
+        page.fill("[data-focus=connections-filter]", test_host)
+        check(wait_until(lambda: page.locator(f"{active} >> .connection").count() >= 1), "按地址筛选")
+        page.mouse.move(0, 0)
+        page.evaluate("document.getElementById('toasts').replaceChildren()")
+        shot(page, "14_connections")
+        page.click(f"{row} [data-action=connection-menu]")
+        check(page.locator(".menu-item:has-text('走节点')").count() >= 1 and page.locator(".menu-item:has-text('诊断')").count() == 1, "连接的菜单里可以添加规则、诊断")
+        page.click(".menu-item:has-text('断开这条连接')")
+        tunnel.settimeout(5)
+        try:
+            closed = tunnel.recv(1) == b""
+        except OSError:
+            closed = True
+        check(closed, "断开连接后隧道关掉")
+        tunnel.close()
+        check(wait_until(lambda: test_host in page.inner_text(".connections >> nth=1")), "断开的连接留在最近的连接里")
+        page.fill("[data-focus=connections-filter]", "")
+        page.click("[data-action=traffic-reset]")
+        page.click(".dialog [data-dialog-result=yes]")
+        check(wait_until(lambda: page.locator(".traffic-list").count() == 0 and "流量统计已清零" in page.inner_text(".toasts")), "清零流量统计")
+        page.click("[data-action=connections-clear]")
+        check(wait_until(lambda: "经内核的连接会按时间记在这里" in page.inner_text(".connections >> nth=1")), "清空最近的连接")
+        page.click("[data-page=proxies]")
         page.click(".hero [data-action=nodes]")
         page.wait_for_selector(".dialog .node")
         page.click(".dialog .node[data-node='']")
@@ -896,6 +963,11 @@ def run_flows(page, api, info, config_path):
         api.call("POST", "/api/use", {"name": "本机代理"})
     else:
         check(wait_until(lambda: "mihomo 内核" in page.inner_text("#page")), "没有内核时提示需要内核")
+        page.click("[data-page=connections]")
+        page.wait_for_selector(".exits")
+        check(wait_until(lambda: "203.0.113.7" in page.inner_text(".exits"), timeout=10) and "内核运行后可以查" in page.inner_text(".exits"), "内核没有运行时只查直连的出口")
+        check("内核没有运行" in page.inner_text(".connections >> nth=0"), "内核没有运行时说明连接从哪来")
+        page.click("[data-page=proxies]")
     # 删除策略组：指向它的规则改为走节点。
     page.click("[data-page=proxies]")
     page.click("[data-action=group-menu][data-index='0']")
