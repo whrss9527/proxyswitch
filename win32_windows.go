@@ -126,6 +126,8 @@ var (
 	procRegDeleteValueW  = advapi32.NewProc("RegDeleteValueW")
 	procRegCloseKey      = advapi32.NewProc("RegCloseKey")
 	procRegEnumKeyExW    = advapi32.NewProc("RegEnumKeyExW")
+	procRegDeleteTreeW   = advapi32.NewProc("RegDeleteTreeW")
+	procRegDeleteKeyW    = advapi32.NewProc("RegDeleteKeyW")
 )
 
 const (
@@ -215,6 +217,7 @@ const (
 	errorBufferTooSmall     = 603
 	errorInsufficientBuffer = 122
 
+	hkeyClassesRoot  = 0x80000000
 	hkeyCurrentUser  = 0x80000001
 	hkeyLocalMachine = 0x80000002
 	keyRead          = 0x20019

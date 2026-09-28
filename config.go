@@ -99,6 +99,7 @@ type Config struct {
 	Editor          string       `json:"editor"`
 	CheckUpdates    bool         `json:"check_updates"`
 	SpeedDisplay    string       `json:"speed_display"`
+	UrlLinks        bool         `json:"url_links"`
 	Core            CoreConfig   `json:"core"`
 	CustomRules     []CustomRule `json:"custom_rules"`
 	Share           ShareConfig  `json:"share"`
@@ -122,6 +123,7 @@ func defaultConfig() *Config {
 		TestUrl:         defaultTestUrl,
 		CheckUpdates:    true,
 		SpeedDisplay:    speedSystem,
+		UrlLinks:        true,
 		Core:            CoreConfig{Port: defaultCorePort},
 		CustomRules:     []CustomRule{},
 		Share:           ShareConfig{Port: defaultSharePort, KeepAwake: true},
@@ -172,6 +174,9 @@ const defaultConfigText = `// ProxySwitch 配置文件。推荐在托盘菜单�
   "check_updates": true,
   // 托盘图标的提示和设置页里显示的实时网速：system 系统网络总速度 / core 只算内置代理内核的流量 / none 不显示
   "speed_display": "system",
+  // 网页链接：浏览器和脚本可以用 proxyswitch:// 链接操作 ProxySwitch（例如 proxyswitch://toggle）；
+  // 机场网站的「一键导入 Clash」按钮（clash:// 链接，没有其他程序处理时）会打开 ProxySwitch 添加订阅
+  "url_links": true,
 
   // 订阅使用的代理内核（mihomo）：path 留空使用 ProxySwitch 下载的内核，port 是它在本机提供代理的端口
   "core": { "path": "", "port": 17890 },

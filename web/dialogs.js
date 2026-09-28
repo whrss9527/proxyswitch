@@ -666,6 +666,10 @@ function openProfileEditor(profile = {}, options = {}) {
     }
   }
 
+  // 机场网站的「一键导入」打开对话框时立即检查订阅，还没填名字时用机场给的名字。
+  if (options.check) {
+    checkSubscription();
+  }
   return dialog;
 }
 

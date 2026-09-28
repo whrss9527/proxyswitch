@@ -28,6 +28,8 @@ type devBackend struct {
 	// onBattery 模拟用电池供电，firewallAllowed 记下添加防火墙例外的次数。
 	onBattery       bool
 	firewallAllowed int
+	// links 模拟 clash:// 链接的登记：开始时由另一个程序（clash-verge）处理。
+	links LinksInfo
 }
 
 var devDefaultNetwork = NetworkInfo{
@@ -38,7 +40,7 @@ var devDefaultNetwork = NetworkInfo{
 }
 
 func newDevBackend(paths Paths, httpProxy, socks *fakeProxy) *devBackend {
-	backend := &devBackend{system: newMemorySystem(), httpProxy: httpProxy, socks: socks}
+	backend := &devBackend{system: newMemorySystem(), httpProxy: httpProxy, socks: socks, links: LinksInfo{Clash: "clash-verge"}}
 	backend.engine = newEngine(backend.system, paths, backend.addNotice)
 	core := newCore(func(message string) {
 		_ = backend.locked(func() error {
@@ -80,6 +82,7 @@ func (backend *devBackend) State() SettingsState {
 	state.Accent = "#0067c0"
 	state.Targets = targetInfos(true)
 	state.Update = backend.update
+	state.Links = backend.links
 	if config := backend.engine.Config(); config != nil && config.Hotkey != "" {
 		if hotkey, err := parseHotkey(config.Hotkey); err == nil {
 			state.Hotkeys.Toggle = hotkey.Text
@@ -207,6 +210,14 @@ func (backend *devBackend) Close() {
 func (backend *devBackend) InstallUpdate(progress func(received, total int64)) error {
 	_, err := downloadLatestRelease(backend.UpdatePaths(), filepath.Join(backend.engine.paths.Dir, "update.download"), progress)
 	return err
+}
+
+// TakeOverClashLinks 在开发模式下只改模拟的登记情况。
+func (backend *devBackend) TakeOverClashLinks() error {
+	return backend.locked(func() error {
+		backend.links = LinksInfo{Clash: "ProxySwitch", ClashOurs: true}
+		return nil
+	})
 }
 
 // AllowShareFirewall 在开发模式下只记一次，不改系统设置。

@@ -64,6 +64,7 @@ type SettingsBackend interface {
 	StartDiagnose(address, perspective string) (DiagnoseJob, error)
 	Diagnose() DiagnoseJob
 	CancelDiagnose()
+	TakeOverClashLinks() error
 }
 
 type SettingsState struct {
@@ -94,6 +95,15 @@ type SettingsState struct {
 	Share ShareInfo `json:"share"`
 	// Speed 是实时网速。
 	Speed SpeedInfo `json:"speed"`
+	// Links 是 clash:// 链接的登记情况（见 links_windows.go）。
+	Links LinksInfo `json:"links"`
+}
+
+// LinksInfo 是链接的登记情况：Clash 是现在处理 clash:// 链接（机场网站的「一键导入」）的程序名，没有时为空；
+// ClashOurs 表示就是 ProxySwitch。
+type LinksInfo struct {
+	Clash     string `json:"clash"`
+	ClashOurs bool   `json:"clash_ours"`
 }
 
 // CoreInfo 是订阅使用的代理内核的情况。Custom 表示使用配置里指定的内核；InstalledVersion 是下载的内核的版本，
@@ -288,6 +298,7 @@ func (settings *SettingsServer) Start() (string, error) {
 	mux.HandleFunc("GET /api/share/activity", settings.handleShareActivity)
 	mux.HandleFunc("POST /api/share/clear", settings.handleShareClear)
 	mux.HandleFunc("POST /api/share/firewall", settings.handleShareFirewall)
+	mux.HandleFunc("POST /api/links/clash", settings.handleClashLinks)
 	mux.HandleFunc("GET /api/diagnose", settings.handleDiagnose)
 	mux.HandleFunc("POST /api/diagnose", settings.handleStartDiagnose)
 	mux.HandleFunc("POST /api/diagnose/cancel", settings.handleCancelDiagnose)
@@ -822,6 +833,11 @@ func (settings *SettingsServer) handleShareActivity(writer http.ResponseWriter, 
 func (settings *SettingsServer) handleShareClear(writer http.ResponseWriter, request *http.Request) {
 	settings.backend.ClearShareHistory()
 	writeJson(writer, http.StatusOK, settings.backend.ShareActivity())
+}
+
+// handleClashLinks 让机场网站的「一键导入 Clash」（clash:// 链接）改由 ProxySwitch 处理。
+func (settings *SettingsServer) handleClashLinks(writer http.ResponseWriter, request *http.Request) {
+	settings.respondState(writer, request, settings.backend.TakeOverClashLinks())
 }
 
 func (settings *SettingsServer) handleShareFirewall(writer http.ResponseWriter, request *http.Request) {

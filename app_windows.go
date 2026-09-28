@@ -67,8 +67,10 @@ type App struct {
 	menuBitmaps  map[string]uintptr
 	hotkeys      HotkeyStatus
 	hotkeyConfig string
-	gitAvailable atomic.Bool
-	exitHandled  bool
+	// linksRegistered 是上次按配置登记链接时 url_links 的值，还没登记过时为 nil。
+	linksRegistered *bool
+	gitAvailable    atomic.Bool
+	exitHandled     bool
 	// 已显示的警告和错误通知数，用来判断一个错误是否已经提示过。
 	problemNotices int
 	// 设置页发起的操作由页面自己显示结果，这期间不弹托盘通知。
@@ -160,6 +162,18 @@ func (app *App) applyUiConfig() {
 	}
 	app.tray.DoubleClickEnabled = config.TrayDoubleClick != "none"
 	app.registerHotkeys(config)
+	app.registerLinks(config.UrlLinks)
+}
+
+// registerLinks 在启动时和 url_links 改变时登记或取消 proxyswitch:// 和 clash:// 链接。
+func (app *App) registerLinks(enabled bool) {
+	if app.linksRegistered != nil && *app.linksRegistered == enabled {
+		return
+	}
+	app.linksRegistered = &enabled
+	if err := applyLinks(enabled); err != nil {
+		slog.Warn("登记链接失败", "err", err)
+	}
 }
 
 func (app *App) registerHotkeys(config *Config) {
@@ -776,8 +790,11 @@ func (app *App) onCopyData(data []byte) uintptr {
 		app.openDiagnose(argument)
 	case "update":
 		app.openSettingsAt("about", "check-update")
+	case "import":
+		// 机场网站的「一键导入」：打开添加订阅的对话框，填好地址。
+		app.openSettingsWith("proxies", "import-subscription", argument)
 	case "settings":
-		app.openSettings()
+		app.openSettingsAt(argument, "")
 	default:
 		return exitUsage
 	}
@@ -969,6 +986,7 @@ func (app *App) settingsState() SettingsState {
 	state.Accent = systemAccentColor()
 	state.Targets = targetInfos(app.gitAvailable.Load())
 	state.Update = app.latestUpdate
+	state.Links = currentLinks()
 	if app.sleep.status != "" {
 		state.Share.Awake = app.sleep.status
 	}

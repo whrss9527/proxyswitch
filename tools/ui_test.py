@@ -370,6 +370,21 @@ def run_flows(page, api, info, config_path):
     check(wait_until(lambda: page.evaluate("app.config.speed_display") == "system", timeout=6), "页面同步到网速设置的修改")
     page.click("[data-page=general]")
 
+    # ---------- 系统集成 ----------
+    page.click("[data-page=system]")
+    page.wait_for_selector("button.switch[data-setting=url_links]")
+    check(page.get_attribute("button.switch[data-setting=url_links]", "aria-checked") == "true", "网页链接默认开启")
+    check("现在由「clash-verge」处理" in page.inner_text(".page"), "说明 clash:// 链接现在由哪个程序处理")
+    page.click("[data-action=take-over-clash-links]")
+    check(wait_until(lambda: "由 ProxySwitch 处理" in page.inner_text(".page") and page.locator("[data-action=take-over-clash-links]").count() == 0), "改由 ProxySwitch 处理一键导入")
+    shot(page, "07_system")
+    page.click("button.switch[data-setting=url_links]")
+    check(wait_until(lambda: read_config(config_path)["url_links"] is False), "关闭网页链接")
+    check(wait_until(lambda: "机场网站的一键导入" not in page.inner_text(".page")), "关闭网页链接时不再显示一键导入")
+    page.click("button.switch[data-setting=url_links]")
+    check(wait_until(lambda: read_config(config_path)["url_links"] is True), "重新开启网页链接")
+    page.click("[data-page=general]")
+
     # ---------- 配置文件被手动修改 ----------
     config = read_config(config_path)
     config["profiles"][0]["name"] = "手改的名字"
@@ -550,6 +565,17 @@ def run_flows(page, api, info, config_path):
     check(saved["subscription"] == subscription_url and saved["mode"] == "rule" and saved.get("rules") == rules_url, "订阅配置和分流规则写入配置文件")
     card = ".profile:has-text('测试机场')"
     check(wait_until(lambda: "自定义规则 · 22 条" in page.inner_text(card), timeout=15), "保存后下载分流规则，列表显示规则数")
+
+    # 机场网站的一键导入：打开添加订阅的对话框，填好地址和名字并立即检查；已经添加过的订阅只提示。
+    api.call("POST", "/api/dev/navigate", {"page": "proxies", "action": "import-subscription", "argument": json.dumps({"url": subscription_url, "name": "测试机场"})})
+    check(wait_until(lambda: "已经添加过这个订阅" in page.inner_text("body"), timeout=6), "导入已经添加过的订阅时提示")
+    imported_url = subscription_url + "&from=import"
+    api.call("POST", "/api/dev/navigate", {"page": "proxies", "action": "import-subscription", "argument": json.dumps({"url": imported_url, "name": "导入的机场"})})
+    page.wait_for_selector(".dialog [data-field=subscription]", timeout=6000)
+    check(page.input_value(".dialog [data-field=subscription]") == imported_url and page.input_value(".dialog [data-field=name]") == "导入的机场", "一键导入填好订阅地址和名字")
+    check(wait_until(lambda: "5 个节点" in page.inner_text(".dialog [data-check-result]"), timeout=10), "一键导入时立即检查订阅")
+    page.click(".dialog [data-action=dialog-cancel]")
+    page.wait_for_selector(".dialog", state="detached")
 
     # 自定义规则：有订阅配置时代理页才显示；输入会整理成域名，已有的域名改去向。
     page.fill("[data-focus=custom-rule-value]", "youtube")

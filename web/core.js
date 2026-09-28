@@ -117,6 +117,7 @@ const iconPaths = {
   stethoscope: "M5 3v4.5a3.5 3.5 0 0 0 7 0V3 M8.5 11v1.5a4 4 0 0 0 8 0v-2 M16.5 8.5a1.5 1.5 0 1 0 0 .01 M4 3h2 M11 3h2",
   circle: "M10 3.5a6.5 6.5 0 1 0 0 13a6.5 6.5 0 0 0 0-13Z",
   minus: "M10 2.5a7.5 7.5 0 1 0 0 15a7.5 7.5 0 0 0 0-15Z M6.5 10h7",
+  windows: "M3 4.8 8.8 4v5.3H3Z M10.2 3.8 17 2.8v6.5h-6.8Z M3 10.7h5.8V16L3 15.2Z M10.2 10.7H17v6.5l-6.8-1Z",
 };
 
 const boldIcons = new Set(["more"]);

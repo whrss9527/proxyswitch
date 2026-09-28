@@ -114,6 +114,19 @@ func (key registryKey) DeleteValue(name string) error {
 	return nil
 }
 
+// deleteRegistryTree 删除一个键和它下面的所有内容，键本来就不存在不算错误。
+func deleteRegistryTree(root uintptr, path string) error {
+	result, _, _ := procRegDeleteTreeW.Call(root, uintptr(unsafe.Pointer(utf16Pointer(path))))
+	if result == errorSuccess {
+		// RegDeleteTree 删掉子键和值，键本身再删一次。
+		result, _, _ = procRegDeleteKeyW.Call(root, uintptr(unsafe.Pointer(utf16Pointer(path))))
+	}
+	if result != errorSuccess && result != errorFileNotFound {
+		return fmt.Errorf("删除注册表 %s 失败：%v", path, syscall.Errno(result))
+	}
+	return nil
+}
+
 // SubkeyNames 列出直接子键的名字。
 func (key registryKey) SubkeyNames() []string {
 	var names []string
