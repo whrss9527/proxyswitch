@@ -86,7 +86,7 @@ func TestDownloadLatestRelease(t *testing.T) {
 	}
 	startFakeRelease(t, release)
 
-	info, err := checkLatestRelease("")
+	info, err := checkLatestRelease(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestDownloadLatestRelease(t *testing.T) {
 
 	destination := filepath.Join(t.TempDir(), "update.download")
 	var lastReceived, lastTotal int64
-	if _, err := downloadLatestRelease("", destination, func(received, total int64) { lastReceived, lastTotal = received, total }); err != nil {
+	if _, err := downloadLatestRelease(nil, destination, func(received, total int64) { lastReceived, lastTotal = received, total }); err != nil {
 		t.Fatal(err)
 	}
 	if data, _ := os.ReadFile(destination); string(data) != string(program) {
@@ -107,7 +107,7 @@ func TestDownloadLatestRelease(t *testing.T) {
 	}
 
 	release.checksums = strings.Repeat("a", 64) + "  " + updateAssetName(runtime.GOARCH) + "\n"
-	if _, err := downloadLatestRelease("", destination, nil); err == nil || !strings.Contains(err.Error(), "校验值不一致") {
+	if _, err := downloadLatestRelease(nil, destination, nil); err == nil || !strings.Contains(err.Error(), "校验值不一致") {
 		t.Errorf("校验值不一致时应报错：%v", err)
 	}
 	if _, err := os.Stat(destination); !os.IsNotExist(err) {
@@ -115,21 +115,21 @@ func TestDownloadLatestRelease(t *testing.T) {
 	}
 
 	release.checksums = "没有这个文件的校验值\n"
-	if _, err := downloadLatestRelease("", destination, nil); err == nil || !strings.Contains(err.Error(), "校验文件里没有") {
+	if _, err := downloadLatestRelease(nil, destination, nil); err == nil || !strings.Contains(err.Error(), "校验文件里没有") {
 		t.Errorf("校验文件里找不到时应报错：%v", err)
 	}
 
 	release.withSums = false
-	if info, _ := checkLatestRelease(""); info.CanInstall {
+	if info, _ := checkLatestRelease(nil); info.CanInstall {
 		t.Error("没有校验文件时不能在程序里更新")
 	}
-	if _, err := downloadLatestRelease("", destination, nil); err == nil {
+	if _, err := downloadLatestRelease(nil, destination, nil); err == nil {
 		t.Error("没有校验文件时下载应报错")
 	}
 
 	release.tag = "v" + appVersion
 	release.withSums = true
-	if _, err := downloadLatestRelease("", destination, nil); err == nil || !strings.Contains(err.Error(), "最新版本") {
+	if _, err := downloadLatestRelease(nil, destination, nil); err == nil || !strings.Contains(err.Error(), "最新版本") {
 		t.Errorf("已经是最新版本时应报错：%v", err)
 	}
 }
@@ -147,7 +147,7 @@ func TestLatestReleaseFallback(t *testing.T) {
 	}
 	startFakeRelease(t, release)
 
-	info, err := checkLatestRelease("")
+	info, err := checkLatestRelease(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +156,7 @@ func TestLatestReleaseFallback(t *testing.T) {
 	}
 	destination := filepath.Join(t.TempDir(), "update.download")
 	var lastTotal int64
-	if _, err := downloadLatestRelease("", destination, func(received, total int64) { lastTotal = total }); err != nil {
+	if _, err := downloadLatestRelease(nil, destination, func(received, total int64) { lastTotal = total }); err != nil {
 		t.Fatal(err)
 	}
 	if data, _ := os.ReadFile(destination); string(data) != string(program) {
@@ -167,15 +167,15 @@ func TestLatestReleaseFallback(t *testing.T) {
 	}
 
 	release.apiStatus = http.StatusTooManyRequests
-	if info, err := checkLatestRelease(""); err != nil || !info.CanInstall {
+	if info, err := checkLatestRelease(nil); err != nil || !info.CanInstall {
 		t.Errorf("HTTP 429 时也应改从发布页查找：%+v %v", info, err)
 	}
 	release.withSums = false
-	if info, err := checkLatestRelease(""); err != nil || !info.Newer || info.CanInstall {
+	if info, err := checkLatestRelease(nil); err != nil || !info.Newer || info.CanInstall {
 		t.Errorf("没有校验文件时只能到发布页下载：%+v %v", info, err)
 	}
 	release.tag = "v" + appVersion
-	if info, err := checkLatestRelease(""); err != nil || info.Newer {
+	if info, err := checkLatestRelease(nil); err != nil || info.Newer {
 		t.Errorf("已经是最新版本时不应提示更新：%+v %v", info, err)
 	}
 
@@ -185,7 +185,7 @@ func TestLatestReleaseFallback(t *testing.T) {
 	releaseApiUrl = "http://" + closed.Addr().String() + "/releases/latest"
 	closed.Close()
 	requests := release.pageRequests.Load()
-	if _, err := checkLatestRelease(""); err == nil {
+	if _, err := checkLatestRelease(nil); err == nil {
 		t.Error("连不上接口时应报错")
 	}
 	if release.pageRequests.Load() != requests {
@@ -196,12 +196,58 @@ func TestLatestReleaseFallback(t *testing.T) {
 	releaseApiUrl = apiUrl
 	releasePageUrl = apiUrl + "/missing"
 	release.apiStatus = http.StatusForbidden
-	if _, err := checkLatestRelease(""); err == nil || !strings.Contains(err.Error(), "访问次数") {
+	if _, err := checkLatestRelease(nil); err == nil || !strings.Contains(err.Error(), "访问次数") {
 		t.Errorf("超过访问次数限制时应说明原因：%v", err)
 	}
 	release.apiStatus = http.StatusBadGateway
-	if _, err := checkLatestRelease(""); err == nil || !strings.Contains(err.Error(), "HTTP 502") {
+	if _, err := checkLatestRelease(nil); err == nil || !strings.Contains(err.Error(), "HTTP 502") {
 		t.Errorf("应报告接口返回的状态：%v", err)
+	}
+}
+
+// 检查和下载更新依次尝试各条网络路径：不通的路径换下一条，下载先用检查成功的那条。
+func TestUpdatePaths(t *testing.T) {
+	github := "https://api.github.com/repos/whrss9527/proxyswitch/releases/latest"
+	if paths := updateRoutes(github, nil); len(paths) != 1 || paths[0] != "" {
+		t.Errorf("没有路径时应直连：%q", paths)
+	}
+	if paths := updateRoutes(github, []string{"http://127.0.0.1:7890", ""}); len(paths) != 2 || paths[0] != "http://127.0.0.1:7890" {
+		t.Errorf("应按给出的顺序尝试：%q", paths)
+	}
+	if paths := updateRoutes("http://127.0.0.1:8080/releases/latest", []string{"http://127.0.0.1:7890", ""}); len(paths) != 1 || paths[0] != "" {
+		t.Errorf("本机的地址应只直连：%q", paths)
+	}
+
+	program := []byte(strings.Repeat("routed program ", 10000))
+	sum := sha256.Sum256(program)
+	release := &fakeRelease{tag: "v99.2.0", program: program, checksums: hex.EncodeToString(sum[:]) + "  " + updateAssetName(runtime.GOARCH) + "\n", withSums: true}
+	startFakeRelease(t, release)
+	website := strings.TrimPrefix(releaseApiUrl, "http://")
+	website = website[:strings.Index(website, "/")]
+	closed, _ := net.Listen("tcp", "127.0.0.1:0")
+	deadProxy := "http://" + closed.Addr().String()
+	closed.Close()
+	proxy := startCountingProxy(t, website)
+	proxyUrl := "http://" + proxy.address
+
+	info, working, err := checkReleaseVia([]string{deadProxy, proxyUrl, ""})
+	if err != nil || working != proxyUrl || !info.CanInstall {
+		t.Fatalf("第一条路径不通时应换下一条：%q %+v %v", working, info, err)
+	}
+	checks := proxy.connections.Load()
+	destination := filepath.Join(t.TempDir(), "update.download")
+	if _, err := downloadReleaseVia([]string{deadProxy, proxyUrl, ""}, destination, nil); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(destination); string(data) != string(program) {
+		t.Error("下载的内容不对")
+	}
+	// 检查一次（接口）加下载两次（校验文件和程序），都经检查成功的代理。
+	if got := proxy.connections.Load() - checks; got != 3 {
+		t.Errorf("下载应经检查成功的路径：%d 次连接", got)
+	}
+	if _, _, err := checkReleaseVia([]string{deadProxy}); err == nil {
+		t.Error("所有路径都不通时应报错")
 	}
 }
 

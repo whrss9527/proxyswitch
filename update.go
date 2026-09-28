@@ -78,8 +78,38 @@ func updateClient(proxyUrl string, timeout time.Duration) *http.Client {
 	return &http.Client{Transport: transport, Timeout: timeout}
 }
 
-// checkLatestRelease 读取最新发布的信息。GitHub 接口拒绝访问（多半是超过了访问次数限制）时改从发布页查找。
-func checkLatestRelease(proxyUrl string) (UpdateInfo, error) {
+// updateRoutes 是访问 address 时依次尝试的网络路径：paths 为空时直连，本机的地址（测试用的模拟发布）也只直连。
+func updateRoutes(address string, paths []string) []string {
+	if parsed, err := url.Parse(address); len(paths) == 0 || err == nil && isLocalHost(parsed.Hostname()) {
+		return []string{""}
+	}
+	return paths
+}
+
+// checkLatestRelease 读取最新发布的信息。paths 是依次尝试的网络路径（见 fetchSubscription），一条不通时换下一条：
+// 没开代理、代理坏了或者 GitHub 直连不上时也能检查。
+func checkLatestRelease(paths []string) (UpdateInfo, error) {
+	info, _, err := checkReleaseVia(updateRoutes(releaseApiUrl, paths))
+	return info, err
+}
+
+// checkReleaseVia 依次经 paths 检查，返回结果和检查成功的路径；都失败时返回最后一条路径的错误。
+func checkReleaseVia(paths []string) (UpdateInfo, string, error) {
+	var lastErr error
+	for _, proxyUrl := range paths {
+		info, err := checkReleaseOnce(proxyUrl)
+		if err == nil {
+			return info, proxyUrl, nil
+		}
+		slog.Warn("检查更新失败", "proxy", proxyUrl, "err", err)
+		lastErr = err
+	}
+	return UpdateInfo{}, "", lastErr
+}
+
+// checkReleaseOnce 经 proxyUrl（空字符串表示直连）检查一次。GitHub 接口拒绝访问（多半是超过了访问次数限制）时
+// 改从发布页查找。
+func checkReleaseOnce(proxyUrl string) (UpdateInfo, error) {
 	client := updateClient(proxyUrl, updateCheckTimeout)
 	info, rejected, err := latestReleaseFromApi(client)
 	if !rejected {
@@ -190,24 +220,41 @@ func latestReleaseFromPage(client *http.Client) (UpdateInfo, error) {
 	return info, nil
 }
 
-// downloadLatestRelease 检查最新发布，有新版本时把本机架构的程序下载到 destination 并校验。
-func downloadLatestRelease(proxyUrl, destination string, progress func(received, total int64)) (UpdateInfo, error) {
-	info, err := checkLatestRelease(proxyUrl)
+// downloadLatestRelease 检查最新发布，有新版本时把本机架构的程序下载到 destination 并校验。paths 见 checkLatestRelease。
+func downloadLatestRelease(paths []string, destination string, progress func(received, total int64)) (UpdateInfo, error) {
+	return downloadReleaseVia(updateRoutes(releaseApiUrl, paths), destination, progress)
+}
+
+// downloadReleaseVia 经 paths 检查并下载：先用检查成功的路径，下载失败时换其他路径重新下载。
+func downloadReleaseVia(paths []string, destination string, progress func(received, total int64)) (UpdateInfo, error) {
+	info, working, err := checkReleaseVia(paths)
 	if err != nil {
 		return info, err
 	}
 	if !info.Newer {
 		return info, errors.New("已经是最新版本")
 	}
-	return info, downloadUpdate(updateClient(proxyUrl, updateDownloadLimit), info, destination, progress)
+	if !info.CanInstall {
+		return info, errors.New("这个版本的发布里没有本机可用的程序文件或校验文件，请到发布页手动下载")
+	}
+	ordered := []string{working}
+	for _, proxyUrl := range paths {
+		if proxyUrl != working {
+			ordered = append(ordered, proxyUrl)
+		}
+	}
+	for _, proxyUrl := range ordered {
+		if err = downloadUpdate(updateClient(proxyUrl, updateDownloadLimit), info, destination, progress); err == nil {
+			return info, nil
+		}
+		slog.Warn("下载更新失败", "proxy", proxyUrl, "err", err)
+	}
+	return info, err
 }
 
 // downloadUpdate 把新版本下载到 destination，并与 SHA256SUMS.txt 里的校验值比对，不一致时删除下载的文件。
 // progress 在下载过程中接收已下载和总字节数。
 func downloadUpdate(client *http.Client, info UpdateInfo, destination string, progress func(received, total int64)) error {
-	if !info.CanInstall {
-		return errors.New("这个版本的发布里没有本机可用的程序文件或校验文件，请到发布页手动下载")
-	}
 	expected, err := fetchChecksum(client, info.checksumsUrl, info.assetName)
 	if err != nil {
 		return err
