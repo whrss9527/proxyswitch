@@ -358,6 +358,49 @@ func TestEngineFileSubscription(t *testing.T) {
 	}
 }
 
+// TUN 模式只在订阅配置开着时交给内核：代理关了、换成别的配置或者关掉 TUN 时都不开。
+func TestEngineTunSettings(t *testing.T) {
+	fixture, core, _ := newSubscriptionFixture(t, subscriptionTestConfig)
+	engine := fixture.engine
+	installFakeCoreBinary(t, engine)
+	profile := *engine.Config().FindProfile("机场")
+	recordTestSubscription(t, engine, &profile)
+	setTun := func(enabled bool) {
+		t.Helper()
+		config := engine.Config().Clone()
+		config.Tun.Enabled = enabled
+		if err := engine.SaveConfig(config); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setTun(true)
+	if core.last().Tun {
+		t.Error("代理没开时不应开 TUN")
+	}
+	if err := engine.UseProfile("机场"); err != nil {
+		t.Fatal(err)
+	}
+	if !core.last().Tun {
+		t.Error("开着订阅配置时应开 TUN")
+	}
+	if err := engine.UseProfile("本机"); err != nil || core.last().Tun {
+		t.Errorf("换成别的配置时不应开 TUN：%v", err)
+	}
+	if err := engine.UseProfile("机场"); err != nil || !core.last().Tun {
+		t.Errorf("换回订阅配置时再开：%v", err)
+	}
+	if err := engine.TurnOff(); err != nil || core.last().Tun {
+		t.Errorf("关掉代理时 TUN 也关：%v", err)
+	}
+	if err := engine.UseProfile("机场"); err != nil {
+		t.Fatal(err)
+	}
+	setTun(false)
+	if core.last().Tun {
+		t.Error("关掉 TUN 模式后不应开")
+	}
+}
+
 func TestEngineSubscriptionWithoutCore(t *testing.T) {
 	fixture := newEngineFixture(t, subscriptionTestConfig)
 	if err := fixture.engine.UseProfile("机场"); err == nil || !strings.Contains(err.Error(), "保持运行") {

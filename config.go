@@ -83,6 +83,12 @@ type CoreConfig struct {
 	Port int    `json:"port"`
 }
 
+// TunConfig 是 TUN 模式（虚拟网卡）：开启后使用订阅配置时，内核以管理员权限运行并接管整台电脑的流量，
+// 不认系统代理的程序（游戏、部分命令行工具等）也走节点和分流规则。
+type TunConfig struct {
+	Enabled bool `json:"enabled"`
+}
+
 type Config struct {
 	Hotkey          string       `json:"hotkey"`
 	ProfileHotkeys  string       `json:"profile_hotkeys"`
@@ -102,6 +108,7 @@ type Config struct {
 	SpeedDisplay    string       `json:"speed_display"`
 	UrlLinks        bool         `json:"url_links"`
 	Core            CoreConfig   `json:"core"`
+	Tun             TunConfig    `json:"tun"`
 	CustomRules     []CustomRule `json:"custom_rules"`
 	Share           ShareConfig  `json:"share"`
 	AutoSwitch      AutoSwitch   `json:"auto_switch"`
@@ -181,6 +188,9 @@ const defaultConfigText = `// ProxySwitch 配置文件。推荐在托盘菜单�
 
   // 订阅使用的代理内核（mihomo）：path 留空使用 ProxySwitch 下载的内核，port 是它在本机提供代理的端口
   "core": { "path": "", "port": 17890 },
+  // TUN 模式（虚拟网卡）：使用订阅配置时接管整台电脑的流量，不认系统代理的程序（游戏、命令行工具等）也走节点和分流规则；
+  // 内核要以管理员权限运行，启动时确认一次
+  "tun": { "enabled": false },
 
   // 自定义规则：域名（包括子域名）或 IP / 网段固定走节点（proxy）、直连（direct）或被拦截（reject），
   // type 为 program 时按程序分流，value 是程序名或完整路径；
@@ -310,6 +320,16 @@ func (config *Config) FindProfile(name string) *Profile {
 		}
 	}
 	return nil
+}
+
+// HasSubscriptions 表示有使用订阅的配置。
+func (config *Config) HasSubscriptions() bool {
+	for index := range config.Profiles {
+		if config.Profiles[index].IsSubscription() {
+			return true
+		}
+	}
+	return false
 }
 
 // Clone 深拷贝配置，修改副本不影响正在使用的配置。

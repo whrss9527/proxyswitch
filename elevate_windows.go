@@ -58,10 +58,14 @@ type shellExecuteInfo struct {
 	process    uintptr
 }
 
-// runElevated 以管理员身份运行程序（弹出用户账户控制的确认），等它结束，退出码不是 0 时返回 elevatedExitError。
+// shellExecuteElevated 以管理员身份启动程序（弹出用户账户控制的确认），返回它的进程句柄（可能为 0），由调用方关闭。
 // ShellExecuteEx 要求调用的线程初始化了 COM，所以在一个专用线程上执行，结束后这个线程随之退出。
-func runElevated(file, parameters string, timeout time.Duration) error {
-	done := make(chan error, 1)
+func shellExecuteElevated(file, parameters string) (uintptr, error) {
+	type started struct {
+		process uintptr
+		err     error
+	}
+	done := make(chan started, 1)
 	go func() {
 		runtime.LockOSThread()
 		coInitialize()
@@ -75,28 +79,32 @@ func runElevated(file, parameters string, timeout time.Duration) error {
 		info.size = uint32(unsafe.Sizeof(info))
 		if result, _, err := procShellExecuteExW.Call(uintptr(unsafe.Pointer(&info))); result == 0 {
 			if errno, ok := err.(syscall.Errno); ok && errno == errorCancelled {
-				done <- errElevationCancelled
+				done <- started{err: errElevationCancelled}
 				return
 			}
-			done <- fmt.Errorf("无法以管理员身份运行：%v", err)
+			done <- started{err: fmt.Errorf("无法以管理员身份运行：%v", err)}
 			return
 		}
-		if info.process == 0 {
-			done <- nil
-			return
-		}
-		defer procCloseHandle.Call(info.process)
-		if wait, _, _ := procWaitForSingleObject.Call(info.process, uintptr(timeout.Milliseconds())); wait != 0 {
-			done <- errElevatedTimeout
-			return
-		}
-		var code uint32
-		procGetExitCodeProcess.Call(info.process, uintptr(unsafe.Pointer(&code)))
-		if code != 0 {
-			done <- elevatedExitError{code}
-			return
-		}
-		done <- nil
+		done <- started{process: info.process}
 	}()
-	return <-done
+	result := <-done
+	return result.process, result.err
+}
+
+// runElevated 以管理员身份运行程序（弹出用户账户控制的确认），等它结束，退出码不是 0 时返回 elevatedExitError。
+func runElevated(file, parameters string, timeout time.Duration) error {
+	process, err := shellExecuteElevated(file, parameters)
+	if err != nil || process == 0 {
+		return err
+	}
+	defer procCloseHandle.Call(process)
+	if wait, _, _ := procWaitForSingleObject.Call(process, uintptr(timeout.Milliseconds())); wait != 0 {
+		return errElevatedTimeout
+	}
+	var code uint32
+	procGetExitCodeProcess.Call(process, uintptr(unsafe.Pointer(&code)))
+	if code != 0 {
+		return elevatedExitError{code}
+	}
+	return nil
 }

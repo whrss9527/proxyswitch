@@ -174,7 +174,7 @@ func (app *App) updateShare(status Status) {
 	if app.subscriptionService == nil {
 		return
 	}
-	app.engine.RefreshShare(status)
+	app.engine.RefreshCore(status)
 	shareError := ""
 	if share.Enabled {
 		shareError = app.core.Status().Share.Error

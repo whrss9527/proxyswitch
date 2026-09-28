@@ -19,10 +19,21 @@ import (
 // 解压出程序放到内核的工作目录。其他平台（开发模式）不下载，用 --core 或配置里的 core.path 指定内核。
 
 // 官方 zip 的 SHA-256，发布构建时由 -ldflags 写入；为空表示这个版本不能在程序里下载内核。
+// coreExeSha256* 是 zip 里程序本身的 SHA-256：TUN 模式以管理员身份运行下载的内核前按它校验，为空时不校验。
 var (
-	coreSha256Amd64 = ""
-	coreSha256Arm64 = ""
+	coreSha256Amd64    = ""
+	coreSha256Arm64    = ""
+	coreExeSha256Amd64 = ""
+	coreExeSha256Arm64 = ""
 )
+
+// coreExeSha256 是本机架构的内核程序的 SHA-256，没有写入时为空。
+func coreExeSha256() string {
+	if runtime.GOARCH == "arm64" {
+		return coreExeSha256Arm64
+	}
+	return coreExeSha256Amd64
+}
 
 // coreReleaseBase 是官方发布的下载地址前缀，测试时指向本地的模拟服务。
 var coreReleaseBase = "https://github.com/MetaCubeX/mihomo/releases/download/"

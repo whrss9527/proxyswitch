@@ -277,7 +277,7 @@ func (backend *devBackend) healthLoop(interval time.Duration) {
 	for range time.Tick(interval) {
 		backend.mutex.Lock()
 		backend.engine.ReloadIfChanged()
-		backend.engine.RefreshShare(backend.engine.Status())
+		backend.engine.RefreshCore(backend.engine.Status())
 		target := backend.engine.HealthTarget()
 		backend.mutex.Unlock()
 		if target == "" {

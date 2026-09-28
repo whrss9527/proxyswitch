@@ -4,18 +4,21 @@
 #   make ui-test    设置页的浏览器自动化测试（需要 Python Playwright）
 #   make dev        在本机预览设置页（系统设置用内存模拟）；CORE=mihomo 程序的路径 可以试用订阅
 #   make resources  重新生成 exe 的图标、版本信息和清单资源（需要 goversioninfo）
-#   make core-sha256  下载固定版本的官方内核（Windows 的 zip），输出它们的 SHA-256
-#   发布：eval "$$(make -s core-sha256)"; make VERSION=2.1.0 CORE_SHA256_AMD64=... CORE_SHA256_ARM64=... resources windows
+#   make core-sha256  下载固定版本的官方内核（Windows 的 zip），输出 zip 和其中程序的 SHA-256
+#   发布：eval "$$(make -s core-sha256)"; make VERSION=2.1.0 CORE_SHA256_AMD64=... CORE_SHA256_ARM64=... CORE_EXE_SHA256_AMD64=... CORE_EXE_SHA256_ARM64=... resources windows
 
 VERSION ?= 2.0.0
 GO ?= go
 GOVERSIONINFO ?= $(shell $(GO) env GOPATH)/bin/goversioninfo
 # 官方内核 zip 的 SHA-256，Windows 版在程序里下载内核时按它校验；留空则这个版本不能在程序里下载内核。
+# CORE_EXE_SHA256_* 是 zip 里程序本身的，TUN 模式以管理员身份运行内核前按它校验；留空则不校验。
 CORE_SHA256_AMD64 ?=
 CORE_SHA256_ARM64 ?=
+CORE_EXE_SHA256_AMD64 ?=
+CORE_EXE_SHA256_ARM64 ?=
 CORE_VERSION := $(shell sed -n 's/^const coreVersion = "\(.*\)"$$/\1/p' core_config.go)
 CORE_RELEASE := https://github.com/MetaCubeX/mihomo/releases/download/$(CORE_VERSION)
-LDFLAGS := -H windowsgui -s -w -X main.appVersion=$(VERSION) -X main.coreSha256Amd64=$(CORE_SHA256_AMD64) -X main.coreSha256Arm64=$(CORE_SHA256_ARM64)
+LDFLAGS := -H windowsgui -s -w -X main.appVersion=$(VERSION) -X main.coreSha256Amd64=$(CORE_SHA256_AMD64) -X main.coreSha256Arm64=$(CORE_SHA256_ARM64) -X main.coreExeSha256Amd64=$(CORE_EXE_SHA256_AMD64) -X main.coreExeSha256Arm64=$(CORE_EXE_SHA256_ARM64)
 
 .PHONY: windows amd64 arm64 resources icons test vet ui-test dev core-sha256 clean
 
@@ -57,6 +60,8 @@ core-sha256:
 	done
 	@echo "CORE_SHA256_AMD64=$$(sha256sum dist/core/mihomo-windows-amd64-v1.zip | cut -d' ' -f1)"
 	@echo "CORE_SHA256_ARM64=$$(sha256sum dist/core/mihomo-windows-arm64.zip | cut -d' ' -f1)"
+	@echo "CORE_EXE_SHA256_AMD64=$$(unzip -p dist/core/mihomo-windows-amd64-v1.zip '*.exe' | sha256sum | cut -d' ' -f1)"
+	@echo "CORE_EXE_SHA256_ARM64=$$(unzip -p dist/core/mihomo-windows-arm64.zip '*.exe' | sha256sum | cut -d' ' -f1)"
 
 clean:
 	rm -rf dist

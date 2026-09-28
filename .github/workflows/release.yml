@@ -66,7 +66,7 @@ jobs:
         run: |
           VERSION="${TAG#v}"
           go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0
-          make resources windows VERSION="$VERSION" CORE_SHA256_AMD64="$CORE_SHA256_AMD64" CORE_SHA256_ARM64="$CORE_SHA256_ARM64"
+          make resources windows VERSION="$VERSION" CORE_SHA256_AMD64="$CORE_SHA256_AMD64" CORE_SHA256_ARM64="$CORE_SHA256_ARM64" CORE_EXE_SHA256_AMD64="$CORE_EXE_SHA256_AMD64" CORE_EXE_SHA256_ARM64="$CORE_EXE_SHA256_ARM64"
           git archive --format=zip --prefix="proxyswitch-$VERSION/" -o "dist/proxyswitch-$VERSION-src.zip" HEAD
           cd dist && sha256sum ProxySwitch.exe ProxySwitch-arm64.exe "proxyswitch-$VERSION-src.zip" > SHA256SUMS.txt && cat SHA256SUMS.txt
       - name: 发布
