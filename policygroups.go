@@ -8,7 +8,7 @@ import (
 	"unicode/utf8"
 )
 
-// 策略组：在「节点」之外给某类流量（流媒体、Telegram……）单独选节点，相当于 Quantumult X 的 policy。成员是正在使用的
+// 策略组：在「节点」之外给某类流量（流媒体、Telegram……）单独选节点。成员是正在使用的
 // 订阅里按名字筛出来的节点；手动选择的组还多了「跟随节点」「自动选择」和直连三个候选，默认跟随节点（正在使用的配置选中的
 // 节点），所以刚建好时行为不变。自定义规则的去向可以是某个策略组（写成 group:名字）。
 
@@ -56,7 +56,7 @@ var (
 	}
 )
 
-// groupTypeAliases 是类型的其他写法：下划线、Mac 版的写法和 Quantumult X 的叫法。
+// groupTypeAliases 是类型的其他写法：下划线、Mac 版的写法，以及 static、available 这类别的配置里常见的写法。
 var groupTypeAliases = map[string]string{
 	"url_test": groupUrlTest, "urltest": groupUrlTest, "url-latency-benchmark": groupUrlTest,
 	"load_balance": groupLoadBalance, "loadbalance": groupLoadBalance, "round-robin": groupLoadBalance,

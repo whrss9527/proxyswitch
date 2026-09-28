@@ -1457,7 +1457,7 @@ function openGroupEditor(index = null) {
         <div class="field">
           <span class="field-label">类型</span>
           <div class="segmented" role="group" aria-label="类型">${Object.entries(groupTypes).map(([type, info]) => html`<button type="button" data-group-type="${type}" aria-pressed="${draft.type === type}">${info.title}</button>`)}</div>
-          <div class="field-hint">${groupTypes[draft.type].detail}。Quantumult X 里叫 ${groupTypes[draft.type].quanx}。</div>
+          <div class="field-hint">${groupTypes[draft.type].detail}。</div>
         </div>
         <div class="field">
           <label class="field-label" for="group-filter">节点名筛选</label>
