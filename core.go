@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -596,6 +598,75 @@ func (core *Core) Connections() ([]CoreConnection, error) {
 	}
 	err := core.request(http.MethodGet, "/connections", nil, &result, coreApiTimeout)
 	return result.Connections, err
+}
+
+// NodeDelay 测订阅里一个节点的延迟（毫秒），连不上时返回 0（内核把测得 0 ms 也当作失败，真实的节点不会这么快）。
+func (core *Core) NodeDelay(profileId, node, testUrl string) int {
+	query := url.Values{"url": {testUrl}, "timeout": {strconv.Itoa(int(coreDelayTimeout / time.Millisecond))}}
+	var result struct {
+		Delay int `json:"delay"`
+	}
+	path := "/providers/proxies/" + url.PathEscape(coreProviderName(profileId)) + "/" + url.PathEscape(node) + "/healthcheck?" + query.Encode()
+	if core.request(http.MethodGet, path, nil, &result, coreDelayTimeout+2*time.Second) != nil {
+		return 0
+	}
+	return result.Delay
+}
+
+// TraceConnection 经内核访问一次（probe 发起访问），同时从内核的日志里找出这次连接的判定：命中哪条规则、走了哪个出口、
+// 有没有出错。内核在连接建立或拨号失败时写这行日志，所以先订阅日志再访问，访问结束后最多再等一会儿。
+// 内核没有运行时只访问，判定为 nil。
+func (core *Core) TraceConnection(ctx context.Context, host string, port int, probe func() DiagnoseProbe) (DiagnoseProbe, *RouteTrace) {
+	core.mutex.Lock()
+	controller, secret, running := core.controller, core.secret, core.process != nil
+	core.mutex.Unlock()
+	if !running || controller == "" {
+		return probe(), nil
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	found := make(chan *RouteTrace, 1)
+	go func() {
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+controller+"/logs?level=info", nil)
+		if err != nil {
+			return
+		}
+		request.Header.Set("Authorization", "Bearer "+secret)
+		// 日志是一直不结束的流，内核写出第一行时才返回响应头；取消 ctx 时结束。
+		response, err := (&http.Client{Transport: &http.Transport{Proxy: nil, DisableKeepAlives: true}}).Do(request)
+		if err != nil {
+			return
+		}
+		defer response.Body.Close()
+		scanner := bufio.NewScanner(response.Body)
+		scanner.Buffer(make([]byte, 64<<10), 1<<20)
+		for scanner.Scan() {
+			var event struct {
+				Payload string `json:"payload"`
+			}
+			if json.Unmarshal(scanner.Bytes(), &event) != nil {
+				continue
+			}
+			if trace := parseRouteTrace(event.Payload); trace != nil && trace.Host == strings.ToLower(host) && trace.Port == port {
+				found <- trace
+				return
+			}
+		}
+	}()
+	// 等内核开始订阅日志，免得错过这次连接的那一行。
+	select {
+	case <-time.After(300 * time.Millisecond):
+	case <-ctx.Done():
+	}
+	result := probe()
+	select {
+	case trace := <-found:
+		return result, trace
+	case <-time.After(diagnoseTraceWait):
+		return result, nil
+	case <-ctx.Done():
+		return result, nil
+	}
 }
 
 // Nodes 列出订阅里的节点和最近一次测得的延迟。

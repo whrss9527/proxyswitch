@@ -395,11 +395,12 @@ func runDevSettings(args []string) int {
 		backend.devRoutes(mux)
 		mux.HandleFunc("POST /api/dev/navigate", func(writer http.ResponseWriter, request *http.Request) {
 			var body struct {
-				Page   string `json:"page"`
-				Action string `json:"action"`
+				Page     string `json:"page"`
+				Action   string `json:"action"`
+				Argument string `json:"argument"`
 			}
 			if decodeJsonBody(writer, request, &body) {
-				settings.ShowPage(body.Page, body.Action)
+				settings.ShowPageWith(body.Page, body.Action, body.Argument)
 				writeJson(writer, http.StatusOK, map[string]bool{"ok": true})
 			}
 		})

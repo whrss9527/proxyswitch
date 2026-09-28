@@ -61,6 +61,9 @@ type SettingsBackend interface {
 	ShareActivity() ShareActivity
 	ClearShareHistory()
 	AllowShareFirewall() error
+	StartDiagnose(address, perspective string) (DiagnoseJob, error)
+	Diagnose() DiagnoseJob
+	CancelDiagnose()
 }
 
 type SettingsState struct {
@@ -109,11 +112,13 @@ type CoreInfo struct {
 }
 
 // NavigateInfo 是让已打开的设置页切换页面的请求，Serial 每次加一，页面发现变化时切到 Page；
-// Action 不为空时切换后再执行页面上的这个操作，例如托盘菜单的「检查更新」让关于页立即检查。
+// Action 不为空时切换后再执行页面上的这个操作，例如托盘菜单的「检查更新」让关于页立即检查，
+// 命令行的「diagnose 网址」让网址诊断页诊断 Argument 里的网址。
 type NavigateInfo struct {
-	Page   string `json:"page"`
-	Action string `json:"action,omitempty"`
-	Serial int    `json:"serial"`
+	Page     string `json:"page"`
+	Action   string `json:"action,omitempty"`
+	Argument string `json:"argument,omitempty"`
+	Serial   int    `json:"serial"`
 }
 
 type PathsInfo struct {
@@ -281,6 +286,9 @@ func (settings *SettingsServer) Start() (string, error) {
 	mux.HandleFunc("GET /api/share/activity", settings.handleShareActivity)
 	mux.HandleFunc("POST /api/share/clear", settings.handleShareClear)
 	mux.HandleFunc("POST /api/share/firewall", settings.handleShareFirewall)
+	mux.HandleFunc("GET /api/diagnose", settings.handleDiagnose)
+	mux.HandleFunc("POST /api/diagnose", settings.handleStartDiagnose)
+	mux.HandleFunc("POST /api/diagnose/cancel", settings.handleCancelDiagnose)
 	if settings.extra != nil {
 		settings.extra(mux)
 	}
@@ -296,9 +304,14 @@ func (settings *SettingsServer) Start() (string, error) {
 
 // ShowPage 请求已经打开的设置页切到 page 并执行 action（可以为空），页面下次同步状态时切换。
 func (settings *SettingsServer) ShowPage(page, action string) {
+	settings.ShowPageWith(page, action, "")
+}
+
+// ShowPageWith 和 ShowPage 一样，argument 是交给 action 的参数。
+func (settings *SettingsServer) ShowPageWith(page, action, argument string) {
 	settings.mutex.Lock()
 	defer settings.mutex.Unlock()
-	settings.navigate = NavigateInfo{Page: page, Action: action, Serial: settings.navigate.Serial + 1}
+	settings.navigate = NavigateInfo{Page: page, Action: action, Argument: argument, Serial: settings.navigate.Serial + 1}
 }
 
 func (settings *SettingsServer) state() SettingsState {
@@ -815,4 +828,31 @@ func (settings *SettingsServer) handleShareFirewall(writer http.ResponseWriter, 
 		return
 	}
 	writeJson(writer, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// ---------- 网址诊断 ----------
+
+func (settings *SettingsServer) handleDiagnose(writer http.ResponseWriter, request *http.Request) {
+	writeJson(writer, http.StatusOK, settings.backend.Diagnose())
+}
+
+func (settings *SettingsServer) handleStartDiagnose(writer http.ResponseWriter, request *http.Request) {
+	var body struct {
+		Url         string `json:"url"`
+		Perspective string `json:"perspective"`
+	}
+	if !decodeJsonBody(writer, request, &body) {
+		return
+	}
+	job, err := settings.backend.StartDiagnose(body.Url, body.Perspective)
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJson(writer, http.StatusOK, job)
+}
+
+func (settings *SettingsServer) handleCancelDiagnose(writer http.ResponseWriter, request *http.Request) {
+	settings.backend.CancelDiagnose()
+	writeJson(writer, http.StatusOK, settings.backend.Diagnose())
 }

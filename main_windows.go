@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
@@ -33,6 +34,8 @@ const usageText = `用法：
   ProxySwitch.exe toggle          开 / 关切换
   ProxySwitch.exe use <配置名>     切换到指定配置并开启
   ProxySwitch.exe share [on|off]  开关局域网共享（不写 on / off 表示切换）
+  ProxySwitch.exe diagnose [网址] [--device]
+                                  网址诊断：检查网站为什么打不开，--device 从局域网设备（PS5 等）的视角
   ProxySwitch.exe status          查看当前状态（退出码 0 表示已开启，1 表示已关闭）
   ProxySwitch.exe settings        打开设置
 
@@ -165,6 +168,8 @@ func runCommand(paths Paths, command string, arguments []string) int {
 			enabled, _ := shareCommandTarget(argument, config.Share.Enabled)
 			return engine.SetShareEnabled(enabled)
 		})
+	case "diagnose":
+		return runDiagnoseCommand(paths, arguments)
 	case "status":
 		return showStatus(paths)
 	case "help", "h", "?":
@@ -173,6 +178,51 @@ func runCommand(paths Paths, command string, arguments []string) int {
 	}
 	messageBox(0, "不认识的命令："+command+"\n\n"+usageText, appName, mbOk|mbIconWarning|mbSetForeground|mbTopmost)
 	return exitUsage
+}
+
+// runDiagnoseCommand 打开网址诊断页，写了网址时立即诊断。托盘程序没有运行时先启动它。
+func runDiagnoseCommand(paths Paths, arguments []string) int {
+	address, perspective := "", diagnosePc
+	for _, argument := range arguments {
+		switch strings.ToLower(strings.TrimLeft(argument, "-/")) {
+		case "device", "ps5", "share":
+			perspective = diagnoseDevice
+		default:
+			address = strings.TrimSpace(argument)
+		}
+	}
+	if address != "" {
+		if _, err := normalizeDiagnoseUrl(address); err != nil {
+			messageBox(0, err.Error(), appName, mbOk|mbIconWarning|mbSetForeground|mbTopmost)
+			return exitUsage
+		}
+	}
+	payload := "diagnose\x00" + address + "\x00" + perspective
+	if window := findRunningInstance(); window != 0 {
+		return sendCommand(window, payload)
+	}
+	// 没在运行：启动托盘程序，再把命令交给它。
+	if err := startDetached(); err != nil {
+		messageBox(0, "无法启动 ProxySwitch："+err.Error(), appName, mbOk|mbIconError|mbSetForeground|mbTopmost)
+		return exitFailure
+	}
+	if window := waitForRunningInstance(10 * time.Second); window != 0 {
+		return sendCommand(window, payload)
+	}
+	return exitFailure
+}
+
+// startDetached 在后台启动托盘程序，命令行在它没有运行时用。
+func startDetached() error {
+	executable, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	command := exec.Command(executable)
+	if err := command.Start(); err != nil {
+		return err
+	}
+	return command.Process.Release()
 }
 
 func forwardOrRun(paths Paths, payload string, action func(engine *Engine) error) int {
