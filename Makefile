@@ -7,7 +7,7 @@
 #   make core-sha256  下载固定版本的官方内核（Windows 的 zip），输出 zip 和其中程序的 SHA-256
 #   发布：eval "$$(make -s core-sha256)"; make VERSION=2.1.0 CORE_SHA256_AMD64=... CORE_SHA256_ARM64=... CORE_EXE_SHA256_AMD64=... CORE_EXE_SHA256_ARM64=... resources windows
 
-VERSION ?= 2.0.0
+VERSION ?= 2.1.0
 GO ?= go
 GOVERSIONINFO ?= $(shell $(GO) env GOPATH)/bin/goversioninfo
 # 官方内核 zip 的 SHA-256，Windows 版在程序里下载内核时按它校验；留空则这个版本不能在程序里下载内核。
