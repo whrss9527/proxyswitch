@@ -218,13 +218,13 @@ const defaultConfigText = `// ProxySwitch 配置文件。推荐在托盘菜单�
     // },
     // {
     //   "name": "机场",
-    //   // 订阅地址：由内置的代理内核连接订阅里的节点，不需要填 server
+    //   // 订阅地址：由内置的代理内核连接订阅里的节点，不需要填 server；也可以是本机的文件（file:///C:/节点/sub.yaml）
     //   "subscription": "https://example.com/api/v1/client/subscribe?token=...",
     //   // 选中的节点，留空自动选择延迟最低的
     //   "node": "",
     //   // rule 按规则分流 / global 全部走节点
     //   "mode": "rule",
-    //   // 分流规则：小火箭（Shadowrocket）规则配置的地址，留空用内置的大陆直连（国内的网站和 IP 直连，其余走节点）
+    //   // 分流规则：小火箭（Shadowrocket）规则配置或 Clash 配置的地址，留空用内置的大陆直连（国内的网站和 IP 直连，其余走节点）
     //   "rules": "",
     //   "apply_to": ["system"]
     // }
@@ -400,7 +400,7 @@ func normalizeConfig(config *Config) {
 		if profile.Color == "" {
 			profile.Color = profilePalette[index%len(profilePalette)]
 		}
-		profile.Subscription = strings.TrimSpace(profile.Subscription)
+		profile.Subscription = normalizeSubscriptionAddress(profile.Subscription)
 		if profile.IsSubscription() {
 			// 订阅由内核代理：代理地址就是内核的本地端口，端口改了随之更新。
 			profile.Server = coreServer(config.Core.Port)

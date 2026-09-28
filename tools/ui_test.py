@@ -508,6 +508,18 @@ def run_flows(page, api, info, config_path):
     check(wait_until(lambda: "5 个节点" in page.inner_text(".dialog [data-check-result]"), timeout=10), "检查订阅显示节点数")
     check("已用 8.0 GB / 100 GB" in page.inner_text(".dialog [data-check-result]"), "检查订阅显示流量和到期时间")
     check(page.input_value(".dialog [data-field=name]") == "测试机场", "没填名字时用机场给的名字")
+    # 本机的订阅文件：file:// 地址也能检查；不完整的路径提示写法。
+    subscription_file = os.path.join(tempfile.mkdtemp(prefix="proxyswitch-sub-"), "我的节点.yaml")
+    with open(subscription_file, "wb") as output:
+        output.write(urllib.request.urlopen(subscription_url, timeout=5).read())
+    page.fill(".dialog [data-field=subscription]", "sub.yaml")
+    page.click(".dialog [data-action=dialog-test]")
+    check(wait_until(lambda: "完整的路径" in page.inner_text(".dialog [data-error=subscription]"), timeout=3), "订阅地址不完整时提示本机文件的写法")
+    page.fill(".dialog [data-field=subscription]", "file://" + subscription_file)
+    page.click(".dialog [data-action=dialog-test]")
+    check(wait_until(lambda: "5 个节点" in page.inner_text(".dialog [data-check-result]") and "已用" not in page.inner_text(".dialog [data-check-result]"), timeout=10), "检查本机的订阅文件")
+    check(page.input_value(".dialog [data-field=name]") == "测试机场", "已经有名字时不用文件名")
+    page.fill(".dialog [data-field=subscription]", subscription_url)
     # 分流：默认按规则分流、用内置的大陆直连；可以选小火箭规则的预设或填自定义规则的地址。
     check(page.get_attribute(".dialog [data-mode=rule]", "aria-pressed") == "true" and page.input_value(".dialog [data-field=rulesChoice]") == "", "默认按规则分流，用内置的大陆直连")
     page.click(".dialog [data-mode=global]")

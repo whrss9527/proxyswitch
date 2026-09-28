@@ -7,11 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"mime"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -69,10 +72,14 @@ func (err httpStatusError) Error() string {
 }
 
 // fetchSubscription 下载订阅，proxies 是依次尝试的网络路径：空字符串表示直连，其余是代理地址。
-// 连不上时换下一条路径；服务器返回了错误状态或内容不对时不再重试。
+// 连不上时换下一条路径；服务器返回了错误状态或内容不对时不再重试。本机的文件（file://）直接读取。
 func fetchSubscription(address string, proxies []string) (subscriptionDownload, error) {
+	address = normalizeSubscriptionAddress(address)
 	if err := validateSubscriptionUrl(address); err != nil {
 		return subscriptionDownload{}, err
+	}
+	if path, isFile := localFilePath(address); isFile {
+		return readSubscriptionFile(path)
 	}
 	var firstErr error
 	for _, proxyUrl := range proxies {
@@ -136,12 +143,97 @@ func friendlyDownloadError(err error, timeout time.Duration) string {
 	return strings.ReplaceAll(friendlyRequestError(err, timeout), "测速地址", "下载地址")
 }
 
+// readSubscriptionFile 读取本机的订阅文件，名字用文件名。
+func readSubscriptionFile(path string) (subscriptionDownload, error) {
+	file, err := os.Open(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return subscriptionDownload{}, fmt.Errorf("找不到订阅文件 %s", path)
+	}
+	var content []byte
+	if err == nil {
+		content, err = io.ReadAll(io.LimitReader(file, maxSubscriptionSize+1))
+		file.Close()
+	}
+	if err != nil {
+		var pathErr *fs.PathError
+		if errors.As(err, &pathErr) {
+			err = pathErr.Err
+		}
+		return subscriptionDownload{}, fmt.Errorf("读不了订阅文件 %s：%v", path, err)
+	}
+	if len(content) > maxSubscriptionSize {
+		return subscriptionDownload{}, fmt.Errorf("%w：超过 %d MB", errBadSubscription, maxSubscriptionSize>>20)
+	}
+	format, nodes, err := inspectSubscription(content)
+	if err != nil {
+		return subscriptionDownload{}, err
+	}
+	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	if runes := []rune(name); len(runes) > maxProfileNameLength {
+		name = string(runes[:maxProfileNameLength])
+	}
+	return subscriptionDownload{Content: content, Name: name, Nodes: nodes, Format: format}, nil
+}
+
 func validateSubscriptionUrl(address string) error {
+	address = normalizeSubscriptionAddress(address)
+	if _, isFile := localFilePath(address); isFile {
+		return nil
+	}
 	parsed, err := url.Parse(strings.TrimSpace(address))
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-		return errors.New("订阅地址应以 http:// 或 https:// 开头")
+		return errors.New(`订阅地址应以 http:// 或 https:// 开头，本机的文件填完整的路径，例如 C:\节点\sub.yaml`)
 	}
 	return nil
+}
+
+// localFilePath 是 file:// 地址在本机的路径；不是本机文件的地址时 ok 为 false。
+func localFilePath(address string) (path string, ok bool) {
+	parsed, err := url.Parse(strings.TrimSpace(address))
+	if err != nil || parsed.Scheme != "file" {
+		return "", false
+	}
+	path = fileUrlPath(parsed, runtime.GOOS == "windows")
+	return path, path != ""
+}
+
+// fileUrlPath 把 file:// 地址换成路径：Windows 上 file:///C:/a 是 C:\a，file://server/share/a 是 \\server\share\a；
+// 其他系统只认本机的路径。
+func fileUrlPath(parsed *url.URL, windows bool) string {
+	path, remote := parsed.Path, parsed.Host != "" && parsed.Host != "localhost"
+	switch {
+	case path == "" || path == "/":
+		return ""
+	case !windows && remote:
+		return ""
+	case !windows:
+		return path
+	case remote:
+		path = "//" + parsed.Host + path
+	case len(path) >= 3 && path[0] == '/' && path[2] == ':':
+		path = path[1:]
+	}
+	return strings.ReplaceAll(path, "/", `\`)
+}
+
+// windowsPathPattern 认出 Windows 的绝对路径：C:\a.yaml、C:/a.yaml、\\server\share\a.yaml。
+var windowsPathPattern = regexp.MustCompile(`^([A-Za-z]:[\\/]|\\\\[^\\])`)
+
+// fileUrlEscaper 转义路径里在网址中另有含义的字符，其余的（空格、中文）原样保留，地址还看得懂。
+var fileUrlEscaper = strings.NewReplacer("%", "%25", "#", "%23", "?", "%3F")
+
+// normalizeSubscriptionAddress 去掉首尾空白，把粘贴的 Windows 文件路径换成 file:// 地址，
+// 例如 C:\订阅\a.yaml 换成 file:///C:/订阅/a.yaml。
+func normalizeSubscriptionAddress(text string) string {
+	text = strings.TrimSpace(text)
+	if !windowsPathPattern.MatchString(text) {
+		return text
+	}
+	slashed := fileUrlEscaper.Replace(strings.ReplaceAll(text, `\`, "/"))
+	if strings.HasPrefix(slashed, "//") {
+		return "file:" + slashed
+	}
+	return "file:///" + slashed
 }
 
 // parseSubscriptionUserinfo 解析 subscription-userinfo：upload=字节; download=字节; total=字节; expire=Unix 秒。
