@@ -84,6 +84,8 @@ type App struct {
 	// toasts 显示系统通知（可以带按钮），托盘程序启动后才创建；noticeToken 是通知上「立即更新」的链接带的随机数。
 	toasts      *toaster
 	noticeToken string
+	// tunActive 是上次看到的 TUN 模式有没有在接管流量，刚开始接管时清除 DNS 缓存。
+	tunActive bool
 	// 这次是程序内更新后重新启动，保持原来的代理状态。
 	restartedForUpdate bool
 	// 最近一次检查更新发现的新版本，设置页和托盘菜单据此提示。
@@ -247,6 +249,14 @@ func (app *App) refresh() {
 	}
 	status := app.engine.Status()
 	app.updateShare(status)
+	if app.subscriptionService != nil {
+		active := app.subscriptionService.core.Status().Tun.Active
+		if active && !app.tunActive {
+			// 之前缓存的真实地址会让连接绕过内核的域名规则，清掉后程序重新解析，拿到内核给的地址。
+			go func() { _ = flushDnsCache() }()
+		}
+		app.tunActive = active
+	}
 	app.tray.Update(app.iconFor(status), app.tooltipFor(status))
 }
 

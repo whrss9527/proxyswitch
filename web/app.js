@@ -661,6 +661,17 @@ async function runDiagnoseAction(action) {
     case "open_proxies":
       goto("proxies");
       break;
+    case "flush_dns":
+      try {
+        await api("POST", "/api/dns/flush");
+        toast("Edge、Chrome 自己也会记着地址一分钟左右，还是打不开时稍等再试", "success", "已清除 DNS 缓存");
+        again();
+      } catch (error) {
+        if (error.status !== 0 && error.status !== 403) {
+          toast(error.message, "danger", "没有清除");
+        }
+      }
+      break;
     case "copy_report":
       if (await copyText(job.report)) {
         toast("可以粘贴到问题反馈里，或者发给帮你排查的人", "success", "已复制诊断报告");

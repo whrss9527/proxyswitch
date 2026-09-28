@@ -68,6 +68,7 @@ type SettingsBackend interface {
 	LoopbackApps() (LoopbackInfo, error)
 	SetLoopback(exempt []string) (LoopbackInfo, error)
 	RunningPrograms() []string
+	FlushDns() error
 	WinHttpInfo() WinHttpInfo
 	SetWinHttp(useProxy bool) (WinHttpInfo, error)
 	WslInfo() WslInfo
@@ -312,6 +313,7 @@ func (settings *SettingsServer) Start() (string, error) {
 	mux.HandleFunc("POST /api/links/clash", settings.handleClashLinks)
 	mux.HandleFunc("GET /api/loopback", settings.handleLoopback)
 	mux.HandleFunc("GET /api/programs", settings.handlePrograms)
+	mux.HandleFunc("POST /api/dns/flush", settings.handleFlushDns)
 	mux.HandleFunc("GET /api/winhttp", settings.handleWinHttp)
 	mux.HandleFunc("POST /api/winhttp", settings.handleSetWinHttp)
 	mux.HandleFunc("GET /api/wsl", settings.handleWsl)
@@ -853,6 +855,15 @@ func (settings *SettingsServer) handleShareActivity(writer http.ResponseWriter, 
 func (settings *SettingsServer) handleShareClear(writer http.ResponseWriter, request *http.Request) {
 	settings.backend.ClearShareHistory()
 	writeJson(writer, http.StatusOK, settings.backend.ShareActivity())
+}
+
+// handleFlushDns 清除这台电脑的 DNS 缓存。
+func (settings *SettingsServer) handleFlushDns(writer http.ResponseWriter, request *http.Request) {
+	if err := settings.backend.FlushDns(); err != nil {
+		writeError(writer, http.StatusConflict, err.Error())
+		return
+	}
+	writeJson(writer, http.StatusOK, map[string]bool{"ok": true})
 }
 
 // handleWinHttp 是 WinHTTP 的代理（Windows 更新等系统服务用它）和现在可以设给它的代理。
