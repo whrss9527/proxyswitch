@@ -42,12 +42,14 @@ func TestToastNotifier(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer comRelease(notifier)
-	// IToastNotifier.get_Setting：0 表示可以显示，其余是被用户、组策略等关掉了。
+	// IToastNotifier.get_Setting：0 表示可以显示，其余是被用户、组策略等关掉了。没有打包的程序常常读不到
+	// （Element not found），程序里不用它，这里只记下来。
 	var setting int32
 	if err := comCall(notifier, 8, uintptr(unsafe.Pointer(&setting))); err != nil {
-		t.Fatal(err)
+		t.Logf("读不到通知设置：%v", err)
+	} else {
+		t.Logf("通知设置：%d", setting)
 	}
-	t.Logf("通知设置：%d", setting)
 	notice := Notice{Level: noticeWarning, Title: "ProxySwitch 测试", Text: "测试通知 <马上收起> & 恢复", Actions: []NoticeAction{{Label: "关闭代理", Link: turnOffLink()}}}
 	toast, err := createToast(toastXml(notice, icon), "test")
 	if err != nil {

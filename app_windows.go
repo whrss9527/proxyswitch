@@ -195,9 +195,10 @@ func (app *App) registerLinks(enabled bool) {
 	}
 }
 
-// toastsEnabled 表示通知用系统通知显示：登记了链接（点通知和按钮靠它），系统通知也可用。
+// toastsEnabled 表示通知用系统通知显示：登记了链接（点通知和按钮靠它），Windows 也支持没有打包的程序只在注册表里
+// 登记应用 ID 就显示通知（Windows 10 1809 起）。
 func (app *App) toastsEnabled() bool {
-	return app.toasts != nil && app.linksRegistered != nil && *app.linksRegistered
+	return app.toasts != nil && app.linksRegistered != nil && *app.linksRegistered && windowsBuild() >= toastMinBuild
 }
 
 func (app *App) registerHotkeys(config *Config) {
