@@ -74,8 +74,8 @@ func TestCoreHostProcess(t *testing.T) {
 	if err := writeSubscriptionFile(dir, "pa", []byte("proxies:\n  - {name: a, type: http, server: 127.0.0.1, port: 1}\n")); err != nil {
 		t.Fatal(err)
 	}
-	apiPort, _ := freeLocalPort()
-	port, _ := freeLocalPort()
+	apiPort, _ := freeProxyPort()
+	port, _ := freeProxyPort()
 	controller := "127.0.0.1:" + strconv.Itoa(apiPort)
 	settings := CoreSettings{Binary: binary, Dir: dir, Port: port, Active: "pa", Mode: "rule", Subscriptions: []CoreSubscription{{Id: "pa"}}}
 	configPath := filepath.Join(dir, coreConfigName)

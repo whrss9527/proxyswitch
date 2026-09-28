@@ -110,7 +110,7 @@ func TestCoreTunElevation(t *testing.T) {
 	}
 	core := newCore(nil)
 	defer core.Stop()
-	port, _ := freeLocalPort()
+	port, _ := freeProxyPort()
 	settings := CoreSettings{
 		Binary: binary, Dir: dir, Port: port, TestUrl: "http://" + coreTestHost + "/", Active: "pa", Mode: "rule",
 		Subscriptions: []CoreSubscription{{Id: "pa", Revision: "1"}}, Tun: true,

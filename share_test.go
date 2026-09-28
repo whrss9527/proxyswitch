@@ -244,8 +244,8 @@ func TestShareHistory(t *testing.T) {
 
 // 从设置页的接口开关局域网共享：真实的内核监听共享入口，设备经它上网，页面看到正在使用的设备。
 func TestSettingsShareFlow(t *testing.T) {
-	corePort, _ := freeLocalPort()
-	sharePort, _ := freeLocalPort()
+	corePort, _ := freeProxyPort()
+	sharePort, _ := freeProxyPort()
 	fixture := newSettingsFixture(t, fmt.Sprintf(`{"core": {"port": %d}, "share": {"port": %d}, "profiles": []}`, corePort, sharePort))
 	defer fixture.backend.Close()
 	setShare := func(enabled bool) (int, []byte) {

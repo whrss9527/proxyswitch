@@ -183,7 +183,7 @@ func TestCoreProcessRule(t *testing.T) {
 	}
 	core := newCore(nil)
 	defer core.Stop()
-	port, _ := freeLocalPort()
+	port, _ := freeProxyPort()
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
