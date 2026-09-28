@@ -417,6 +417,22 @@ def run_flows(page, api, info, config_path):
     check(not wsl["mirrored"] and wsl["restart"], "撤销 WSL 的镜像网络设置")
     page.click("[data-action=wsl-restart]")
     check(wait_until(lambda: page.locator("[data-action=wsl-setup]").count() == 1), "撤销并重启后可以重新设置")
+    # WinHTTP：代理关着时不能设；开启 HTTP 代理后设为当前代理，诊断里也能看到，再改回直连。
+    before = api.call("GET", "/api/state")
+    http_profile = next(profile["name"] for profile in before["config"]["profiles"] if profile.get("server") == info["http_proxy"])
+    api.call("POST", "/api/off")
+    check(wait_until(lambda: page.locator("[data-action=winhttp-proxy][disabled]").count() == 1 and "开启代理后可以设为当前代理" in page.inner_text(".page")), "代理关着时不能设 WinHTTP")
+    api.call("POST", "/api/use", {"name": http_profile})
+    check(wait_until(lambda: page.locator("[data-action=winhttp-proxy]:not([disabled])").count() == 1), "开启 HTTP 代理后可以设 WinHTTP")
+    page.click("[data-action=winhttp-proxy]")
+    check(wait_until(lambda: page.locator(".badge:has-text('正在使用当前代理')").count() == 1), "WinHTTP 设为当前代理")
+    check(api.call("GET", "/api/winhttp")["proxy"] == info["http_proxy"] and api.call("GET", "/api/diagnostics")["winhttp"] == info["http_proxy"], "WinHTTP 用的是当前代理，诊断里能看到")
+    page.click("[data-action=winhttp-direct]")
+    check(wait_until(lambda: api.call("GET", "/api/winhttp")["proxy"] == "" and page.locator("[data-action=winhttp-direct]").count() == 0), "WinHTTP 改回直连")
+    if before["status"]["state"] != "on":
+        api.call("POST", "/api/off")
+    elif before["status"]["profile"] != http_profile:
+        api.call("POST", "/api/use", {"name": before["status"]["profile"]})
     page.click("[data-page=general]")
 
     # ---------- 配置文件被手动修改 ----------

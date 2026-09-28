@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -36,6 +37,9 @@ type devBackend struct {
 	// wslConfig 模拟 .wslconfig 的内容，wslRestart 表示改过设置还没重启 WSL。
 	wslConfig  string
 	wslRestart bool
+	// winHttpProxy 和 winHttpBypass 模拟 WinHTTP 的代理设置。
+	winHttpProxy  string
+	winHttpBypass string
 }
 
 var devDefaultNetwork = NetworkInfo{
@@ -164,6 +168,7 @@ func (backend *devBackend) Diagnostics() Diagnostics {
 		Git:          GitStatus{Available: true, Path: "git", HttpProxy: system.Git, HttpsProxy: system.Git},
 		Npm:          npm,
 		NpmrcPath:    "~/.npmrc",
+		WinHttp:      backend.winHttpProxy,
 	}
 	if crash, when := readPreviousCrash(backend.engine.paths.PreviousCrash, time.Now()); crash != "" {
 		diagnostics.LastCrash, diagnostics.LastCrashTime = crash, when.Format("2006-01-02 15:04")
@@ -221,6 +226,30 @@ func (backend *devBackend) Close() {
 func (backend *devBackend) InstallUpdate(progress func(received, total int64)) error {
 	_, err := downloadLatestRelease(backend.UpdatePaths(), filepath.Join(backend.engine.paths.Dir, "update.download"), progress)
 	return err
+}
+
+// WinHttpInfo 在开发模式下返回模拟的 WinHTTP 代理设置。
+func (backend *devBackend) WinHttpInfo() WinHttpInfo {
+	backend.mutex.Lock()
+	defer backend.mutex.Unlock()
+	info := WinHttpInfo{Proxy: backend.winHttpProxy, Bypass: backend.winHttpBypass}
+	info.Suggested, info.SuggestedBypass, info.Unsupported = backend.engine.WinHttpSuggestion()
+	return info
+}
+
+// SetWinHttp 在开发模式下只改模拟的设置。
+func (backend *devBackend) SetWinHttp(useProxy bool) (WinHttpInfo, error) {
+	info := backend.WinHttpInfo()
+	if useProxy && info.Suggested == "" {
+		return info, errors.New(info.Unsupported)
+	}
+	backend.mutex.Lock()
+	backend.winHttpProxy, backend.winHttpBypass = "", ""
+	if useProxy {
+		backend.winHttpProxy, backend.winHttpBypass = info.Suggested, info.SuggestedBypass
+	}
+	backend.mutex.Unlock()
+	return backend.WinHttpInfo(), nil
 }
 
 // WslInfo 在开发模式下模拟装了 Ubuntu、支持镜像网络的 WSL。

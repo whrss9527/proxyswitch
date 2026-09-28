@@ -1037,7 +1037,47 @@ function systemPage() {
     </div>
 
     <div class="section-title">WSL</div>
-    <div class="card card-group">${wslCard()}</div>`;
+    <div class="card card-group">${wslCard()}</div>
+
+    <div class="section-title">系统服务</div>
+    <div class="card card-group">${winHttpCard()}</div>`;
+}
+
+// winHttpCard 是 WinHTTP 一栏：Windows 更新等系统服务用的代理，可以设为当前代理或改回直连（要管理员确认）。
+// 它不跟随代理的开关，所以说明设成内置内核和其他代理软件时各要注意什么。
+function winHttpCard() {
+  const winhttp = app.winhttp;
+  const title = "让系统服务走代理（WinHTTP）";
+  const about = "Windows 更新、Microsoft Store 的下载等系统服务不看系统代理，用的是整台电脑的 WinHTTP 代理。它不跟随代理的开关，修改要管理员确认";
+  if (!winhttp || winhttp.loading) {
+    return settingCard({ iconName: "globe", title, description: about, control: html`<span class="caption muted" style="display:inline-flex;gap:6px;align-items:center"><span class="spinner" style="width:12px;height:12px"></span>正在读取</span>` });
+  }
+  if (winhttp.error) {
+    return settingCard({ iconName: "globe", title, description: html`<span style="color:var(--danger)">${winhttp.error}</span>`, control: html`<button class="button" data-action="winhttp-refresh">${icon("refresh")}重试</button>` });
+  }
+  const info = winhttp.info;
+  const busy = winhttp.busy ? raw("disabled") : "";
+  const spinner = winhttp.busy ? html`<span class="spinner"></span>` : "";
+  const using = info.proxy !== "" && info.proxy === info.suggested;
+  let current = html`现在：直接连接`;
+  if (info.error) {
+    current = html`<span style="color:var(--danger)">${info.error}</span>`;
+  } else if (info.proxy) {
+    current = html`现在：<span class="mono">${info.proxy}</span>`;
+  }
+  let note = "";
+  if (using && app.config && info.proxy === `127.0.0.1:${app.config.core.port}`) {
+    note = "内置内核在 ProxySwitch 运行期间一直可用，退出 ProxySwitch 前改回直连";
+  } else if (using) {
+    note = "这个代理软件要一直开着，不用时改回直连";
+  } else if (!info.suggested && info.unsupported) {
+    note = info.unsupported;
+  } else if (info.suggested) {
+    note = html`当前代理：<span class="mono">${info.suggested}</span>`;
+  }
+  const direct = info.proxy ? html`<button class="button" data-action="winhttp-direct" ${busy}>${spinner}改回直连</button>` : "";
+  const useProxy = using ? html`<span class="badge success">正在使用当前代理</span>` : html`<button class="button" data-action="winhttp-proxy" ${info.suggested ? busy : raw("disabled")} title="${info.unsupported || ""}">${info.proxy ? "" : spinner}设为当前代理</button>`;
+  return settingCard({ iconName: "globe", title, description: html`${about}。${current}${note ? html`。${note}` : ""}`, control: html`${useProxy}${direct}` });
 }
 
 // wslCard 是 WSL 一栏：一键设置成使用本机的代理（镜像网络 + 自动代理），改完提示重启 WSL；
@@ -1188,6 +1228,7 @@ function diagnosticsPage() {
         <dt>npm proxy</dt><dd>${valueOrUnset(diagnostics.npm.proxy)}</dd>
         <dt>npm https-proxy</dt><dd>${valueOrUnset(diagnostics.npm["https-proxy"])}</dd>
         <dt>.npmrc</dt><dd class="faint mono">${diagnostics.npmrc_path}</dd>
+        <dt>WinHTTP</dt><dd>${diagnostics.winhttp ? html`<span class="mono">${diagnostics.winhttp}</span>` : html`<span class="faint">直接连接</span>`}</dd>
       </dl>`;
   }
   const logLines = (app.log || "").split("\n").map((line) => {
