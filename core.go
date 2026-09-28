@@ -959,21 +959,39 @@ func (core *Core) logTail() string {
 	return text
 }
 
+// freeLocalPort 找一个 TCP 和 UDP 都空着的本机端口：内核的代理端口两种都要监听，而 Windows 为 Hyper-V、WSL 等
+// 保留的端口段对 TCP 和 UDP 不一样，TCP 分到的空闲端口可能正好是保留给 UDP 的。
 func freeLocalPort() (int, error) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return 0, err
+	var lastErr error
+	for range 20 {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return 0, err
+		}
+		port := listener.Addr().(*net.TCPAddr).Port
+		packet, err := net.ListenPacket("udp", "127.0.0.1:"+strconv.Itoa(port))
+		listener.Close()
+		if err == nil {
+			packet.Close()
+			return port, nil
+		}
+		lastErr = err
 	}
-	defer listener.Close()
-	return listener.Addr().(*net.TCPAddr).Port, nil
+	return 0, lastErr
 }
 
-// checkPortFree 在启动内核前确认代理端口没有被其他程序占用，给出比内核日志更清楚的提示。
+// checkPortFree 在启动内核前确认代理端口没有被其他程序占用（TCP 和 UDP 都要能监听），给出比内核日志更清楚的提示。
 func checkPortFree(port int) error {
-	listener, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(port))
+	address := "127.0.0.1:" + strconv.Itoa(port)
+	listener, err := net.Listen("tcp", address)
 	if err != nil {
 		return fmt.Errorf("端口 %d 已被其他程序占用，请在「常规」里给代理内核换一个端口", port)
 	}
 	listener.Close()
+	packet, err := net.ListenPacket("udp", address)
+	if err != nil {
+		return fmt.Errorf("端口 %d 用不了（被其他程序占用，或者被 Windows 保留给 Hyper-V、WSL 等），请在「常规」里给代理内核换一个端口", port)
+	}
+	packet.Close()
 	return nil
 }
