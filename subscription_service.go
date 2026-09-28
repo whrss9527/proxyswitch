@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -29,6 +30,8 @@ type subscriptionService struct {
 	installing *InstallProgress
 	// rulesMutex 让分流规则同一时间只下载一份：每次下载成功都会删掉其他版本的文件，并发下载会删掉对方刚写的文件。
 	rulesMutex sync.Mutex
+	// shares 记下经局域网共享入口的连接。
+	shares shareHistory
 }
 
 func newSubscriptionService(engine *Engine, core *Core, onEngine func(action func()) error) *subscriptionService {
@@ -294,18 +297,61 @@ func (service *subscriptionService) CoreInstalling() *InstallProgress {
 	return service.installing
 }
 
-// fillState 补上设置页状态里内核的运行情况，以及正在使用的订阅实际在用的节点。
+// fillState 补上设置页状态里内核的运行情况、局域网共享入口和这台电脑的局域网地址，以及正在使用的订阅实际在用的节点。
 func (service *subscriptionService) fillState(state *SettingsState) {
 	status := service.core.Status()
 	state.Core.Running, state.Core.Error = status.Running, status.Error
 	state.Core.Downloadable = coreDownloadable()
 	state.Core.Installing = service.CoreInstalling()
+	state.Core.Share = status.Share
+	if state.Config != nil {
+		state.Share.Addresses = localAddresses()
+	}
 	if state.Status.State != statusOn || state.Config == nil || !status.Running {
 		return
 	}
 	if profile := state.Config.FindProfile(state.Status.Profile); profile != nil && profile.IsSubscription() {
 		state.Status.Node = service.core.CurrentNode(profile.Id)
 	}
+}
+
+// ---------- 局域网共享 ----------
+
+// SetShare 开关局域网共享，等内核打开（或关掉）共享入口后返回。入口没能监听（例如端口被占用）不算失败，
+// 原因在设置页状态的 core.share 里。
+func (service *subscriptionService) SetShare(enabled bool) error {
+	var err error
+	var generation int
+	if runErr := service.onEngine(func() {
+		err = service.engine.SetShareEnabled(enabled)
+		generation = service.engine.CoreGeneration()
+	}); runErr != nil {
+		return runErr
+	}
+	if err != nil {
+		return err
+	}
+	if !enabled {
+		service.shares.clear()
+	}
+	return service.core.Wait(generation, coreWaitTimeout)
+}
+
+// ShareActivity 是正经共享入口上网的设备和最近的连接。内核没在运行时只有之前记下的连接。
+func (service *subscriptionService) ShareActivity() ShareActivity {
+	var connections []CoreConnection
+	if service.core.Status().Running {
+		var err error
+		if connections, err = service.core.Connections(); err != nil {
+			slog.Debug("读取内核的连接失败", "err", err)
+		}
+	}
+	return service.shares.record(connections)
+}
+
+// ClearShareHistory 清空共享页里「最近的连接」。
+func (service *subscriptionService) ClearShareHistory() {
+	service.shares.clear()
 }
 
 // delaysNotice 是托盘菜单里「全部测速」的结果：有几个节点能用，最快的是哪个。

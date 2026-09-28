@@ -57,6 +57,10 @@ type SettingsBackend interface {
 	CheckRules(address string) (RulesCheck, error)
 	SetMode(profileId, mode string) error
 	InstallCore() error
+	SetShare(enabled bool) error
+	ShareActivity() ShareActivity
+	ClearShareHistory()
+	AllowShareFirewall() error
 }
 
 type SettingsState struct {
@@ -83,6 +87,8 @@ type SettingsState struct {
 	Rules         map[string]RulesInfo        `json:"rules"`
 	RulePresets   []RulePreset                `json:"rule_presets"`
 	Core          CoreInfo                    `json:"core"`
+	// Share 是局域网共享的去向、这台电脑的局域网地址和防睡眠的状态，共享入口是否在监听见 Core.Share。
+	Share ShareInfo `json:"share"`
 }
 
 // CoreInfo 是订阅使用的代理内核的情况。Custom 表示使用配置里指定的内核；InstalledVersion 是下载的内核的版本，
@@ -99,6 +105,7 @@ type CoreInfo struct {
 	GeoReady         bool             `json:"geo_ready"`
 	Downloadable     bool             `json:"downloadable"`
 	Installing       *InstallProgress `json:"installing,omitempty"`
+	Share            CoreShareStatus  `json:"share"`
 }
 
 // NavigateInfo 是让已打开的设置页切换页面的请求，Serial 每次加一，页面发现变化时切到 Page；
@@ -270,6 +277,10 @@ func (settings *SettingsServer) Start() (string, error) {
 	mux.HandleFunc("POST /api/subscriptions/{id}/mode", settings.handleSetMode)
 	mux.HandleFunc("POST /api/rules/check", settings.handleCheckRules)
 	mux.HandleFunc("POST /api/core/install", settings.handleInstallCore)
+	mux.HandleFunc("POST /api/share", settings.handleShare)
+	mux.HandleFunc("GET /api/share/activity", settings.handleShareActivity)
+	mux.HandleFunc("POST /api/share/clear", settings.handleShareClear)
+	mux.HandleFunc("POST /api/share/firewall", settings.handleShareFirewall)
 	if settings.extra != nil {
 		settings.extra(mux)
 	}
@@ -775,4 +786,33 @@ func describeBypass(bypass string) string {
 		return "无"
 	}
 	return strings.Join(labels, "、")
+}
+
+// ---------- 局域网共享 ----------
+
+func (settings *SettingsServer) handleShare(writer http.ResponseWriter, request *http.Request) {
+	var body struct {
+		Enabled bool `json:"enabled"`
+	}
+	if !decodeJsonBody(writer, request, &body) {
+		return
+	}
+	settings.respondState(writer, request, settings.backend.SetShare(body.Enabled))
+}
+
+func (settings *SettingsServer) handleShareActivity(writer http.ResponseWriter, request *http.Request) {
+	writeJson(writer, http.StatusOK, settings.backend.ShareActivity())
+}
+
+func (settings *SettingsServer) handleShareClear(writer http.ResponseWriter, request *http.Request) {
+	settings.backend.ClearShareHistory()
+	writeJson(writer, http.StatusOK, settings.backend.ShareActivity())
+}
+
+func (settings *SettingsServer) handleShareFirewall(writer http.ResponseWriter, request *http.Request) {
+	if err := settings.backend.AllowShareFirewall(); err != nil {
+		writeError(writer, http.StatusConflict, err.Error())
+		return
+	}
+	writeJson(writer, http.StatusOK, map[string]bool{"ok": true})
 }

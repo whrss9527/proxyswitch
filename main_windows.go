@@ -32,6 +32,7 @@ const usageText = `用法：
   ProxySwitch.exe off             关闭代理
   ProxySwitch.exe toggle          开 / 关切换
   ProxySwitch.exe use <配置名>     切换到指定配置并开启
+  ProxySwitch.exe share [on|off]  开关局域网共享（不写 on / off 表示切换）
   ProxySwitch.exe status          查看当前状态（退出码 0 表示已开启，1 表示已关闭）
   ProxySwitch.exe settings        打开设置
 
@@ -150,6 +151,20 @@ func runCommand(paths Paths, command string, arguments []string) int {
 			return exitUsage
 		}
 		return forwardOrRun(paths, "use\x00"+name, func(engine *Engine) error { return engine.UseProfile(name) })
+	case "share":
+		argument := strings.Join(arguments, " ")
+		if _, err := shareCommandTarget(argument, false); err != nil {
+			messageBox(0, err.Error(), appName, mbOk|mbIconWarning|mbSetForeground|mbTopmost)
+			return exitUsage
+		}
+		return forwardOrRun(paths, "share\x00"+argument, func(engine *Engine) error {
+			config := engine.Config()
+			if config == nil {
+				return errNoConfig
+			}
+			enabled, _ := shareCommandTarget(argument, config.Share.Enabled)
+			return engine.SetShareEnabled(enabled)
+		})
 	case "status":
 		return showStatus(paths)
 	case "help", "h", "?":

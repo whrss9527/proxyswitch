@@ -100,6 +100,7 @@ type Config struct {
 	CheckUpdates    bool         `json:"check_updates"`
 	Core            CoreConfig   `json:"core"`
 	CustomRules     []CustomRule `json:"custom_rules"`
+	Share           ShareConfig  `json:"share"`
 	AutoSwitch      AutoSwitch   `json:"auto_switch"`
 	Profiles        []Profile    `json:"profiles"`
 	// 旧版配置的通知开关：读入时换算成 notify_level，保存时不再写出。
@@ -121,6 +122,7 @@ func defaultConfig() *Config {
 		CheckUpdates:    true,
 		Core:            CoreConfig{Port: defaultCorePort},
 		CustomRules:     []CustomRule{},
+		Share:           ShareConfig{Port: defaultSharePort, KeepAwake: true},
 		AutoSwitch:      AutoSwitch{Rules: []NetRule{}, DefaultAction: "keep"},
 		Profiles:        []Profile{},
 	}
@@ -175,6 +177,11 @@ const defaultConfigText = `// ProxySwitch 配置文件。推荐在托盘菜单�
   "custom_rules": [
     // { "value": "youtube.com", "policy": "proxy" }
   ],
+
+  // 局域网共享：让 PS5、Switch、手机等设备把这台电脑（本机 IP:port）当代理服务器，网络和本机一样。
+  // allowed 是允许使用的设备（IP 或网段，逗号分隔），留空表示局域网里的所有设备；
+  // keep_awake 共享期间不让电脑自动睡眠，keep_awake_on_battery 用电池时也保持
+  "share": { "enabled": false, "port": 17892, "allowed": "", "keep_awake": true, "keep_awake_on_battery": false },
 
   // 按所在网络自动切换
   "auto_switch": {
@@ -371,6 +378,10 @@ func normalizeConfig(config *Config) {
 		rule.Value = normalizeRuleTarget(rule.Value)
 		rule.Policy = lowerTrim(rule.Policy, rulePolicyProxy)
 	}
+	config.Share.Allowed = strings.TrimSpace(config.Share.Allowed)
+	if config.Share.Port == 0 {
+		config.Share.Port = defaultSharePort
+	}
 
 	usedIds := map[string]bool{}
 	for index := range config.Profiles {
@@ -514,6 +525,9 @@ func validateConfig(config *Config) error {
 		if err := validateCustomRule(rule); err != nil {
 			return fmt.Errorf("第 %d 条自定义规则：%v", index+1, err)
 		}
+	}
+	if err := validateShare(config.Share, config.Core.Port); err != nil {
+		return err
 	}
 
 	seenNames := map[string]bool{}

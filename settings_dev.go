@@ -25,6 +25,9 @@ type devBackend struct {
 	httpProxy *fakeProxy
 	socks     *fakeProxy
 	update    *UpdateInfo
+	// onBattery 模拟用电池供电，firewallAllowed 记下添加防火墙例外的次数。
+	onBattery       bool
+	firewallAllowed int
 }
 
 var devDefaultNetwork = NetworkInfo{
@@ -81,6 +84,9 @@ func (backend *devBackend) State() SettingsState {
 		if hotkey, err := parseHotkey(config.Hotkey); err == nil {
 			state.Hotkeys.Toggle = hotkey.Text
 		}
+	}
+	if config := backend.engine.Config(); config != nil {
+		state.Share.Awake = shareAwake(config.Share, backend.onBattery)
 	}
 	backend.mutex.Unlock()
 	// 与 Windows 版一样在锁外查询内核。
@@ -200,11 +206,20 @@ func (backend *devBackend) InstallUpdate(progress func(received, total int64)) e
 	return err
 }
 
-// healthLoop 与 Windows 版一样定期检查代理服务器能否连上。
+// AllowShareFirewall 在开发模式下只记一次，不改系统设置。
+func (backend *devBackend) AllowShareFirewall() error {
+	return backend.locked(func() error {
+		backend.firewallAllowed++
+		return nil
+	})
+}
+
+// healthLoop 与 Windows 版一样定期检查代理服务器能否连上，本机代理被其他程序改了之后让共享跟着变。
 func (backend *devBackend) healthLoop(interval time.Duration) {
 	for range time.Tick(interval) {
 		backend.mutex.Lock()
 		backend.engine.ReloadIfChanged()
+		backend.engine.RefreshShare(backend.engine.Status())
 		target := backend.engine.HealthTarget()
 		backend.mutex.Unlock()
 		if target == "" {
@@ -277,6 +292,24 @@ func (backend *devBackend) devRoutes(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("GET /api/dev/system", func(writer http.ResponseWriter, request *http.Request) {
 		writeJson(writer, http.StatusOK, backend.Diagnostics())
+	})
+	mux.HandleFunc("POST /api/dev/battery", func(writer http.ResponseWriter, request *http.Request) {
+		var body struct {
+			OnBattery bool `json:"on_battery"`
+		}
+		if !decodeJsonBody(writer, request, &body) {
+			return
+		}
+		_ = backend.locked(func() error {
+			backend.onBattery = body.OnBattery
+			return nil
+		})
+		writeJson(writer, http.StatusOK, backend.State())
+	})
+	mux.HandleFunc("GET /api/dev/firewall", func(writer http.ResponseWriter, request *http.Request) {
+		backend.mutex.Lock()
+		defer backend.mutex.Unlock()
+		writeJson(writer, http.StatusOK, map[string]int{"allowed": backend.firewallAllowed})
 	})
 }
 
