@@ -828,6 +828,7 @@ func (app *App) onTimer(id uintptr) {
 	if app.engine.ReloadIfChanged() {
 		app.applyUiConfig()
 	}
+	app.engine.GuardSystemProxy()
 	app.refresh()
 }
 
