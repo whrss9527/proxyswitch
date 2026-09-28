@@ -69,7 +69,8 @@ func recordTestSubscription(t *testing.T, engine *Engine, profile *Profile) {
 func TestSubscriptionConfig(t *testing.T) {
 	config, err := parseConfig(`{"core": {"port": 18000}, "profiles": [
 		{"name": "机场", "subscription": " https://sub.example.com/a ", "server": "1.2.3.4:5", "pac": "http://x/p.pac", "node": "香港 01"},
-		{"name": "本机", "server": "127.0.0.1:7890", "node": "不该保留", "mode": "global"}
+		{"name": "本机", "server": "127.0.0.1:7890", "node": "不该保留", "mode": "global"},
+		{"name": "本机文件", "subscription": " C:\\节点\\sub 1.yaml "}
 	]}`)
 	if err != nil {
 		t.Fatal(err)
@@ -83,6 +84,9 @@ func TestSubscriptionConfig(t *testing.T) {
 	}
 	if local.Node != "" || local.Mode != "" {
 		t.Errorf("普通配置不应带节点和模式：%+v", local)
+	}
+	if file := config.Profiles[2]; file.Subscription != "file:///C:/节点/sub 1.yaml" || file.Kind() != "subscription" {
+		t.Errorf("填的 Windows 路径应换成 file:// 地址：%q", file.Subscription)
 	}
 	if config, _ := parseConfig(`{"profiles": []}`); config.Core.Port != defaultCorePort || config.Core.Path != "" {
 		t.Errorf("内核默认设置不对：%+v", config.Core)
@@ -293,13 +297,20 @@ func TestEngineFileSubscription(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Windows 上直接填路径，保存时换成 file:// 地址。
+	// 和设置页一样经 parseConfig 保存：Windows 上直接填的路径换成 file:// 地址。
 	address := testFileAddress(path)
 	if runtime.GOOS == "windows" {
 		address = "  " + path + "  "
 	}
 	config := engine.Config().Clone()
 	config.FindProfile("机场").Subscription = address
+	data, err := marshalConfigFile(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config, err = parseConfig(string(data)); err != nil {
+		t.Fatal(err)
+	}
 	if err := engine.SaveConfig(config); err != nil {
 		t.Fatal(err)
 	}
