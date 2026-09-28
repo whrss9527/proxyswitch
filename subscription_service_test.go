@@ -253,7 +253,15 @@ func TestSettingsRulesFlow(t *testing.T) {
 				_, _, err := requestThroughCore(port, host)
 				return DiagnoseProbe{Ok: err == nil}
 			})
-			t.Logf("第 %d 次：%s，经过节点 %v，内核的判定 %+v", attempt, result, viaNode, trace)
+			var provider struct {
+				Proxies []struct {
+					Name string `json:"name"`
+				} `json:"proxies"`
+			}
+			providerErr := fixture.backend.core.request(http.MethodGet, "/providers/proxies/"+coreProviderName(profileId), nil, &provider, 5*time.Second)
+			var group map[string]any
+			groupErr := fixture.backend.core.request(http.MethodGet, "/proxies/"+coreAutoGroup(profileId), nil, &group, 5*time.Second)
+			t.Logf("第 %d 次：%s，经过节点 %v，内核的判定 %+v；订阅里的节点 %d 个 %v；自动选择 %v %v\n内核的日志：%s", attempt, result, viaNode, trace, len(provider.Proxies), providerErr, group["now"], groupErr, fixture.backend.core.logTail())
 			if attempt == 2 {
 				t.Errorf("%s：%s", message, result)
 				return
