@@ -46,7 +46,7 @@ func TestCustomRuleLines(t *testing.T) {
 		"IP-CIDR,8.8.8.8/32,ProxySwitch,no-resolve",
 		"IP-CIDR6,2001:db8::/32,REJECT,no-resolve",
 	}
-	if got := customRuleLines(rules); !reflect.DeepEqual(got, want) {
+	if got := customRuleLines(rules, nil); !reflect.DeepEqual(got, want) {
 		t.Errorf("自定义规则在内核里的写法不对：\n%s", strings.Join(got, "\n"))
 	}
 }
@@ -69,7 +69,7 @@ func TestProgramCustomRules(t *testing.T) {
 		if rule != item.want {
 			t.Errorf("%+v（windows=%v）应整理成 %+v：%+v", item.rule, item.windows, item.want, rule)
 		}
-		if err := validateCustomRule(rule); err != nil {
+		if err := validateCustomRule(rule, nil); err != nil {
 			t.Errorf("%+v 应有效：%v", rule, err)
 		}
 	}
@@ -78,7 +78,7 @@ func TestProgramCustomRules(t *testing.T) {
 		{Type: customRuleProgram, Value: "a,b.exe", Policy: rulePolicyProxy},
 		{Type: "app", Value: "a.exe", Policy: rulePolicyProxy},
 	} {
-		if err := validateCustomRule(rule); err == nil {
+		if err := validateCustomRule(rule, nil); err == nil {
 			t.Errorf("%+v 应报错", rule)
 		}
 	}
@@ -87,7 +87,7 @@ func TestProgramCustomRules(t *testing.T) {
 		{Type: customRuleProgram, Value: "WeChat.exe", Policy: rulePolicyDirect},
 		{Type: customRuleProgram, Value: `C:\Games\Steam\steam.exe`, Policy: rulePolicyReject},
 		{Type: customRuleProgram, Value: "Telegram.exe", Policy: rulePolicyProxy, Disabled: true},
-	})
+	}, nil)
 	if want := []string{"PROCESS-NAME,WeChat.exe,DIRECT", `PROCESS-PATH,C:\Games\Steam\steam.exe,REJECT`}; !reflect.DeepEqual(lines, want) {
 		t.Errorf("程序规则在内核里的写法不对：%v", lines)
 	}
@@ -192,7 +192,7 @@ func TestCoreProcessRule(t *testing.T) {
 	settings := CoreSettings{
 		Binary: binary, Dir: dir, Port: port, TestUrl: "http://" + coreTestHost + "/", Active: "pa", Mode: "rule",
 		Subscriptions: []CoreSubscription{{Id: "pa", Revision: "1"}},
-		CustomRules:   customRuleLines([]CustomRule{{Type: customRuleProgram, Value: name, Policy: rulePolicyReject}}),
+		CustomRules:   customRuleLines([]CustomRule{{Type: customRuleProgram, Value: name, Policy: rulePolicyReject}}, nil),
 	}
 	if err := core.Wait(core.Sync(settings), 30*time.Second); err != nil {
 		t.Fatalf("内核没能启动：%v", err)

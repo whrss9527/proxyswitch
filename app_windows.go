@@ -38,12 +38,14 @@ const (
 	menuNodesTimeout = 300 * time.Millisecond
 )
 
-// menuChoice 是订阅子菜单里的一项：action 为 select（node 为空表示自动选择）、use、test 或 update。
+// menuChoice 是订阅子菜单里的一项：action 为 select（node 为空表示自动选择）、use、test、update、mode 或 rules；
+// 也可以是「策略组」子菜单里的一项：action 为 group，给策略组 group 选中 node（见 PolicyGroup.Node）。
 type menuChoice struct {
 	profileId string
 	node      string
 	action    string
 	mode      string
+	group     string
 }
 
 const (
@@ -532,6 +534,9 @@ func (app *App) menuItems() []MenuItem {
 			}
 			items = append(items, item)
 		}
+		if groups := app.groupsMenu(config); len(groups) > 0 {
+			items = append(items, MenuItem{Text: "策略组", Children: groups})
+		}
 	}
 	items = append(items, separator)
 	if status.State == statusOn {
@@ -607,6 +612,68 @@ func (app *App) subscriptionMenu(profile *Profile, active bool) []MenuItem {
 	return items
 }
 
+// groupsMenu 是「策略组」子菜单：每个组一个子菜单，列出候选和最近测得的延迟，手动选择的组可以点选，自动挑选的组
+// 勾出它挑中的节点。没有策略组或内核没在运行时为空。
+func (app *App) groupsMenu(config *Config) []MenuItem {
+	if app.subscriptionService == nil || len(config.PolicyGroups) == 0 {
+		return nil
+	}
+	source := app.engine.groupSource()
+	if source == "" || !app.core.Status().Running {
+		return nil
+	}
+	states, err := app.core.GroupStates(config.PolicyGroups, source, menuNodesTimeout)
+	if err != nil {
+		return []MenuItem{{Text: "读不到策略组：" + escapeMenuText(truncateRunes(err.Error(), 30)), Disabled: true}}
+	}
+	var items []MenuItem
+	for _, state := range states {
+		text := escapeMenuText(state.Name)
+		if current := groupCurrentText(state); current != "" {
+			text += "\t" + escapeMenuText(truncateRunes(current, 24))
+		}
+		children := []MenuItem{{Text: groupTypeTitles[state.Type] + "：" + groupTypeDetails[state.Type], Disabled: true}, {Separator: true}}
+		for _, member := range state.Members {
+			label := escapeMenuText(member.Label)
+			switch {
+			case member.Node && member.Tested && !member.Alive:
+				label += "\t超时"
+			case member.Node && member.Tested:
+				label += fmt.Sprintf("\t%d ms", max(1, member.Delay))
+			}
+			item := MenuItem{Text: label, Radio: true, Checked: state.Now == member.Value, Disabled: state.Type != groupSelect}
+			if state.Type == groupSelect {
+				item = app.menuChoice(item, menuChoice{action: "group", group: state.Name, node: member.Value})
+			}
+			children = append(children, item)
+		}
+		items = append(items, MenuItem{Text: text, Children: children})
+	}
+	return items
+}
+
+// groupCurrentText 是策略组现在用的：跟随节点、自动选择时是它们选中的节点，直连写成直连。
+func groupCurrentText(state CoreGroupState) string {
+	switch {
+	case state.Current != "":
+		return state.Current
+	case state.Now == groupMemberDirect:
+		return groupDirectLabel
+	}
+	return ""
+}
+
+// groupNodeLabel 是策略组选中的成员（配置里的写法）的显示名。
+func groupNodeLabel(node string) string {
+	switch node {
+	case "":
+		return groupFollowLabel
+	case groupMemberDirect:
+		return groupDirectLabel
+	}
+	return node
+}
+
 // menuChoice 给订阅子菜单的一项分配编号并记下它的含义。
 func (app *App) menuChoice(item MenuItem, choice menuChoice) MenuItem {
 	item.Id = uint32(menuChoiceBase + len(app.menuChoices))
@@ -618,6 +685,18 @@ func (app *App) menuChoice(item MenuItem, choice menuChoice) MenuItem {
 func (app *App) runMenuChoice(choice menuChoice) {
 	config := app.engine.Config()
 	if config == nil {
+		return
+	}
+	if choice.action == "group" {
+		if err := app.engine.SelectGroupNode(choice.group, choice.node); err != nil {
+			app.notify(Notice{Level: noticeError, Title: "没有切换成功", Text: err.Error()})
+			return
+		}
+		notice := Notice{Level: noticeInfo, Title: "已切换策略组", Text: choice.group + " · " + groupNodeLabel(choice.node), Icon: iconStateOn}
+		if status := app.engine.Status(); status.State == statusOn && status.Profile != nil {
+			notice.Color = status.Profile.Color
+		}
+		app.notify(notice)
 		return
 	}
 	profile := config.FindProfileById(choice.profileId)

@@ -171,8 +171,9 @@ func newCore(onError func(message string)) *Core {
 
 // Sync 设定内核应该处于的状态，立即返回。返回值交给 Wait 等待这次设定生效。
 func (core *Core) Sync(settings CoreSettings) int {
-	// 复制订阅列表：调用方之后修改自己的切片不能影响内核记住的状态。
+	// 复制订阅列表和策略组：调用方之后修改自己的切片不能影响内核记住的状态。
 	settings.Subscriptions = append([]CoreSubscription(nil), settings.Subscriptions...)
+	settings.PolicyGroups = append([]PolicyGroup(nil), settings.PolicyGroups...)
 	core.mutex.Lock()
 	core.wanted = settings
 	core.generation++
@@ -642,7 +643,8 @@ func (core *Core) reload(text []byte, settings CoreSettings) error {
 	return nil
 }
 
-// applySelections 设置每个订阅选中的节点（选中的节点已不在订阅里时改用自动选择）和正在使用的订阅。
+// applySelections 设置每个订阅选中的节点（选中的节点已不在订阅里时改用自动选择）、正在使用的订阅和手动选择的
+// 策略组选中的成员（已不在组里时跟随节点）。
 func (core *Core) applySelections(settings CoreSettings) error {
 	for _, subscription := range settings.Subscriptions {
 		target := subscription.Node
@@ -657,6 +659,19 @@ func (core *Core) applySelections(settings CoreSettings) error {
 	if settings.Active != "" {
 		if err := core.selectIn(coreTopGroup, settings.Active); err != nil {
 			return fmt.Errorf("代理内核没能切换订阅：%v", err)
+		}
+	}
+	if len(settings.Subscriptions) == 0 {
+		return nil
+	}
+	for _, group := range settings.PolicyGroups {
+		if group.Type != groupSelect {
+			continue
+		}
+		target := coreGroupMember(group.Node, settings.GroupSource)
+		if err := core.selectIn(group.Name, target); err != nil && target != coreTopGroup {
+			slog.Warn("策略组选中的成员不在组里，改为跟随节点", "group", group.Name, "node", group.Node)
+			_ = core.selectIn(group.Name, coreTopGroup)
 		}
 	}
 	return nil
@@ -859,6 +874,95 @@ func (core *Core) NodesWithin(profileId string, timeout time.Duration) (CoreNode
 		}
 	}
 	return result, nil
+}
+
+// CoreGroupMember 是策略组里的一个候选。Value 是配置里的写法（见 PolicyGroup.Node），Label 是显示的名字；
+// 节点带上最近一次测得的延迟（Tested、Alive 的含义同 CoreNode）。
+type CoreGroupMember struct {
+	Value  string `json:"value"`
+	Label  string `json:"label"`
+	Node   bool   `json:"node,omitempty"`
+	Delay  int    `json:"delay,omitempty"`
+	Tested bool   `json:"tested,omitempty"`
+	Alive  bool   `json:"alive,omitempty"`
+}
+
+// CoreGroupState 是策略组在内核里的状态：Now 是选中的候选（配置里的写法）；Current 是实际在用的节点，跟随节点和
+// 自动选择时是它们选中的节点，直连和负载均衡时为空；Members 是全部候选。
+type CoreGroupState struct {
+	Name    string            `json:"name"`
+	Type    string            `json:"type"`
+	Now     string            `json:"now"`
+	Current string            `json:"current"`
+	Members []CoreGroupMember `json:"members"`
+}
+
+// 候选里特殊成员的显示名。筛不到节点时内核用 COMPATIBLE 顶上，相当于直连。
+const (
+	groupFollowLabel = "跟随节点"
+	groupDirectLabel = "直连"
+	groupEmptyMember = "COMPATIBLE"
+	groupEmptyLabel  = "没有筛到节点（直连）"
+)
+
+// GroupStates 读取策略组在内核里的状态，节点来自订阅 source。每次请求最多等 timeout，读不到的组不在结果里。
+func (core *Core) GroupStates(groups []PolicyGroup, source string, timeout time.Duration) ([]CoreGroupState, error) {
+	states := []CoreGroupState{}
+	if len(groups) == 0 || source == "" {
+		return states, nil
+	}
+	nodes, err := core.NodesWithin(source, timeout)
+	if err != nil {
+		return states, err
+	}
+	byName := map[string]CoreNode{}
+	for _, node := range nodes.Nodes {
+		byName[node.Name] = node
+	}
+	for _, group := range groups {
+		var proxy struct {
+			Now string   `json:"now"`
+			All []string `json:"all"`
+		}
+		if err := core.request(http.MethodGet, "/proxies/"+url.PathEscape(group.Name), nil, &proxy, timeout); err != nil {
+			slog.Debug("读取策略组失败", "group", group.Name, "err", err)
+			continue
+		}
+		state := CoreGroupState{Name: group.Name, Type: group.Type, Now: groupNodeOf(proxy.Now, source), Members: []CoreGroupMember{}}
+		for _, member := range proxy.All {
+			item := CoreGroupMember{Value: groupNodeOf(member, source), Label: member}
+			switch member {
+			case coreTopGroup:
+				item.Label = groupFollowLabel
+			case coreAutoGroup(source):
+				item.Label = groupMemberAuto
+			case groupMemberDirect:
+				item.Label = groupDirectLabel
+			case groupEmptyMember:
+				item.Label = groupEmptyLabel
+			default:
+				node := byName[member]
+				item.Node, item.Delay, item.Tested, item.Alive = true, node.Delay, node.Tested, node.Alive
+			}
+			state.Members = append(state.Members, item)
+		}
+		switch proxy.Now {
+		case coreTopGroup:
+			state.Current = nodes.Current
+		case coreAutoGroup(source):
+			var auto struct {
+				Now string `json:"now"`
+			}
+			if core.request(http.MethodGet, "/proxies/"+url.PathEscape(proxy.Now), nil, &auto, timeout) == nil {
+				state.Current = auto.Now
+			}
+		case groupMemberDirect, groupEmptyMember:
+		default:
+			state.Current = proxy.Now
+		}
+		states = append(states, state)
+	}
+	return states, nil
 }
 
 // CurrentNode 返回订阅实际在用的节点（自动选择时是它选中的节点），内核没有运行时返回空字符串。

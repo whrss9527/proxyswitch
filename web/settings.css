@@ -2000,6 +2000,67 @@ kbd.compact {
   flex: 1;
 }
 
+/* 代理页的策略组：图标、名字和筛选、选节点的下拉框（或在用的节点）、编辑和更多。 */
+.policy-groups {
+  padding: 8px 16px;
+}
+
+.policy-group-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.policy-group {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+}
+
+.policy-group + .policy-group {
+  border-top: 1px solid var(--divider);
+}
+
+.policy-group-icon {
+  display: inline-flex;
+  color: var(--accent-text);
+}
+
+.policy-group-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.policy-group-meta {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.policy-group-meta .mono {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.policy-group-control {
+  display: flex;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.group-picker {
+  width: 260px;
+  max-width: 100%;
+}
+
+.policy-groups-empty {
+  margin: 8px 0;
+}
+
 /* 节点对话框顶部切换按规则分流和全局代理。 */
 .nodes-mode {
   display: flex;

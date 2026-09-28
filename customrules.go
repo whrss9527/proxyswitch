@@ -11,7 +11,7 @@ import (
 // 分流规则前面，全局代理时也生效；只作用于经过内置内核的流量（订阅配置）。
 
 // CustomRule 是一条自定义规则：Type 为空时 Value 是域名或 IP / 网段，为 program 时 Value 是程序名（WeChat.exe）或
-// 程序的完整路径；Policy 是 proxy（走节点）/ direct（直连）/ reject（拦截），Disabled 表示暂时停用。
+// 程序的完整路径；Policy 是 proxy（走节点）/ direct（直连）/ reject（拦截）/ group:策略组名，Disabled 表示暂时停用。
 type CustomRule struct {
 	Type     string `json:"type,omitempty"`
 	Value    string `json:"value"`
@@ -30,7 +30,7 @@ var customRulePolicies = []string{rulePolicyProxy, rulePolicyDirect, rulePolicyR
 // normalizeProgramTarget、网站按 normalizeRuleTarget 整理。windows 表示在 Windows 上运行，程序名补上 .exe。
 func normalizeCustomRule(rule *CustomRule, windows bool) {
 	rule.Type = strings.ToLower(strings.TrimSpace(rule.Type))
-	rule.Policy = lowerTrim(rule.Policy, rulePolicyProxy)
+	rule.Policy = normalizeRulePolicy(rule.Policy)
 	if rule.Type == "" && strings.HasSuffix(strings.ToLower(strings.Trim(strings.TrimSpace(rule.Value), `"'`)), ".exe") {
 		rule.Type = customRuleProgram
 	}
@@ -97,8 +97,8 @@ func isRuleDomain(value string) bool {
 	return strings.Contains(value, ".") && ruleDomainPattern.MatchString(value)
 }
 
-// validateCustomRule 检查一条自定义规则，Value 应已整理过。
-func validateCustomRule(rule CustomRule) error {
+// validateCustomRule 检查一条自定义规则，Value 应已整理过；groups 是现有的策略组。
+func validateCustomRule(rule CustomRule, groups []string) error {
 	switch rule.Type {
 	case customRuleProgram:
 		if rule.Value == "" {
@@ -117,19 +117,19 @@ func validateCustomRule(rule CustomRule) error {
 	default:
 		return fmt.Errorf("「%s」的类型 %q 不认识，可用：program，或者不写（域名和 IP）", rule.Value, rule.Type)
 	}
-	if !containsString(customRulePolicies, rule.Policy) {
-		return fmt.Errorf("「%s」的去向 %q 不认识，可用：%s", rule.Value, rule.Policy, strings.Join(customRulePolicies, " / "))
+	if err := validateRulePolicy(rule.Policy, groups); err != nil {
+		return fmt.Errorf("「%s」的%v", rule.Value, err)
 	}
 	return nil
 }
 
 // customRuleLine 是自定义规则在内核里的写法：域名包括子域名，IP 段不解析域名，程序按进程名或路径匹配。
-// 停用的或认不出来的返回空。
-func customRuleLine(rule CustomRule) string {
+// 停用的或认不出来的返回空。groups 是现有的策略组，去向指向已删除的组时走节点。
+func customRuleLine(rule CustomRule, groups []string) string {
 	if rule.Disabled {
 		return ""
 	}
-	target := corePolicyName(rule.Policy)
+	target := corePolicyTarget(rule.Policy, groups)
 	if rule.Type == customRuleProgram {
 		if rule.Value == "" || strings.ContainsAny(rule.Value, ",\r\n") {
 			return ""
@@ -154,10 +154,10 @@ func customRuleLine(rule CustomRule) string {
 }
 
 // customRuleLines 是启用的自定义规则在内核里的写法，按配置里的顺序。
-func customRuleLines(rules []CustomRule) []string {
+func customRuleLines(rules []CustomRule, groups []string) []string {
 	var lines []string
 	for _, rule := range rules {
-		if line := customRuleLine(rule); line != "" {
+		if line := customRuleLine(rule, groups); line != "" {
 			lines = append(lines, line)
 		}
 	}

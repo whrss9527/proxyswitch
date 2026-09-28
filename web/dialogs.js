@@ -1485,3 +1485,227 @@ function openDonateDialog() {
     },
   });
 }
+
+// ---------- 策略组 ----------
+
+// 内核和 ProxySwitch 自己用的名字，不能拿来当组名（与程序里的 reservedGroupNames 一致）。
+const reservedGroupNames = ["DIRECT", "REJECT", "REJECT-DROP", "PASS", "GLOBAL", "COMPATIBLE", "ProxySwitch", "上游代理", "lan-share", "自动选择"];
+
+// groupNameProblem 检查策略组的名字，others 是其他策略组，nodes 是节点名（知道时检查重名）。没有问题时返回空。
+function groupNameProblem(name, others, nodes) {
+  if (!name) {
+    return "请填写策略组的名字";
+  }
+  if ([...name].length > 20) {
+    return "名字太长，最多 20 个字";
+  }
+  if (/[,，"`\r\n\t]/.test(name)) {
+    return "名字里不能有逗号、引号或换行";
+  }
+  if (reservedGroupNames.some((reserved) => reserved.toLowerCase() === name.toLowerCase())) {
+    return `「${name}」是内核保留的名字，换一个`;
+  }
+  if (others.some((group) => group.name.toLowerCase() === name.toLowerCase())) {
+    return `已经有叫「${name}」的策略组了`;
+  }
+  if (nodes.some((node) => node.toLowerCase() === name.toLowerCase())) {
+    return `有个节点也叫「${name}」，换一个名字`;
+  }
+  return "";
+}
+
+// groupFilterRegExp 把策略组的筛选换成 JS 的正则，与内核的做法一致：默认不区分大小写；以 (? 开头时不加，
+// 开头的 (?i) 这类标志换成 JS 的标志。JS 认不出时返回 null（只是没法预览，能不能用以程序的检查为准）。
+function groupFilterRegExp(filter) {
+  let pattern = filter;
+  let flags = "i";
+  if (pattern.startsWith("(?")) {
+    flags = "";
+    const inline = /^\(\?([a-zA-Z]*)(?:-[a-zA-Z]*)?\)/.exec(pattern);
+    if (inline) {
+      pattern = pattern.slice(inline[0].length);
+      flags = [...new Set(inline[1].replace(/[^ims]/g, ""))].join("");
+    }
+  }
+  for (const extra of ["u", ""]) {
+    try {
+      return new RegExp(pattern, flags + extra);
+    } catch (error) {
+      // 换一种写法再试。
+    }
+  }
+  return null;
+}
+
+// groupPreview 是筛选的预览：筛到几个节点、是哪些。
+function groupPreview(draft, view) {
+  if (draft.filter.includes("`")) {
+    return html`<span style="color:var(--danger)">筛选里不能有反引号（\`）</span>`;
+  }
+  if (view.nodesError) {
+    return html`内核运行、订阅下载好后能预览筛选到的节点。`;
+  }
+  if (!view.nodes) {
+    return html`<span class="spinner" style="width:10px;height:10px;border-width:1.5px;vertical-align:-1px"></span> 正在读取节点…`;
+  }
+  if (!draft.filter) {
+    return html`没有筛选：「${view.source}」的全部 ${view.nodes.length} 个节点。`;
+  }
+  const pattern = groupFilterRegExp(draft.filter);
+  if (!pattern) {
+    return html`这个写法没法在这里预览，保存时会检查。`;
+  }
+  const matched = view.nodes.filter((name) => pattern.test(name));
+  if (!matched.length) {
+    return html`<span style="color:var(--warning)">一个节点都没筛到</span>${draft.type === "select" ? "，只能选跟随节点、自动选择或直连。" : "，内核会暂时直连。"}`;
+  }
+  return html`筛选到 ${matched.length} 个节点：${matched.slice(0, 5).join("、")}${matched.length > 5 ? "…" : ""}`;
+}
+
+// openGroupEditor 新建（index 为 null）或编辑策略组。改名时指向它的自定义规则跟着改。
+function openGroupEditor(index = null) {
+  const groups = app.config.policy_groups || [];
+  const original = index === null ? null : groups[index];
+  const draft = { name: original ? original.name : "", type: original ? original.type : "select", filter: original ? original.filter || "" : "" };
+  const source = groupSourceProfile();
+  const view = { error: "", saving: false, nodes: null, nodesError: !source, source: source ? source.name : "" };
+  const dialog = openDialog({
+    className: "small",
+    render: () => html`
+      <div class="dialog-body">
+        <h2 class="dialog-title">${original ? `编辑策略组「${original.name}」` : "添加策略组"}</h2>
+        ${view.error ? html`<div class="infobar danger">${icon("error")}<div class="infobar-body">${view.error}</div></div>` : ""}
+        <div class="field">
+          <label class="field-label" for="group-name">名字</label>
+          <input class="input" id="group-name" data-focus="group-name" value="${draft.name}" placeholder="例如 流媒体、Telegram、AI" maxlength="20" spellcheck="false" autocomplete="off">
+        </div>
+        <div class="field">
+          <span class="field-label">类型</span>
+          <div class="segmented" role="group" aria-label="类型">${Object.entries(groupTypes).map(([type, info]) => html`<button type="button" data-group-type="${type}" aria-pressed="${draft.type === type}">${info.title}</button>`)}</div>
+          <div class="field-hint">${groupTypes[draft.type].detail}。Quantumult X 里叫 ${groupTypes[draft.type].quanx}。</div>
+        </div>
+        <div class="field">
+          <label class="field-label" for="group-filter">节点名筛选</label>
+          <input class="input mono" id="group-filter" data-focus="group-filter" value="${draft.filter}" placeholder="正则表达式，例如 港|HK；留空为全部节点" spellcheck="false" autocomplete="off">
+          <div class="field-hint" data-group-preview>${groupPreview(draft, view)}</div>
+        </div>
+        <p class="caption faint" style="margin:0">成员是正在使用的订阅里名字符合筛选的节点（不区分大小写），换订阅后跟着换。手动选择的组还多了「跟随节点」「自动选择」和直连三个候选，默认跟随节点，所以刚建好时行为不变。在自定义规则里把网站指到这个组，它的流量就按这里选的走。</p>
+      </div>
+      <div class="dialog-footer">
+        <button class="button accent" data-action="group-save" ${view.saving ? raw("disabled") : ""}>${original ? "保存" : "添加"}</button>
+        <button class="button" data-action="dialog-cancel">取消</button>
+      </div>`,
+    onMount: (dialogInstance) => {
+      const element = dialogInstance.element;
+      // 输入时只更新预览，不重建输入框，避免打断中文输入法。
+      element.addEventListener("input", (event) => {
+        if (event.target.id === "group-name") {
+          draft.name = event.target.value;
+        } else if (event.target.id === "group-filter") {
+          draft.filter = event.target.value;
+          const preview = element.querySelector("[data-group-preview]");
+          if (preview) {
+            setHtml(preview, groupPreview({ ...draft, filter: draft.filter.trim() }, view));
+          }
+        }
+      });
+      element.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && (event.target.id === "group-name" || event.target.id === "group-filter")) {
+          save();
+        }
+      });
+      element.addEventListener("click", (event) => {
+        const typeButton = event.target.closest("[data-group-type]");
+        if (typeButton) {
+          draft.type = typeButton.dataset.groupType;
+          dialogInstance.render();
+          return;
+        }
+        const button = event.target.closest("[data-action]");
+        if (!button || button.disabled) {
+          return;
+        }
+        if (button.dataset.action === "dialog-cancel") {
+          dialogInstance.close(false);
+        } else if (button.dataset.action === "group-save") {
+          save();
+        }
+      });
+    },
+  });
+
+  async function save() {
+    if (view.saving) {
+      return;
+    }
+    const name = draft.name.trim();
+    const filter = draft.filter.trim();
+    const others = groups.filter((group, position) => position !== index);
+    const problem = groupNameProblem(name, others, name === (original && original.name) ? [] : view.nodes || []) || (filter.includes("`") ? "筛选里不能有反引号（`）" : "");
+    if (problem) {
+      view.error = problem;
+      dialog.render();
+      return;
+    }
+    const config = clone(app.config);
+    const group = { name, type: draft.type, filter };
+    if (original && original.type === draft.type && original.node) {
+      group.node = original.node;
+    }
+    config.policy_groups = config.policy_groups || [];
+    if (original) {
+      config.policy_groups[index] = group;
+      if (original.name !== name) {
+        retargetGroup(config, original.name, `group:${name}`);
+      }
+    } else {
+      config.policy_groups.push(group);
+    }
+    view.saving = true;
+    view.error = "";
+    dialog.render();
+    try {
+      receiveState(await api("PUT", "/api/config", config), { force: true });
+      dialog.close(true);
+      if (original) {
+        toast(`已保存策略组「${name}」`);
+      } else {
+        toast("在自定义规则里把网站指到它，就能单独给它选节点", "success", `已添加策略组「${name}」`);
+      }
+    } catch (error) {
+      view.saving = false;
+      view.error = error.message;
+      if (!dialog.closed) {
+        dialog.render();
+      }
+    }
+  }
+
+  if (source) {
+    api("GET", `/api/subscriptions/${source.id}/nodes`).then((list) => {
+      view.nodes = list.nodes.map((node) => node.name);
+    }).catch(() => {
+      view.nodesError = true;
+    }).then(() => {
+      if (!dialog.closed) {
+        const preview = dialog.element.querySelector("[data-group-preview]");
+        if (preview) {
+          setHtml(preview, groupPreview({ ...draft, filter: draft.filter.trim() }, view));
+        }
+      }
+    });
+  }
+  return dialog;
+}
+
+// retargetGroup 在策略组被删掉或改名后，把指向它的自定义规则改到 target。返回改了几条。
+function retargetGroup(config, name, target) {
+  let count = 0;
+  for (const rule of config.custom_rules || []) {
+    if (rule.policy === `group:${name}`) {
+      rule.policy = target;
+      count++;
+    }
+  }
+  return count;
+}

@@ -66,7 +66,10 @@ type CoreSettings struct {
 	Rules         []string
 	RuleProviders map[string]CoreRuleProvider
 	// CustomRules 是自定义规则在内核里的写法，排在分流规则前面，全局代理时也生效。
-	CustomRules   []string
+	CustomRules []string
+	// PolicyGroups 是策略组，节点来自订阅 GroupSource（正在使用的订阅，没有时是第一个订阅）。
+	PolicyGroups  []PolicyGroup
+	GroupSource   string
 	Subscriptions []CoreSubscription
 	// Share 是局域网共享，nil 表示没开。没有订阅时内核只为共享运行，本机的代理端口不监听。
 	Share *CoreShare
@@ -158,9 +161,11 @@ type coreGroup struct {
 	Type      string   `json:"type"`
 	Proxies   []string `json:"proxies,omitempty"`
 	Use       []string `json:"use,omitempty"`
+	Filter    string   `json:"filter,omitempty"`
 	Url       string   `json:"url,omitempty"`
 	Interval  int      `json:"interval,omitempty"`
 	Tolerance int      `json:"tolerance,omitempty"`
+	Strategy  string   `json:"strategy,omitempty"`
 	Lazy      bool     `json:"lazy,omitempty"`
 }
 
@@ -322,6 +327,11 @@ func coreConfigText(settings CoreSettings, controller, secret string) []byte {
 		return append(data, '\n')
 	}
 	config.ProxyGroups = append(config.ProxyGroups, coreGroup{Name: coreTopGroup, Type: "select", Proxies: subscriptionGroups})
+	if containsString(subscriptionGroups, settings.GroupSource) {
+		for _, group := range settings.PolicyGroups {
+			config.ProxyGroups = append(config.ProxyGroups, corePolicyGroup(group, settings.GroupSource, testUrl))
+		}
+	}
 	config.Rules = append(config.Rules, corePrivateRules...)
 	config.Rules = append(config.Rules, settings.CustomRules...)
 	switch {

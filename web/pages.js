@@ -396,6 +396,20 @@ function profileRow(profile, index) {
 
 const policyLabels = { proxy: "走节点", direct: "直连", reject: "拦截" };
 
+// policyLabel 是规则去向的说明：走节点、直连、拦截，或者走「策略组」。
+function policyLabel(policy) {
+  return policy.startsWith("group:") ? `走「${policy.slice(6)}」` : policyLabels[policy] || policy;
+}
+
+// policyChoices 是规则去向的候选：固定的三个加上现有的策略组。
+function policyChoices() {
+  return [...Object.keys(policyLabels), ...((app.config && app.config.policy_groups) || []).map((group) => `group:${group.name}`)];
+}
+
+function policyOptions(value) {
+  return policyChoices().map((policy) => html`<option value="${policy}" ${policy === value ? raw("selected") : ""}>${policyLabel(policy)}</option>`);
+}
+
 // normalizeRuleTarget 与程序里的同名函数一致：把网址、*.域名、带端口的写法整理成域名或 IP。
 function normalizeRuleTarget(text) {
   let value = String(text || "").trim().toLowerCase();
@@ -467,7 +481,6 @@ function customRulesView() {
     return "";
   }
   const rules = app.config.custom_rules || [];
-  const policyOptions = (value) => Object.entries(policyLabels).map(([policy, label]) => html`<option value="${policy}" ${policy === value ? raw("selected") : ""}>${label}</option>`);
   const draft = app.customRuleDraft;
   const program = draft.type === "program";
   const rows = rules.map((rule, index) => html`
@@ -490,6 +503,90 @@ function customRulesView() {
       ${program ? html`<datalist id="running-programs">${(app.programs || []).map((name) => html`<option value="${name}"></option>`)}</datalist>` : ""}
       <div class="field-error" data-custom-rule-error>${draft.error || ""}</div>
       <p class="caption faint" style="margin:6px 0 0">${program ? "按连接来自哪个程序分流，输入时可以从正在运行的程序里选。" : "域名包括它的子域名。"}只对订阅配置（内置的代理内核）起作用。</p>
+    </div>`;
+}
+
+// ---------- 策略组 ----------
+
+const groupTypes = {
+  select: { title: "手动选择", detail: "自己选，默认跟随节点（正在使用的配置选中的节点）", quanx: "static", icon: "mouse" },
+  "url-test": { title: "自动选择", detail: "定期测延迟，自动用最低的那个", quanx: "url-latency-benchmark", icon: "gauge" },
+  fallback: { title: "故障转移", detail: "按顺序用第一个能用的节点，坏了自动换下一个", quanx: "available", icon: "refresh" },
+  "load-balance": { title: "负载均衡", detail: "筛出来的节点轮流用，分摊流量", quanx: "round-robin", icon: "swap" },
+};
+
+// groupSpecialLabels 是手动选择的组里三个特殊候选的名字（配置里的写法 → 显示名）。
+const groupSpecialLabels = { "": "跟随节点", 自动选择: "自动选择", DIRECT: "直连" };
+
+// groupState 是策略组在内核里的状态，内核没在运行时为空。
+function groupState(name) {
+  return ((app.state.groups && app.state.groups.states) || []).find((state) => state.name === name) || null;
+}
+
+// groupSourceProfile 是策略组的节点来源：正在使用的订阅配置。
+function groupSourceProfile() {
+  const source = app.state.groups && app.state.groups.source;
+  return source ? app.config.profiles.find((profile) => profile.id === source) || null : null;
+}
+
+function memberText(member) {
+  if (!member.node || !member.tested) {
+    return member.label;
+  }
+  return `${member.label} · ${member.alive ? `${Math.max(1, member.delay || 0)} ms` : "超时"}`;
+}
+
+// groupPicker 是手动选择的组的候选下拉框：内核在运行时列出组里的全部候选（节点带延迟），否则只有三个特殊候选。
+function groupPicker(group, index, state) {
+  const node = group.node || "";
+  let members = state ? state.members : Object.entries(groupSpecialLabels).map(([value, label]) => ({ value, label }));
+  if (!members.some((member) => member.value === node)) {
+    members = [...members, { value: node, label: `${node}（不在组里，跟随节点）` }];
+  }
+  const current = state && state.current && (node === "" || node === "自动选择") ? `：${state.current}` : "";
+  return html`<select class="select group-picker" data-group-select="${group.name}" data-focus="group-select-${index}" aria-label="给「${group.name}」选节点" ${app.groupSelecting ? raw("disabled") : ""}>${members.map((member) => html`<option value="${member.value}" ${member.value === node ? raw("selected") : ""}>${memberText(member)}${member.value === node ? current : ""}</option>`)}</select>`;
+}
+
+// groupNowText 是自动挑选的组现在用的节点。
+function groupNowText(group, state) {
+  if (!state) {
+    return html`<span class="caption faint">内核运行后显示在用的节点</span>`;
+  }
+  if (!state.current) {
+    return html`<span class="caption muted">${group.type === "load-balance" ? "轮流使用筛出来的节点" : state.members.length && state.members[0].value === "COMPATIBLE" ? "没有筛到节点，暂时直连" : "还没挑出节点"}</span>`;
+  }
+  const member = state.members.find((item) => item.value === state.current);
+  return html`<span class="caption muted" title="${groupTypes[group.type].detail}">现在用 <strong style="color:var(--text)">${member ? memberText(member) : state.current}</strong></span>`;
+}
+
+// policyGroupsView 是代理页的策略组：给某类流量单独选节点。只对订阅配置起作用，没有订阅配置时不显示。
+function policyGroupsView() {
+  if (!hasSubscriptions()) {
+    return "";
+  }
+  const groups = app.config.policy_groups || [];
+  const source = groupSourceProfile();
+  const rows = groups.map((group, index) => {
+    const state = groupState(group.name);
+    const type = groupTypes[group.type] || groupTypes.select;
+    return html`
+      <div class="policy-group">
+        <span class="policy-group-icon" title="${type.title}：${type.detail}">${icon(type.icon)}</span>
+        <div class="policy-group-text">
+          <div class="policy-group-name">${group.name}</div>
+          <div class="caption muted policy-group-meta"><span>${type.title}</span><span class="mono" title="节点名的筛选">${group.filter || "全部节点"}</span></div>
+        </div>
+        <div class="policy-group-control">${group.type === "select" ? groupPicker(group, index, state) : groupNowText(group, state)}</div>
+        <button class="button subtle icon-only" data-action="group-edit" data-index="${index}" title="编辑" aria-label="编辑「${group.name}」">${icon("pencil")}</button>
+        <button class="button subtle icon-only" data-action="group-menu" data-index="${index}" title="更多" aria-label="「${group.name}」的更多操作">${icon("more")}</button>
+      </div>`;
+  });
+  return html`
+    <div class="section-title">策略组<span class="caption faint">${source ? `给某类流量单独选节点，节点来自「${source.name}」` : "给某类流量单独选节点"}</span>
+      <div class="actions"><button class="button subtle" data-action="group-add">${icon("plus")}添加策略组</button></div>
+    </div>
+    <div class="card policy-groups">
+      ${rows.length ? html`<div class="policy-group-list">${rows}</div>` : html`<p class="muted policy-groups-empty">还没有策略组。比如建一个「流媒体」组，在下面的自定义规则里把 netflix.com 指到它，就能单独给它选节点。相当于 Quantumult X 的策略组（policy）。</p>`}
     </div>`;
 }
 
@@ -545,6 +642,7 @@ function proxiesPage() {
       </div>
       <div class="stack">${profiles.map((profile, index) => profileRow(profile, index))}</div>
       <p class="caption faint" style="margin:14px 2px 0">单击托盘图标开关代理，右键托盘图标可以快速切换配置。</p>
+      ${policyGroupsView()}
       ${customRulesView()}`}`;
 }
 
