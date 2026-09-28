@@ -122,9 +122,10 @@ func probeUrl(ctx context.Context, target *url.URL, proxy *url.URL, timeout time
 
 // Windows 上的套接字错误码。
 const (
-	windowsConnectionReset = 10054
-	windowsNetUnreachable  = 10051
-	windowsHostUnreachable = 10065
+	windowsConnectionAborted = 10053
+	windowsConnectionReset   = 10054
+	windowsNetUnreachable    = 10051
+	windowsHostUnreachable   = 10065
 )
 
 // diagnoseFailure 把访问失败的错误归成几类说明：超时、被拒绝、被中断、域名解析失败、TLS 握手失败、没有网络。
@@ -156,7 +157,8 @@ func diagnoseFailure(err error, proxied bool) string {
 		return "TLS 握手失败（对方没有用 HTTPS）"
 	case errors.As(err, &recordError), strings.Contains(message, "tls: "):
 		return "TLS 握手失败（可能被劫持或屏蔽）"
-	case errors.As(err, &errno) && (errno == syscall.ECONNRESET || errno == windowsConnectionReset), errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF), strings.Contains(message, "connection reset"), strings.HasSuffix(message, "EOF"):
+	case errors.As(err, &errno) && (errno == syscall.ECONNRESET || errno == syscall.ECONNABORTED || errno == windowsConnectionReset || errno == windowsConnectionAborted),
+		errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF), strings.Contains(message, "connection reset"), strings.HasSuffix(message, "EOF"):
 		if proxied {
 			return "连接被中断（代理没能连上网站，或者被屏蔽）"
 		}
