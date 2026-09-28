@@ -38,6 +38,7 @@ const usageText = `用法：
                                   网址诊断：检查网站为什么打不开，--device 从局域网设备（PS5 等）的视角
   ProxySwitch.exe status          查看当前状态（退出码 0 表示已开启，1 表示已关闭）
   ProxySwitch.exe settings        打开设置
+  ProxySwitch.exe update          检查更新：打开「关于」页并立即检查
 
 托盘程序在运行时，命令交给它执行，托盘图标会立即更新。`
 
@@ -170,6 +171,8 @@ func runCommand(paths Paths, command string, arguments []string) int {
 		})
 	case "diagnose":
 		return runDiagnoseCommand(paths, arguments)
+	case "update":
+		return forwardOrStart("update")
 	case "status":
 		return showStatus(paths)
 	case "help", "h", "?":
@@ -197,11 +200,14 @@ func runDiagnoseCommand(paths Paths, arguments []string) int {
 			return exitUsage
 		}
 	}
-	payload := "diagnose\x00" + address + "\x00" + perspective
+	return forwardOrStart("diagnose\x00" + address + "\x00" + perspective)
+}
+
+// forwardOrStart 把要打开设置页的命令交给托盘程序；它没在运行时先在后台启动它。
+func forwardOrStart(payload string) int {
 	if window := findRunningInstance(); window != 0 {
 		return sendCommand(window, payload)
 	}
-	// 没在运行：启动托盘程序，再把命令交给它。
 	if err := startDetached(); err != nil {
 		messageBox(0, "无法启动 ProxySwitch："+err.Error(), appName, mbOk|mbIconError|mbSetForeground|mbTopmost)
 		return exitFailure

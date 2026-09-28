@@ -774,6 +774,8 @@ func (app *App) onCopyData(data []byte) uintptr {
 		err = app.shareCommand(argument)
 	case "diagnose":
 		app.openDiagnose(argument)
+	case "update":
+		app.openSettingsAt("about", "check-update")
 	case "settings":
 		app.openSettings()
 	default:
