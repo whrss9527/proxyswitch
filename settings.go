@@ -56,6 +56,7 @@ type SettingsBackend interface {
 	UpdateRules(profileId string) error
 	CheckRules(address string) (RulesCheck, error)
 	SetMode(profileId, mode string) error
+	SelectGroupNode(name, node string) error
 	InstallCore() error
 	SetShare(enabled bool) error
 	ShareActivity() ShareActivity
@@ -107,6 +108,15 @@ type SettingsState struct {
 	Speed SpeedInfo `json:"speed"`
 	// Links 是 clash:// 链接的登记情况（见 links_windows.go）。
 	Links LinksInfo `json:"links"`
+	// Groups 是策略组的节点来源和它们在内核里的状态。
+	Groups GroupsInfo `json:"groups"`
+}
+
+// GroupsInfo 是策略组的情况：Source 是节点来源（正在使用的订阅配置的 id，没有已下载的订阅时为空），
+// States 是内核里各个策略组的状态，内核没有运行时为空。
+type GroupsInfo struct {
+	Source string           `json:"source,omitempty"`
+	States []CoreGroupState `json:"states"`
 }
 
 // LinksInfo 是链接的登记情况：Clash 是现在处理 clash:// 链接（机场网站的「一键导入」）的程序名，没有时为空；
@@ -304,6 +314,7 @@ func (settings *SettingsServer) Start() (string, error) {
 	mux.HandleFunc("POST /api/subscriptions/check", settings.handleCheckSubscription)
 	mux.HandleFunc("POST /api/subscriptions/{id}/rules", settings.handleUpdateRules)
 	mux.HandleFunc("POST /api/subscriptions/{id}/mode", settings.handleSetMode)
+	mux.HandleFunc("POST /api/groups/select", settings.handleSelectGroupNode)
 	mux.HandleFunc("POST /api/rules/check", settings.handleCheckRules)
 	mux.HandleFunc("POST /api/core/install", settings.handleInstallCore)
 	mux.HandleFunc("POST /api/share", settings.handleShare)
@@ -742,6 +753,17 @@ func (settings *SettingsServer) handleSetMode(writer http.ResponseWriter, reques
 		return
 	}
 	settings.respondState(writer, request, settings.backend.SetMode(request.PathValue("id"), body.Mode))
+}
+
+func (settings *SettingsServer) handleSelectGroupNode(writer http.ResponseWriter, request *http.Request) {
+	var body struct {
+		Group string `json:"group"`
+		Node  string `json:"node"`
+	}
+	if !decodeJsonBody(writer, request, &body) {
+		return
+	}
+	settings.respondState(writer, request, settings.backend.SelectGroupNode(body.Group, body.Node))
 }
 
 func (settings *SettingsServer) handleCheckRules(writer http.ResponseWriter, request *http.Request) {

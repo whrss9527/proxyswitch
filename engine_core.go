@@ -88,7 +88,7 @@ func (engine *Engine) coreSettings() CoreSettings {
 	settings.Port = engine.config.Core.Port
 	settings.TestUrl = engine.config.TestUrl
 	settings.GeoReady = engine.geoReady()
-	settings.CustomRules = customRuleLines(engine.config.CustomRules)
+	settings.CustomRules = customRuleLines(engine.config.CustomRules, engine.config.GroupNames())
 	for index := range engine.config.Profiles {
 		profile := &engine.config.Profiles[index]
 		if profile.IsSubscription() && engine.subscriptionLoaded(profile) {
@@ -101,12 +101,32 @@ func (engine *Engine) coreSettings() CoreSettings {
 			settings.Rules, settings.RuleProviders = manifest.Rules, manifest.Providers
 		}
 	}
+	if settings.GroupSource = engine.groupSource(); settings.GroupSource != "" {
+		settings.PolicyGroups = engine.config.PolicyGroups
+	}
 	status := engine.Status()
 	if engine.config.Share.Enabled {
 		settings.Share = engine.coreShare(status, settings.Active)
 	}
 	settings.Tun = engine.tunWanted(status, settings.Active)
 	return settings
+}
+
+// groupSource 是策略组的节点来源：正在使用的订阅配置，最近用的不是订阅时是第一个已下载的订阅（内核的 ProxySwitch 组
+// 这时默认选它）；没有已下载的订阅时为空。
+func (engine *Engine) groupSource() string {
+	if engine.config == nil {
+		return ""
+	}
+	if selected := engine.selectedProfile(); selected != nil && selected.IsSubscription() && engine.subscriptionLoaded(selected) {
+		return selected.Id
+	}
+	for index := range engine.config.Profiles {
+		if profile := &engine.config.Profiles[index]; profile.IsSubscription() && engine.subscriptionLoaded(profile) {
+			return profile.Id
+		}
+	}
+	return ""
 }
 
 // tunWanted 表示内核应开启 TUN 模式：开启了 TUN，并且正开着订阅配置 active。代理关了或者换成别的配置时，
@@ -415,6 +435,27 @@ func (engine *Engine) SelectNode(profileId, node string) error {
 	}
 	updated := engine.config.Clone()
 	updated.FindProfileById(profileId).Node = node
+	return engine.SaveConfig(updated)
+}
+
+// SelectGroupNode 记下手动选择的策略组选中的成员（见 PolicyGroup.Node），内核随后切换。
+func (engine *Engine) SelectGroupNode(name, node string) error {
+	if engine.config == nil {
+		return errNoConfig
+	}
+	group := engine.config.FindGroup(name)
+	if group == nil {
+		return fmt.Errorf("没有叫「%s」的策略组", name)
+	}
+	if group.Type != groupSelect {
+		return fmt.Errorf("策略组「%s」自动挑选节点，不能手动选择", name)
+	}
+	if group.Node == node {
+		engine.syncCore()
+		return nil
+	}
+	updated := engine.config.Clone()
+	updated.FindGroup(name).Node = node
 	return engine.SaveConfig(updated)
 }
 

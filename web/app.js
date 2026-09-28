@@ -24,6 +24,8 @@ const app = {
   shareFirewallBusy: false,
   // 代理页里还没添加的自定义规则：页面重绘（例如刚保存的上一条返回了最新状态）时不丢。
   customRuleDraft: { value: "", policy: "proxy", type: "", error: "" },
+  // 正在给策略组切换节点，期间禁用下拉框。
+  groupSelecting: false,
   // 网址诊断页：输入的网址、视角、最近一次诊断的进度和结果。
   diagnoseUrl: "",
   diagnosePerspective: "pc",
@@ -504,8 +506,62 @@ function addCustomRule(text, policy, type = "") {
     } else {
       config.custom_rules.push(program ? { type, value, policy } : { value, policy });
     }
-  }, `${value} ${policyLabels[policy]}`);
+  }, `${value} ${policyLabel(policy)}`);
   return "";
+}
+
+// selectGroupNode 给手动选择的策略组选中成员（跟随节点为空），等内核切换后刷新。
+async function selectGroupNode(name, node) {
+  app.groupSelecting = true;
+  renderPage();
+  try {
+    receiveState(await api("POST", "/api/groups/select", { group: name, node }), { force: true });
+  } catch (error) {
+    if (error.state) {
+      receiveState(error.state, { force: true });
+    }
+    toast(error.message, "danger", "没有切换成功");
+  }
+  app.groupSelecting = false;
+  renderPage();
+}
+
+// openGroupMenu 是策略组的「更多」菜单：上移、下移、删除。删除时指向它的自定义规则改为走节点。
+function openGroupMenu(anchor, index) {
+  const groups = app.config.policy_groups || [];
+  const group = groups[index];
+  if (!group) {
+    return;
+  }
+  const move = (offset) => saveConfig((config) => {
+    const [moved] = config.policy_groups.splice(index, 1);
+    config.policy_groups.splice(index + offset, 0, moved);
+  });
+  openMenu(anchor, [
+    { label: "上移", icon: "up", disabled: index === 0, action: () => move(-1) },
+    { label: "下移", icon: "down", disabled: index === groups.length - 1, action: () => move(1) },
+    { separator: true },
+    {
+      label: "删除策略组",
+      icon: "trash",
+      danger: true,
+      action: async () => {
+        const count = (app.config.custom_rules || []).filter((rule) => rule.policy === `group:${group.name}`).length;
+        const confirmed = await confirmDialog({
+          title: `删除策略组「${group.name}」？`,
+          message: count ? `指向它的 ${count} 条自定义规则会改为走节点。` : "没有自定义规则指向它。",
+          confirmText: "删除",
+          danger: true,
+        });
+        if (confirmed) {
+          saveConfig((config) => {
+            config.policy_groups = config.policy_groups.filter((item) => item.name !== group.name);
+            retargetGroup(config, group.name, "proxy");
+          }, `已删除策略组「${group.name}」`);
+        }
+      },
+    },
+  ]);
 }
 
 // loadPrograms 读取正在运行的程序，给按程序分流的规则选程序名。
@@ -808,9 +864,9 @@ async function allowShareFirewall() {
 
 function openShareRuleMenu(anchor, connection) {
   const host = connection.host;
-  const items = hasSubscriptions() ? Object.entries(policyLabels).map(([policy, label]) => ({
-    label: `让 ${host} ${label}`,
-    icon: policy === "reject" ? "close" : policy === "direct" ? "link" : "globe",
+  const items = hasSubscriptions() ? policyChoices().map((policy) => ({
+    label: `让 ${host} ${policyLabel(policy)}`,
+    icon: policy === "reject" ? "close" : policy === "direct" ? "link" : policy === "proxy" ? "globe" : "layers",
     action: () => {
       const problem = addCustomRule(host, policy);
       if (problem) {
@@ -1150,6 +1206,9 @@ const actions = {
   "rule-down": (element) => saveConfig((config) => moveItem(config.auto_switch.rules, Number(element.dataset.index), 1)),
   "rule-delete": (element) => saveConfig((config) => config.auto_switch.rules.splice(Number(element.dataset.index), 1), "已删除规则"),
   "add-custom-rule": () => submitCustomRule(),
+  "group-add": () => openGroupEditor(),
+  "group-edit": (element) => openGroupEditor(Number(element.dataset.index)),
+  "group-menu": (element) => openGroupMenu(element, Number(element.dataset.index)),
   "custom-rule-toggle": (element) => saveConfig((config) => {
     const rule = config.custom_rules[Number(element.dataset.index)];
     rule.disabled = !rule.disabled;
@@ -1358,6 +1417,10 @@ document.addEventListener("change", (event) => {
     if (input) {
       input.focus();
     }
+    return;
+  }
+  if (element.dataset.groupSelect !== undefined) {
+    selectGroupNode(element.dataset.groupSelect, element.value);
     return;
   }
   if (element.dataset.customRule !== undefined) {

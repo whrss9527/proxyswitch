@@ -90,31 +90,32 @@ type TunConfig struct {
 }
 
 type Config struct {
-	Hotkey          string       `json:"hotkey"`
-	ProfileHotkeys  string       `json:"profile_hotkeys"`
-	NotifyLevel     string       `json:"notify_level"`
-	NotifySeconds   int          `json:"notify_seconds"`
-	StartupAction   string       `json:"startup_action"`
-	OffMode         string       `json:"off_mode"`
-	DisableOnExit   bool         `json:"disable_on_exit"`
-	GuardProxy      bool         `json:"guard_proxy"`
-	HealthCheck     string       `json:"health_check"`
-	TrayClick       string       `json:"tray_click"`
-	TrayDoubleClick string       `json:"tray_double_click"`
-	Theme           string       `json:"theme"`
-	SettingsWindow  string       `json:"settings_window"`
-	TestUrl         string       `json:"test_url"`
-	Editor          string       `json:"editor"`
-	CheckUpdates    bool         `json:"check_updates"`
-	SpeedDisplay    string       `json:"speed_display"`
-	UrlLinks        bool         `json:"url_links"`
-	PauseOnMetered  bool         `json:"pause_on_metered"`
-	Core            CoreConfig   `json:"core"`
-	Tun             TunConfig    `json:"tun"`
-	CustomRules     []CustomRule `json:"custom_rules"`
-	Share           ShareConfig  `json:"share"`
-	AutoSwitch      AutoSwitch   `json:"auto_switch"`
-	Profiles        []Profile    `json:"profiles"`
+	Hotkey          string        `json:"hotkey"`
+	ProfileHotkeys  string        `json:"profile_hotkeys"`
+	NotifyLevel     string        `json:"notify_level"`
+	NotifySeconds   int           `json:"notify_seconds"`
+	StartupAction   string        `json:"startup_action"`
+	OffMode         string        `json:"off_mode"`
+	DisableOnExit   bool          `json:"disable_on_exit"`
+	GuardProxy      bool          `json:"guard_proxy"`
+	HealthCheck     string        `json:"health_check"`
+	TrayClick       string        `json:"tray_click"`
+	TrayDoubleClick string        `json:"tray_double_click"`
+	Theme           string        `json:"theme"`
+	SettingsWindow  string        `json:"settings_window"`
+	TestUrl         string        `json:"test_url"`
+	Editor          string        `json:"editor"`
+	CheckUpdates    bool          `json:"check_updates"`
+	SpeedDisplay    string        `json:"speed_display"`
+	UrlLinks        bool          `json:"url_links"`
+	PauseOnMetered  bool          `json:"pause_on_metered"`
+	Core            CoreConfig    `json:"core"`
+	Tun             TunConfig     `json:"tun"`
+	PolicyGroups    []PolicyGroup `json:"policy_groups"`
+	CustomRules     []CustomRule  `json:"custom_rules"`
+	Share           ShareConfig   `json:"share"`
+	AutoSwitch      AutoSwitch    `json:"auto_switch"`
+	Profiles        []Profile     `json:"profiles"`
 	// 旧版配置的通知开关：读入时换算成 notify_level，保存时不再写出。
 	Notify *bool `json:"notify,omitempty"`
 }
@@ -136,6 +137,7 @@ func defaultConfig() *Config {
 		UrlLinks:        true,
 		PauseOnMetered:  true,
 		Core:            CoreConfig{Port: defaultCorePort},
+		PolicyGroups:    []PolicyGroup{},
 		CustomRules:     []CustomRule{},
 		Share:           ShareConfig{Port: defaultSharePort, KeepAwake: true},
 		AutoSwitch:      AutoSwitch{Rules: []NetRule{}, DefaultAction: "keep"},
@@ -199,11 +201,19 @@ const defaultConfigText = `// ProxySwitch 配置文件。推荐在托盘菜单�
   // 内核要以管理员权限运行，启动时确认一次
   "tun": { "enabled": false },
 
-  // 自定义规则：域名（包括子域名）或 IP / 网段固定走节点（proxy）、直连（direct）或被拦截（reject），
+  // 策略组：给某类流量单独选节点，成员是正在使用的订阅里名字符合 filter（正则，不区分大小写，留空为全部节点）的节点。
+  // type：select 手动选择 / url-test 自动选择延迟最低的 / fallback 故障转移 / load-balance 负载均衡；
+  // 手动选择的组用 node 记选中的成员：留空跟随节点（正在使用的配置选中的节点），也可以是「自动选择」、DIRECT（直连）或节点名
+  "policy_groups": [
+    // { "name": "流媒体", "type": "select", "filter": "港|HK|台|TW" }
+  ],
+
+  // 自定义规则：域名（包括子域名）或 IP / 网段固定走节点（proxy）、直连（direct）、被拦截（reject）或某个策略组（group:组名），
   // type 为 program 时按程序分流，value 是程序名或完整路径；
   // 排在订阅配置的分流规则前面，全局代理时也生效；只对订阅配置（内置的代理内核）起作用
   "custom_rules": [
     // { "value": "youtube.com", "policy": "proxy" },
+    // { "value": "netflix.com", "policy": "group:流媒体" },
     // { "type": "program", "value": "WeChat.exe", "policy": "direct" }
   ],
 
@@ -348,6 +358,7 @@ func (config *Config) Clone() *Config {
 		copied.Profiles[index] = profile
 	}
 	copied.AutoSwitch.Rules = append([]NetRule{}, config.AutoSwitch.Rules...)
+	copied.PolicyGroups = append([]PolicyGroup{}, config.PolicyGroups...)
 	copied.CustomRules = append([]CustomRule{}, config.CustomRules...)
 	return &copied
 }
@@ -409,6 +420,12 @@ func normalizeConfig(config *Config) {
 	}
 	if config.Profiles == nil {
 		config.Profiles = []Profile{}
+	}
+	if config.PolicyGroups == nil {
+		config.PolicyGroups = []PolicyGroup{}
+	}
+	for index := range config.PolicyGroups {
+		normalizePolicyGroup(&config.PolicyGroups[index])
 	}
 	if config.CustomRules == nil {
 		config.CustomRules = []CustomRule{}
@@ -560,8 +577,12 @@ func validateConfig(config *Config) error {
 		}
 	}
 
+	if err := validatePolicyGroups(config); err != nil {
+		return err
+	}
+	groups := config.GroupNames()
 	for index, rule := range config.CustomRules {
-		if err := validateCustomRule(rule); err != nil {
+		if err := validateCustomRule(rule, groups); err != nil {
 			return fmt.Errorf("第 %d 条自定义规则：%v", index+1, err)
 		}
 	}

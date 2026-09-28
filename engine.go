@@ -949,6 +949,7 @@ func (engine *Engine) settingsState() SettingsState {
 		RulePresets:   rulePresets,
 		Core:          engine.coreInfo(),
 		Share:         engine.shareInfo(status),
+		Groups:        GroupsInfo{Source: engine.groupSource(), States: []CoreGroupState{}},
 	}
 }
 

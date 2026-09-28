@@ -231,6 +231,22 @@ func (service *subscriptionService) CheckRules(address string) (RulesCheck, erro
 	return checkRuleConfig(address, proxiesFirst(paths))
 }
 
+// SelectGroupNode 给手动选择的策略组选中成员（见 PolicyGroup.Node）：记在配置文件里，等内核切换后返回。
+func (service *subscriptionService) SelectGroupNode(name, node string) error {
+	var err error
+	var generation int
+	if runErr := service.onEngine(func() {
+		err = service.engine.SelectGroupNode(name, node)
+		generation = service.engine.CoreGeneration()
+	}); runErr != nil {
+		return runErr
+	}
+	if err != nil {
+		return err
+	}
+	return service.core.Wait(generation, coreWaitTimeout)
+}
+
 // SetMode 切换订阅配置的分流模式，等内核切换后返回。
 func (service *subscriptionService) SetMode(profileId, mode string) error {
 	var err error
@@ -316,6 +332,9 @@ func (service *subscriptionService) fillState(state *SettingsState) {
 		state.Share.Addresses = localAddresses()
 	}
 	state.Speed = service.Speed()
+	if state.Config != nil && status.Running && state.Groups.Source != "" {
+		state.Groups.States, _ = service.core.GroupStates(state.Config.PolicyGroups, state.Groups.Source, coreApiTimeout)
+	}
 	if state.Status.State != statusOn || state.Config == nil || !status.Running {
 		return
 	}
