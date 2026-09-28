@@ -3,20 +3,44 @@ package main
 import (
 	"bufio"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+// freeProxyPort 找一个 TCP 和 UDP 都能监听的本机端口，给测试里内核的代理入口、局域网共享入口等用。内核的入口两种都
+// 要监听，而 Windows 为 Hyper-V、WinNAT 保留的端口段对 TCP 和 UDP 不一样，常常在系统分配临时端口的高段里，
+// 所以不让系统分配，在临时端口段下面随机挑。
+func freeProxyPort() (int, error) {
+	for range 200 {
+		address := "127.0.0.1:" + strconv.Itoa(20000+rand.IntN(20000))
+		listener, err := net.Listen("tcp", address)
+		if err != nil {
+			continue
+		}
+		packet, err := net.ListenPacket("udp", address)
+		listener.Close()
+		if err != nil {
+			continue
+		}
+		packet.Close()
+		return listener.Addr().(*net.TCPAddr).Port, nil
+	}
+	return 0, errors.New("找不到 TCP 和 UDP 都空着的端口")
+}
 
 // 用真实的 mihomo 测内核管理：设置 PROXYSWITCH_CORE 为 mihomo 程序的路径才运行（CI 会下载固定版本的内核）。
 func requireCoreBinary(t *testing.T) string {
@@ -152,7 +176,7 @@ func TestCoreWithMihomo(t *testing.T) {
 		errorsMutex.Unlock()
 	})
 	defer core.Stop()
-	port, _ := freeLocalPort()
+	port, _ := freeProxyPort()
 	settings := CoreSettings{
 		Binary: binary, Dir: dir, Port: port, TestUrl: testUrl, Active: "pa", Mode: "rule",
 		Subscriptions: []CoreSubscription{{Id: "pa", Node: "节点 B", Revision: "1"}},
@@ -263,7 +287,7 @@ func TestCoreWithMihomo(t *testing.T) {
 	}
 
 	// 端口变了：重启内核。
-	newPort, _ := freeLocalPort()
+	newPort, _ := freeProxyPort()
 	settings.Port = newPort
 	if err := core.Wait(core.Sync(settings), 30*time.Second); err != nil {
 		t.Fatal(err)
@@ -317,7 +341,7 @@ func TestCoreWithLinkSubscription(t *testing.T) {
 	}
 	core := newCore(nil)
 	defer core.Stop()
-	port, _ := freeLocalPort()
+	port, _ := freeProxyPort()
 	settings := CoreSettings{
 		Binary: binary, Dir: dir, Port: port, TestUrl: "http://" + coreTestHost + "/", Active: "pa", Mode: "global",
 		Subscriptions: []CoreSubscription{{Id: "pa", Node: "日本 02", Revision: "1"}},
@@ -358,8 +382,8 @@ func TestCoreWithShare(t *testing.T) {
 	dir := t.TempDir()
 	core := newCore(nil)
 	defer core.Stop()
-	corePort, _ := freeLocalPort()
-	sharePort, _ := freeLocalPort()
+	corePort, _ := freeProxyPort()
+	sharePort, _ := freeProxyPort()
 	allowed := []string{"127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"}
 	through := func(host string) (int32, int32, string) {
 		t.Helper()
@@ -505,7 +529,7 @@ func TestCoreAutoGroupAfterReload(t *testing.T) {
 	}
 	core := newCore(nil)
 	defer core.Stop()
-	port, _ := freeLocalPort()
+	port, _ := freeProxyPort()
 	settings := CoreSettings{Binary: binary, Dir: dir, Port: port, TestUrl: "http://" + coreTestHost + "/", Active: "pa", Mode: "rule",
 		Subscriptions: []CoreSubscription{{Id: "pa", Revision: "1"}}}
 	if err := core.Wait(core.Sync(settings), 30*time.Second); err != nil {

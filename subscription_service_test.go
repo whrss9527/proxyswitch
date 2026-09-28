@@ -32,7 +32,7 @@ func TestSettingsSubscriptionFlow(t *testing.T) {
 	}))
 	defer subscription.Close()
 
-	port, _ := freeLocalPort()
+	port, _ := freeProxyPort()
 	configText := fmt.Sprintf(`{"test_url": "http://%s/generate_204", "core": {"port": %d}, "profiles": [
 		{"name": "机场", "subscription": %q, "node": "节点 B", "mode": "global", "apply_to": ["system"]}
 	]}`, coreTestHost, port, subscription.URL+"/sub?token=abc")
@@ -158,7 +158,7 @@ func TestSettingsRulesFlow(t *testing.T) {
 	}))
 	defer subscription.Close()
 
-	port, _ := freeLocalPort()
+	port, _ := freeProxyPort()
 	configText := fmt.Sprintf(`{"test_url": "http://%s/", "core": {"port": %d}, "profiles": [
 		{"name": "机场", "subscription": %q, "rules": %q, "apply_to": ["system"]}
 	]}`, coreTestHost, port, subscription.URL, rules.URL+"/rules.conf")

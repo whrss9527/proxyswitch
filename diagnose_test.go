@@ -79,7 +79,7 @@ func TestProbeUrl(t *testing.T) {
 		t.Errorf("网站有响应就算通：%+v", probe)
 	}
 
-	closedPort, _ := freeLocalPort()
+	closedPort, _ := freeProxyPort()
 	target, _ = url.Parse("http://127.0.0.1:" + strconv.Itoa(closedPort) + "/")
 	if probe := probeUrl(ctx, target, nil, 3*time.Second); probe.Ok || probe.Failure != "连接被拒绝" {
 		t.Errorf("端口没在监听：%+v", probe)
@@ -161,7 +161,7 @@ func TestCoreTraceConnection(t *testing.T) {
 	}))
 	defer website.Close()
 	node := startCountingProxy(t, strings.TrimPrefix(website.URL, "http://"))
-	deadPort, _ := freeLocalPort()
+	deadPort, _ := freeProxyPort()
 	dir := t.TempDir()
 	subscription := fmt.Sprintf("proxies:\n  - {name: \"节点 A\", type: http, server: 127.0.0.1, port: %d}\n  - {name: \"坏节点\", type: http, server: 127.0.0.1, port: %d}\n", node.Port(), deadPort)
 	if err := writeSubscriptionFile(dir, "pa", []byte(subscription)); err != nil {
@@ -169,7 +169,7 @@ func TestCoreTraceConnection(t *testing.T) {
 	}
 	core := newCore(nil)
 	defer core.Stop()
-	port, _ := freeLocalPort()
+	port, _ := freeProxyPort()
 	testUrl := "http://" + coreTestHost + "/generate_204"
 	settings := CoreSettings{Binary: binary, Dir: dir, Port: port, TestUrl: testUrl, Active: "pa", Mode: "rule",
 		Subscriptions: []CoreSubscription{{Id: "pa", Node: "节点 A", Revision: "1"}}, CustomRules: []string{"DOMAIN-SUFFIX,blocked." + coreTestHost + ",REJECT"}}
@@ -273,8 +273,8 @@ func TestDiagnoseVerdict(t *testing.T) {
 
 // 从设置页的接口诊断网址：没开代理、用订阅、局域网设备的视角，停止诊断。
 func TestSettingsDiagnoseFlow(t *testing.T) {
-	sharePort, _ := freeLocalPort()
-	corePort, _ := freeLocalPort()
+	sharePort, _ := freeProxyPort()
+	corePort, _ := freeProxyPort()
 	fixture := newSettingsFixture(t, fmt.Sprintf(`{"core": {"port": %d}, "share": {"port": %d}, "profiles": []}`, corePort, sharePort))
 	defer fixture.backend.Close()
 	diagnose := func(address, perspective string) DiagnoseJob {
