@@ -6,7 +6,7 @@ import (
 )
 
 // appVersion 在发布构建时由 -ldflags "-X main.appVersion=x.y.z" 注入。
-var appVersion = "2.3.0"
+var appVersion = "2.4.0"
 
 const (
 	appName        = "ProxySwitch"
