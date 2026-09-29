@@ -20,3 +20,4 @@
 - `make test`：静态检查（含 Windows 平台）和单元测试。设置 `PROXYSWITCH_CORE` 为 mihomo 程序的路径才会跑内核相关的测试。
 - `make ui-test`：设置页的浏览器测试（需要 Python Playwright），同样可以设置 `PROXYSWITCH_CORE`。
 - 改了界面就把两种测试都跑一遍：没有内核时和有内核时走的流程不一样。
+- 安装包：`make windows installer`（需要 NSIS 的 makensis）能在本地打包；真正的安装、覆盖安装和卸载由 CI 在 Windows 上用 `tools/installer_test.ps1` 走一遍。改了托盘窗口的类名或单实例互斥量的名字，要同时改 `installer/ProxySwitch.nsi`。

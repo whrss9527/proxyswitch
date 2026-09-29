@@ -1,5 +1,6 @@
 # ProxySwitch 构建脚本。在 Linux / macOS 上交叉编译 Windows 版，纯 Go，不需要 CGO。
 #   make            编译 amd64 和 arm64 两个 exe 到 dist/
+#   make installer  用 NSIS 把 dist/ 里的两个 exe 打成安装包 dist/ProxySwitch-Setup.exe（需要 makensis）
 #   make test       静态检查 + 单元测试
 #   make ui-test    设置页的浏览器自动化测试（需要 Python Playwright）
 #   make dev        在本机预览设置页（系统设置用内存模拟）；CORE=mihomo 程序的路径 可以试用订阅
@@ -20,7 +21,7 @@ CORE_VERSION := $(shell sed -n 's/^const coreVersion = "\(.*\)"$$/\1/p' core_con
 CORE_RELEASE := https://github.com/MetaCubeX/mihomo/releases/download/$(CORE_VERSION)
 LDFLAGS := -H windowsgui -s -w -X main.appVersion=$(VERSION) -X main.coreSha256Amd64=$(CORE_SHA256_AMD64) -X main.coreSha256Arm64=$(CORE_SHA256_ARM64) -X main.coreExeSha256Amd64=$(CORE_EXE_SHA256_AMD64) -X main.coreExeSha256Arm64=$(CORE_EXE_SHA256_ARM64)
 
-.PHONY: windows amd64 arm64 resources icons test vet ui-test dev core-sha256 clean
+.PHONY: windows amd64 arm64 installer resources icons test vet ui-test dev core-sha256 clean
 
 windows: amd64 arm64
 
@@ -29,6 +30,9 @@ amd64:
 
 arm64:
 	GOOS=windows GOARCH=arm64 CGO_ENABLED=0 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o dist/ProxySwitch-arm64.exe .
+
+installer:
+	makensis -V2 -DVERSION=$(VERSION) -DDIST=$(CURDIR)/dist installer/ProxySwitch.nsi
 
 resources:
 	$(GOVERSIONINFO) -64 -o resource_windows_amd64.syso -file-version $(VERSION).0 -product-version $(VERSION) -propagate-ver-strings versioninfo.json

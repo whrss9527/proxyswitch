@@ -39,6 +39,9 @@ const usageText = `用法：
   ProxySwitch.exe status          查看当前状态（退出码 0 表示已开启，1 表示已关闭）
   ProxySwitch.exe settings        打开设置
   ProxySwitch.exe update          检查更新：打开「关于」页并立即检查
+  ProxySwitch.exe uninstall [--quiet]
+                                  卸载：退出 ProxySwitch，关闭它开启的代理，取消开机自启和链接的登记；
+                                  安装版同时删除程序。--quiet 不询问，保留配置
 
 托盘程序在运行时，命令交给它执行，托盘图标会立即更新。`
 
@@ -187,6 +190,8 @@ func runCommand(paths Paths, command string, arguments []string) int {
 		return forwardOrStart("update")
 	case "status":
 		return showStatus(paths)
+	case "uninstall":
+		return runUninstall(paths, arguments)
 	case "help", "h", "?":
 		messageBox(0, usageText, appName, mbOk|mbIconInformation|mbSetForeground|mbTopmost)
 		return exitSuccess

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""生成程序图标 assets/app.ico 和文档用的 docs/logo.png。
+"""生成程序图标 assets/app.ico、文档用的 docs/logo.png 和安装程序欢迎页左侧的 assets/installer-side.bmp。
 
 图标是蓝色圆角方块上的一个“开关”：白色轨道、绿色滑块在右侧，与托盘图标的开关造型一致。
 托盘图标在程序运行时按状态和配置颜色绘制，不需要图标文件。
@@ -8,7 +8,7 @@
 """
 import os
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SIZES = [16, 20, 24, 32, 40, 48, 64, 128, 256]
@@ -50,13 +50,36 @@ def render(size):
     return canvas.resize((size, size), Image.LANCZOS)
 
 
+def render_installer_side():
+    """安装程序欢迎页和完成页左侧的图（164×314，NSIS 要求 24 位 BMP）：浅色渐变底，上部是程序图标和一圈柔光。"""
+    width, height = 164, 314
+    scale = 4
+    canvas = Image.new("RGB", (width * scale, height * scale))
+    top, bottom = (232, 240, 255), (243, 236, 255)
+    draw = ImageDraw.Draw(canvas)
+    for y in range(height * scale):
+        ratio = y / (height * scale - 1)
+        draw.line([(0, y), (width * scale, y)], fill=tuple(round(top[i] + (bottom[i] - top[i]) * ratio) for i in range(3)))
+    # 图标后面的柔光
+    glow = Image.new("L", canvas.size, 0)
+    center = (width * scale // 2, round(height * scale * 0.36))
+    radius = 70 * scale
+    ImageDraw.Draw(glow).ellipse([center[0] - radius, center[1] - radius, center[0] + radius, center[1] + radius], fill=110)
+    glow = glow.filter(ImageFilter.GaussianBlur(28 * scale))
+    canvas.paste(Image.new("RGB", canvas.size, (255, 255, 255)), (0, 0), glow)
+    icon = render(88 * scale // 2).resize((88 * scale, 88 * scale), Image.LANCZOS)
+    canvas.paste(icon, (center[0] - icon.width // 2, center[1] - icon.height // 2), icon)
+    return canvas.resize((width, height), Image.LANCZOS)
+
+
 def main():
+    render_installer_side().save(os.path.join(ROOT, "assets", "installer-side.bmp"))
     frames = [render(size) for size in SIZES]
     largest = frames[-1]
     largest.save(os.path.join(ROOT, "assets", "app.ico"), sizes=[(size, size) for size in SIZES], append_images=frames[:-1])
     os.makedirs(os.path.join(ROOT, "docs"), exist_ok=True)
     render(128).save(os.path.join(ROOT, "docs", "logo.png"))
-    print("已生成 assets/app.ico 和 docs/logo.png")
+    print("已生成 assets/app.ico、docs/logo.png 和 assets/installer-side.bmp")
 
 
 if __name__ == "__main__":

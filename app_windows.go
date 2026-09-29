@@ -138,6 +138,7 @@ func (app *App) run(autostarted bool, settingsPage string) error {
 		return err
 	}
 	refreshAutostartPath()
+	refreshInstallInfo()
 	slog.Info("ProxySwitch 已启动", "version", appVersion, "portable", app.paths.Portable, "autostart", autostarted)
 
 	if loadErr != nil && !created {
