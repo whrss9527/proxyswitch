@@ -56,6 +56,10 @@ Check ((Get-ChildItem $installDir).Count -eq 1) "安装目录里只有 ProxySwit
 
 # ---------- 卸载 ----------
 # 模拟程序运行时做的登记：开机自启、proxyswitch:// 链接；再放一份配置，静默卸载应该留着它。
+# 新建的用户（例如 CI 的机器）可能还没有 Run 这个键。
+if (-not (Test-Path $runKey)) {
+    New-Item -Path $runKey | Out-Null
+}
 New-ItemProperty -Path $runKey -Name "ProxySwitch" -Value "`"$exe`" --autostart" -PropertyType String -Force | Out-Null
 New-Item -Path "$linkKey\shell\open\command" -Force | Out-Null
 Set-ItemProperty -Path $linkKey -Name "(default)" -Value "URL:ProxySwitch"
