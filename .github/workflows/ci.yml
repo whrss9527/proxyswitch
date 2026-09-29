@@ -1,9 +1,11 @@
 name: ci
 
 # 推送代码和合并请求时运行：Linux 上跑单元测试和设置页的浏览器测试，Windows 上跑包括修改系统设置在内的全部测试。
-# 两边都下载 core_config.go 里固定版本的官方 mihomo 内核，测试订阅和内核管理。
+# 两边都下载 core_config.go 里固定版本的官方 mihomo 内核，测试订阅和内核管理。安装包在 Linux 上用 NSIS 编译，
+# 再到 Windows 上真的安装、覆盖安装和卸载一遍。
 # 本仓库分支开的合并请求测试通过后自动合并进 main；合并后（或者直接推 main 测试通过后）CHANGELOG.md 最上面的版本
-# 还没有标签，就自动打标签、编译并发布（用 GITHUB_TOKEN 合并和打标签不会再触发工作流，所以在这里接着调用 release.yml）。
+# 还没有标签，就在 main 上运行 release.yml 打标签、编译并发布。用 GITHUB_TOKEN 合并不会触发推送 main 的工作流，
+# 但可以手动触发（workflow_dispatch）另一个工作流：这样发布在 main 上运行，签名服务核对构建来源时看到的也是 main。
 on:
   push:
     branches: ["**"]
@@ -77,9 +79,40 @@ jobs:
           PROXYSWITCH_TEST_REGISTRY: "1"
         run: go test -v ./...
 
+  installer:
+    name: 编译安装包（Linux）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - name: 安装 NSIS
+        run: sudo apt-get update && sudo apt-get install -y nsis
+      - name: 编译两个 exe 和安装包
+        run: make windows installer
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer
+          path: dist/ProxySwitch-Setup.exe
+
+  installer-windows:
+    name: 安装和卸载（Windows）
+    needs: installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: installer
+          path: dist
+      - name: 静默安装、覆盖安装、卸载
+        shell: pwsh
+        run: ./tools/installer_test.ps1 -Installer dist/ProxySwitch-Setup.exe
+
   auto-merge:
     name: 自动合并
-    needs: [linux, windows]
+    needs: [linux, windows, installer-windows]
     # 本仓库分支上开的、合进 main 的合并请求（fork 来的和草稿除外），测试通过就合并。
     if: >-
       github.event_name == 'pull_request' &&
@@ -126,16 +159,17 @@ jobs:
 
   plan-release:
     name: 看要不要发版
-    needs: [linux, windows, auto-merge]
+    needs: [linux, windows, installer-windows, auto-merge]
     # 刚自动合并进 main，或者直接推到 main 且测试通过。
     if: >-
       !cancelled() && needs.linux.result == 'success' && needs.windows.result == 'success' &&
+      needs.installer-windows.result == 'success' &&
       (needs.auto-merge.outputs.sha != '' ||
        (github.event_name == 'push' && github.ref == 'refs/heads/main'))
     runs-on: ubuntu-latest
-    outputs:
-      tag: ${{ steps.plan.outputs.tag }}
-      sha: ${{ steps.plan.outputs.sha }}
+    permissions:
+      contents: read
+      actions: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -151,16 +185,11 @@ jobs:
           fi
           echo "发布 v${version}，提交 $(git rev-parse HEAD)"
           echo "tag=v${version}" >> "$GITHUB_OUTPUT"
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-  release:
-    name: 发布新版本
-    needs: plan-release
-    if: needs.plan-release.outputs.tag != ''
-    permissions:
-      contents: write
-    uses: ./.github/workflows/release.yml
-    with:
-      tag: ${{ needs.plan-release.outputs.tag }}
-      ref: ${{ needs.plan-release.outputs.sha }}
-    secrets: inherit
+      - name: 在 main 上运行发布
+        if: steps.plan.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.plan.outputs.tag }}
+        run: |
+          gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref main -f tag="$TAG"
+          echo "已触发发布 $TAG：https://github.com/$GITHUB_REPOSITORY/actions/workflows/release.yml"
