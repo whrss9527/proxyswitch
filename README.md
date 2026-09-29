@@ -30,6 +30,7 @@
 - **好看好用的设置界面**：独立窗口，跟随系统的深浅色、强调色和高对比度主题，改动立即生效，不需要懂配置文件。点击托盘通知直接打开相关的设置页。
 - **通知带按钮**：发现新版本时在通知上「立即更新」，代理服务器连不上时「关闭代理」，订阅下载好了「开启」；带按钮的通知留在通知中心，过后还能点。
 - **一键更新**：每天检查一次新版本（可以关闭），也可以随时从托盘菜单检查；有新版本时一键下载、校验并重新启动。
+- **安装和卸载**：安装包不需要管理员权限，开始菜单里有入口；在「设置 → 应用」里卸载时，会先关闭 ProxySwitch 开启的代理，取消开机自启和网页链接的登记，不会留下连不上网的代理设置。
 - **命令行和链接**：`ProxySwitch.exe on / off / use 配置名`，或者 `proxyswitch://toggle` 这样的链接；托盘程序在运行时命令交给它执行，图标立即更新。机场网站的「一键导入 Clash」直接打开 ProxySwitch 添加订阅。
 - 单个 exe，纯 Go 编写，没有第三方依赖，不需要管理员权限，不收集任何数据。提供 x64 和 ARM64 两个版本。使用机场订阅时另外下载一次代理内核，见[机场订阅](#机场订阅)。
 
@@ -39,12 +40,15 @@
 
 | 文件 | 适用 |
 | --- | --- |
-| `ProxySwitch.exe` | 绝大多数电脑（Intel / AMD 处理器） |
-| `ProxySwitch-arm64.exe` | 骁龙等 ARM 处理器的 Windows 电脑 |
+| `ProxySwitch-Setup.exe` | 安装包，推荐。自动选择 x64 或 ARM64 版本，装到 `%LOCALAPPDATA%\Programs\ProxySwitch`，不需要管理员权限；开始菜单里有 ProxySwitch，可以在「设置 → 应用」里卸载 |
+| `ProxySwitch.exe` | 不安装，放到任意文件夹后双击运行（Intel / AMD 处理器）；也适合放在 U 盘里用，见[便携模式](#配置文件) |
+| `ProxySwitch-arm64.exe` | 同上，骁龙等 ARM 处理器的 Windows 电脑 |
 
-放到任意文件夹后双击运行，任务栏右下角会出现托盘图标。支持 Windows 10 和 Windows 11。
+运行后任务栏右下角会出现托盘图标。支持 Windows 10 和 Windows 11。
 
-没有数字签名的程序第一次运行时，Windows 可能提示「Windows 已保护你的电脑」，点「更多信息」→「仍要运行」即可。
+已经在用单独的 exe 的，也可以直接运行安装包：正在运行的 ProxySwitch 会先退出，配置和订阅都会保留（便携模式除外），开机自启和网页链接会改到安装的位置，原来的 exe 之后可以删掉。
+
+没有数字签名的版本第一次运行时，Windows 可能提示「Windows 已保护你的电脑」，点「更多信息」→「仍要运行」即可。
 
 ## 使用
 
@@ -268,6 +272,7 @@ ProxySwitch.exe diagnose 网址    网址诊断（加 --device 从局域网设�
 ProxySwitch.exe status          查看状态（退出码 0 表示已开启，1 表示已关闭）
 ProxySwitch.exe settings        打开设置
 ProxySwitch.exe update          检查更新（打开「关于」页并立即检查）
+ProxySwitch.exe uninstall       卸载（安装版同时删除程序；加 --quiet 不询问，保留配置）
 ```
 
 托盘程序在运行时，命令交给它执行；没有运行时直接修改设置后退出。可以用在脚本、计划任务或桌面快捷方式里。
@@ -291,7 +296,7 @@ proxyswitch://diagnose?url=网址         网址诊断（加 &from=device 从局
 
 ## 更新
 
-右键托盘图标选「检查更新」，会打开「设置 → 关于」并立即检查；也可以在「关于」页里点「检查更新」。有新版本时点「立即更新」：下载本机对应的 exe，用发布附带的 SHA256SUMS.txt 校验，替换后自动重新启动，设置和代理配置都会保留。
+右键托盘图标选「检查更新」，会打开「设置 → 关于」并立即检查；也可以在「关于」页里点「检查更新」。有新版本时点「立即更新」：下载本机对应的 exe，用发布附带的 SHA256SUMS.txt 校验，替换后自动重新启动，设置和代理配置都会保留。用安装包装的和单独的 exe 都这样更新，不需要重新运行安装包。
 
 默认每天自动检查一次，发现新版本时在托盘提示一次，托盘菜单里的这一项也会变成「更新到 x.y.z」，不会自动安装。不想自动检查可以在「关于」页关闭。程序放在需要管理员权限才能写入的文件夹（例如 `C:\Program Files`）时无法直接替换，按提示到发布页下载即可。
 
@@ -481,7 +486,7 @@ Go 编写的小工具偶尔会被误报。可以核对 Release 附带的 SHA256S
 崩溃时的信息会记录下来，下次启动时托盘会提示，「设置 → 诊断」里能看到记录。反馈问题时附上「复制诊断信息」的内容会更快解决。
 
 **怎么卸载？**
-先在「设置 → 诊断」里点「清除所有代理设置」，在「设置 → 常规」里关闭开机自动启动，在「设置 → 系统集成」里关闭「网页链接」（设置过 WSL 的话点「撤销」），然后从托盘菜单退出，删除 exe 和 `%APPDATA%\ProxySwitch` 文件夹（便携模式是 exe 旁边的文件）。设置窗口的浏览器数据在 `%LOCALAPPDATA%\ProxySwitch`，也可以一并删除。
+用安装包装的，在「设置 → 应用」里找到 ProxySwitch 点「卸载」；单独的 exe 运行一次 `ProxySwitch.exe uninstall`，再删掉 exe。卸载会先让 ProxySwitch 退出、关闭它开启的代理（恢复开启前的设置），取消开机自启、网页链接和通知的登记；WinHTTP 还指向内置内核时会问要不要改回直连；最后问要不要删除配置和订阅（`%APPDATA%\ProxySwitch`）以及设置窗口的浏览器数据（`%LOCALAPPDATA%\ProxySwitch`）。设置过 WSL 的，卸载前在「设置 → 系统集成」里点「撤销」；允许过商店应用走代理、添加过防火墙例外的，留着也没有影响。便携模式的配置在 exe 旁边，连同文件夹一起删掉即可。
 
 ## macOS 版
 
@@ -493,6 +498,7 @@ macOS 的原生菜单栏版本在另一个仓库：[proxyswitch-mac](https://git
 
 ```bash
 make              # 编译 dist/ProxySwitch.exe 和 dist/ProxySwitch-arm64.exe
+make installer    # 把这两个 exe 打成安装包 dist/ProxySwitch-Setup.exe（需要 NSIS 的 makensis）
 make test         # 静态检查（含 Windows 平台）和单元测试
 make dev          # 在本机预览设置界面，系统设置用内存模拟，带假的代理和测速地址
 make dev CORE=/path/to/mihomo   # 同上，用本机的 mihomo 试用机场订阅
@@ -527,6 +533,7 @@ go build -trimpath -ldflags="-H windowsgui -s -w" -o ProxySwitch.exe .
 | `settings.go` `web/` | 设置界面的本地服务和页面；`web/NotoSansSC-subset.woff2` 是界面字体，由 `tools/subset_font.py` 生成 |
 | `*_windows.go` | Windows 实现：系统代理（WinINET）、PAC 执行（WinHTTP）、托盘、菜单、通知（系统通知用 WinRT 的 ToastNotificationManager）、快捷键、网络信息、监听端口、替换程序完成更新、内核进程随 ProxySwitch 退出（作业对象） |
 | `settings_dev.go` `dev_fakes.go` `memorysystem.go` | 开发模式和测试用的内存实现、假代理 |
+| `installer/ProxySwitch.nsi` `install_windows.go` | 安装包（NSIS）；安装版的卸载项和 `--uninstall` 的清理。`tools/installer_test.ps1` 在 Windows 上把安装、覆盖安装和卸载走一遍 |
 
 推送代码时 GitHub Actions 会在 Linux 上跑单元测试和界面测试，在 Windows 上跑包括读写系统代理在内的全部测试；推送 `v*` 标签会自动编译并发布 Release；也可以在 Actions 页面手动运行 release 工作流，在 main 上填新的版本号（例如 `v2.1.0`）时先在 main 的最新提交上打这个标签再发布，填已有的标签则重新上传附件。发布时下载固定版本的官方内核，把它的 SHA-256 写进程序（`make core-sha256` 可以在本地算出这两个值），程序里下载内核时按它校验。
 
