@@ -556,7 +556,15 @@ ProxySwitch 免费开源。觉得好用的话，可以用微信扫一扫请我�
 
 ## 许可证
 
-[MIT](LICENSE)
+Copyright © 2026 吴彦祖
+
+ProxySwitch 是自由软件，以 [GNU 通用公共许可证第 3 版（GPL-3.0）](LICENSE) 发布：可以自由使用、研究、修改和分享；分发 ProxySwitch 或修改后的版本时，需要以同样的许可证提供源代码。
+
+「ProxySwitch」这个名字和 ProxySwitch 的图标不在 GPL 授权范围内（GPL-3.0 第 7 条 e 项）。介绍 ProxySwitch、分享未经修改的副本时可以使用；分发修改后的版本时，请换用自己的名字和图标。
+
+贡献需接受 [CONTRIBUTING.md](CONTRIBUTING.md) 里的贡献者协议。
+
+2.4.0 及以前的版本以 MIT 许可证发布，这些版本仍然适用 MIT 许可证。
 
 机场订阅使用的 [mihomo](https://github.com/MetaCubeX/mihomo) 是 GPL-3.0 许可的独立程序。ProxySwitch 不包含它的代码，只在需要时从它的官方发布下载，作为单独的进程运行。
 

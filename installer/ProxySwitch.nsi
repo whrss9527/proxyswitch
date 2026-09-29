@@ -61,7 +61,7 @@ VIAddVersionKey /LANG=${LANG_SIMPCHINESE} "ProductName" "${APP}"
 VIAddVersionKey /LANG=${LANG_SIMPCHINESE} "FileDescription" "${APP} 安装程序"
 VIAddVersionKey /LANG=${LANG_SIMPCHINESE} "FileVersion" "${VERSION}"
 VIAddVersionKey /LANG=${LANG_SIMPCHINESE} "ProductVersion" "${VERSION}"
-VIAddVersionKey /LANG=${LANG_SIMPCHINESE} "LegalCopyright" "MIT License"
+VIAddVersionKey /LANG=${LANG_SIMPCHINESE} "LegalCopyright" "GPL-3.0 License"
 VIAddVersionKey /LANG=${LANG_SIMPCHINESE} "Comments" "${REPOSITORY}"
 
 ; WasRunning 表示安装前 ProxySwitch 在运行：静默安装完后重新打开它。
