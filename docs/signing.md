@@ -9,7 +9,7 @@
 ## 申请
 
 1. 在 [signpath.org](https://signpath.org) 申请开源项目的免费签名，项目地址填 `https://github.com/whrss9527/proxyswitch`。SignPath 主要看这几点，本项目都已满足：
-   - 开源许可证：MIT（`LICENSE`）。
+   - 开源许可证：GPL-3.0（`LICENSE`）。
    - 程序在 GitHub Actions 上从源码编译（`.github/workflows/release.yml`）。
    - 项目主页写了代码签名策略和隐私说明：README 的「[代码签名](../README.md#代码签名)」一节。
    - 维护者的 GitHub 和 SignPath 账号开启两步验证。

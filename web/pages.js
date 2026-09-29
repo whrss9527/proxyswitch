@@ -2045,7 +2045,7 @@ ProxySwitch.exe settings        打开设置</pre></div>
       <dt>日志</dt><dd class="mono">${app.state.paths.log}</dd>
       <dt>模式</dt><dd>${app.state.paths.portable ? "便携模式：配置和 exe 放在同一个文件夹" : "安装模式：配置保存在用户目录"}</dd>
     </dl>
-    <p class="caption faint" style="margin-top:16px">MIT 许可证 · 不收集任何数据，只在检查更新时访问 GitHub</p>`;
+    <p class="caption faint" style="margin-top:16px">GPL-3.0 许可证 · 不收集任何数据，只在检查更新时访问 GitHub</p>`;
 }
 
 const pageRenderers = {
