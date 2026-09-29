@@ -48,7 +48,7 @@
 
 已经在用单独的 exe 的，也可以直接运行安装包：正在运行的 ProxySwitch 会先退出，配置和订阅都会保留（便携模式除外），开机自启和网页链接会改到安装的位置，原来的 exe 之后可以删掉。
 
-没有数字签名的版本第一次运行时，Windows 可能提示「Windows 已保护你的电脑」，点「更多信息」→「仍要运行」即可。
+没有数字签名的版本第一次运行时，Windows 可能提示「Windows 已保护你的电脑」，点「更多信息」→「仍要运行」即可。数字签名见[代码签名](#代码签名)。
 
 ## 使用
 
@@ -465,7 +465,7 @@ Windows 的拨号和 VPN 连接各有一份代理设置。ProxySwitch 开关代�
 Windows 的「专注助手 / 免打扰」会拦截通知。通知的显示范围和时长在「设置 → 常规 → 通知」里修改。ProxySwitch 的通知是 Windows 的系统通知，在「Windows 设置 → 系统 → 通知」的「ProxySwitch」里可以单独开关；点通知和按钮靠 `proxyswitch://` 链接，所以关闭「网页链接」后改用托盘气泡（没有按钮）。
 
 **被杀毒软件误报？**
-Go 编写的小工具偶尔会被误报。可以核对 Release 附带的 SHA256SUMS.txt，或者自己从源码编译。
+Go 编写的小工具偶尔会被误报。可以核对 Release 附带的 SHA256SUMS.txt，或者自己从源码编译；有数字签名的版本（见[代码签名](#代码签名)）误报会少很多。
 
 **会联网吗？**
 只在测速（访问测速地址）和检查更新（访问 GitHub）时联网，不收集任何数据。代理开启时这些请求经代理发出。自动检查更新可以在「设置 → 关于」里关闭。使用机场订阅时还会下载订阅和启用的规则集（每天一次）、代理内核（GitHub，只下载一次）和国内直连用的数据（jsDelivr 或 GitHub，只下载一次）。打开「设置 → 连接」时会经 ip.sb、ipinfo.io、ipapi.co 查出口 IP。
@@ -535,7 +535,18 @@ go build -trimpath -ldflags="-H windowsgui -s -w" -o ProxySwitch.exe .
 | `settings_dev.go` `dev_fakes.go` `memorysystem.go` | 开发模式和测试用的内存实现、假代理 |
 | `installer/ProxySwitch.nsi` `install_windows.go` | 安装包（NSIS）；安装版的卸载项和 `--uninstall` 的清理。`tools/installer_test.ps1` 在 Windows 上把安装、覆盖安装和卸载走一遍 |
 
-推送代码时 GitHub Actions 会在 Linux 上跑单元测试和界面测试，在 Windows 上跑包括读写系统代理在内的全部测试；推送 `v*` 标签会自动编译并发布 Release；也可以在 Actions 页面手动运行 release 工作流，在 main 上填新的版本号（例如 `v2.1.0`）时先在 main 的最新提交上打这个标签再发布，填已有的标签则重新上传附件。发布时下载固定版本的官方内核，把它的 SHA-256 写进程序（`make core-sha256` 可以在本地算出这两个值），程序里下载内核时按它校验。
+推送代码时 GitHub Actions 会在 Linux 上跑单元测试和界面测试，在 Windows 上跑包括读写系统代理在内的全部测试，并把安装包真的安装、覆盖安装和卸载一遍。本仓库分支开的合并请求全部通过后自动合并；CHANGELOG.md 最上面的版本还没有标签时，接着在 main 上运行 release 工作流：打标签、编译 exe 和安装包、签名（配置了 SignPath 时）并发布 Release。也可以在 Actions 页面手动运行 release，在 main 上填新的版本号（例如 `v2.1.0`）时先在 main 的最新提交上打这个标签再发布，填已有的标签则重新上传附件。发布时下载固定版本的官方内核，把它的 SHA-256 写进程序（`make core-sha256` 可以在本地算出这两个值），程序里下载内核时按它校验。
+
+## 代码签名
+
+Windows 版的程序和安装包使用 [SignPath.io](https://signpath.io) 提供的免费代码签名，证书由 [SignPath Foundation](https://signpath.org) 签发（Free code signing provided by SignPath.io, certificate by SignPath Foundation）。开通签名之前发布的版本没有签名。
+
+- 发布的程序全部由 GitHub Actions 从这个仓库的源码编译（`.github/workflows/release.yml`），编译后交给 SignPath 签名，不经过任何个人的电脑。
+- 提交和审核代码：[whrss9527](https://github.com/whrss9527)
+- 批准签名：[whrss9527](https://github.com/whrss9527)
+- 隐私：ProxySwitch 不收集、不上传任何使用数据或个人信息，只在你用到的功能需要时联网，见[常见问题](#常见问题)里的「会联网吗？」。
+
+签名的申请和配置步骤见 [docs/signing.md](docs/signing.md)。
 
 ## 请我喝杯咖啡
 
